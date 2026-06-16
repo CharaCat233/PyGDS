@@ -1,0 +1,310 @@
+{
+    "builtin_convert": {
+        "source": "# Builtin: int / float / bool 转换\n\n\nn1 = int(50)\nn2 = 50\nm1 = float(2.0)\nm2 = 2.0\nt1 = bool(True)\nt2 = True\nf1 = bool(False)\nf2 = False\nbd = bool()\n\nprint(n1 == 50)\nprint(n1 == int(50))\nprint(n1 == int(50.0))\nprint(n2 == 50)\nprint(n2 == int(50))\nprint(n2 == int(50.0))\n\nprint(m1 == 2.0)\nprint(m1 == float(2.0))\nprint(m1 == float(2))\nprint(m2 == 2.0)\nprint(m2 == float(2.0))\nprint(m2 == float(2))\n\nprint(t1 == True)\nprint(t2 == True)\nprint(f1 == True)\nprint(f2 == True)\nprint(bd == True)\nprint(t1 == bool(True))\nprint(t2 == bool(True))\nprint(f1 == bool(True))\nprint(f2 == bool(True))\nprint(bd == bool(True))\nprint(t1 == False)\nprint(t2 == False)\nprint(f1 == False)\nprint(f2 == False)\nprint(bd == False)\nprint(t1 == bool(False))\nprint(t2 == bool(False))\nprint(f1 == bool(False))\nprint(f2 == bool(False))\nprint(bd == bool(False))\nprint(t1 == bool())\nprint(t2 == bool())\nprint(f1 == bool())\nprint(f2 == bool())\nprint(bd == bool())\n\nprint(10 + 20)\nprint(10 + int(20))\nprint(int(10) + 20)\nprint(int(10) + int(20))\n\nres = 10 + 10\nprint(res, type(res))  # int + int\nres = 10.0 + 10.0\nprint(res, type(res))  # float + float\nres = 10 + 10.0\nprint(res, type(res))  # int + float\nres = 10.0 + 10\nprint(res, type(res))  # float + int\n\nres = 10 - 10\nprint(res, type(res))  # int - int\nres = 10.0 - 10.0\nprint(res, type(res))  # float - float\nres = 10 - 10.0\nprint(res, type(res))  # int - float\nres = 10.0 - 10\nprint(res, type(res))  # float - int\n\nres = 10 * 10\nprint(res, type(res))  # int * int\nres = 10.0 * 10.0\nprint(res, type(res))  # float * float\nres = 10 * 10.0\nprint(res, type(res))  # int * float\nres = 10.0 * 10\nprint(res, type(res))  # float * int\n\nres = 10 / 10\nprint(res, type(res))  # int / int\nres = 10.0 / 10.0\nprint(res, type(res))  # float / float\nres = 10 / 10.0\nprint(res, type(res))  # int / float\nres = 10.0 / 10\nprint(res, type(res))  # float / int\n\nres = 10 // 10\nprint(res, type(res))  # int // int\nres = 10.0 // 10.0\nprint(res, type(res))  # float // float\nres = 10 // 10.0\nprint(res, type(res))  # int // float\nres = 10.0 // 10\nprint(res, type(res))  # float // int\n\nres = 10 % 10\nprint(res, type(res))  # int % int\nres = 10.0 % 10.0\nprint(res, type(res))  # float % float\nres = 10 % 10.0\nprint(res, type(res))  # int % float\nres = 10.0 % 10\nprint(res, type(res))  # float % int\n\nres = 10 ** 10\nprint(res, type(res))  # int ** int\nres = 10.0 ** 10.0\nprint(res, type(res))  # float ** float\nres = 10 ** 10.0\nprint(res, type(res))  # int ** float\nres = 10.0 ** 10\nprint(res, type(res))  # float ** int\n",
+        "expected": "True\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nFalse\nFalse\nFalse\nTrue\nTrue\nFalse\nFalse\nFalse\nFalse\nFalse\nTrue\nTrue\nTrue\nFalse\nFalse\nTrue\nTrue\nTrue\nFalse\nFalse\nTrue\nTrue\nTrue\n30\n30\n30\n30\n20 <class 'int'>\n20.0 <class 'float'>\n20.0 <class 'float'>\n20.0 <class 'float'>\n0 <class 'int'>\n0.0 <class 'float'>\n0.0 <class 'float'>\n0.0 <class 'float'>\n100 <class 'int'>\n100.0 <class 'float'>\n100.0 <class 'float'>\n100.0 <class 'float'>\n1.0 <class 'float'>\n1.0 <class 'float'>\n1.0 <class 'float'>\n1.0 <class 'float'>\n1 <class 'int'>\n1.0 <class 'float'>\n1.0 <class 'float'>\n1.0 <class 'float'>\n0 <class 'int'>\n0.0 <class 'float'>\n0.0 <class 'float'>\n0.0 <class 'float'>\n10000000000 <class 'int'>\n10000000000.0 <class 'float'>\n10000000000.0 <class 'float'>\n10000000000.0 <class 'float'>\n"
+    },
+    "builtin_dict": {
+        "source": "# Builtin: dict 操作\n\n\nd = dict()\nd[\"name\"] = \"Alice\"\nd[\"age\"] = 30\nprint(d)  # {'name': Alice, 'age': 30}\n\n# dict.get\nprint(d.get(\"name\", \"???\") == \"Alice\")  # True\nprint(d.get(\"missing\", \"???\") == \"???\")  # True\n\n# dict.keys / dict.values\nkeys = d.keys()\nprint(keys)  # ['name', 'age'] (order may vary)\nvals = d.values()\nprint(vals)  # ['Alice', 30]\n\n# dict.items\nitems = d.items()\nitem_count = 0\nfor kv in items:\n    print(kv[0], kv[1])\n    item_count = item_count + 1\nprint(\"item count:\", item_count == 2)  # True\n\n# dict.pop\nage = d.pop(\"age\", -1)\nprint(age, d)  # 30 {'name': Alice}\n\n# dict.update\nd2 = dict()\nd2[\"city\"] = \"NYC\"\nd2[\"name\"] = \"Bob\"\nd.update(d2)\nprint(d)  # {'name': Bob, 'city': NYC}\n\n# dict.copy + dict.clear\nd3 = d.copy()\nprint(d3)  # {'name': Bob, 'city': NYC}\nd3.clear()\nprint(d3)  # {}\n\n# dict constructor from list of pairs\nd4 = dict([[1, \"one\"], [2, \"two\"]])\nprint(d4)  # {'1': one, '2': two}\n",
+        "expected": "{'name': 'Alice', 'age': 30}\nTrue\nTrue\ndict_keys(['name', 'age'])\ndict_values(['Alice', 30])\nname Alice\nage 30\nitem count: True\n30 {'name': 'Alice'}\n{'name': 'Bob', 'city': 'NYC'}\n{'name': 'Bob', 'city': 'NYC'}\n{}\n{1: 'one', 2: 'two'}\n"
+    },
+    "builtin_list": {
+        "source": "# Builtin: list 操作\n\n\n# list 构造函数\na = list([1, 2, 3])\nprint(a)  # [1, 2, 3]\n\n# list.append\na.append(4)\nprint(a)  # [1, 2, 3, 4]\n\n# list.extend\na.extend([5, 6])\nprint(a)  # [1, 2, 3, 4, 5, 6]\n\n# list.pop\nlast = a.pop()\nprint(last, a)  # 6 [1, 2, 3, 4, 5]\n\nfirst = a.pop(0)\nprint(first, a)  # 1 [2, 3, 4, 5]\n\n# list.insert\na.insert(0, 99)\nprint(a)  # [99, 2, 3, 4, 5]\n\n# list.remove\na.remove(3)\nprint(a)  # [99, 2, 4, 5]\n\n# list.index\nprint(a.index(99))  # 0\nprint(a.index(5))  # 3\n\n# list.count\ndup = list([1, 2, 2, 3, 2])\nprint(dup.count(2))  # 3\nprint(dup.count(9))  # 0\n\n# list.copy\nb = a.copy()\na[0] = 0\nprint(a)  # [0, 2, 4, 5]\nprint(b)  # [99, 2, 4, 5]\n\n# list.reverse\nb.reverse()\nprint(b)  # [5, 4, 2, 99]\n\n# list.sort\nb.sort()\nprint(b)  # [2, 4, 5, 99]\n\n# list.clear\nb.clear()\nprint(b)  # []\n\n# list 二元运算\nx = list([1, 2])\ny = list([3, 4])\nprint(x + y)  # [1, 2, 3, 4]\nprint(x * 3)  # [1, 2, 1, 2, 1, 2]\nprint(x == y)  # False\nprint(x != y)  # True\nprint(y == [3, 4])  # True\nprint(y == list([3, 4]))  # True\n\n# list + 原始 list\nraw = [10, 20]\nnew_ls = x + raw\nx[0] = 2026\nraw[0] = 2026\nprint(x)  # [2026, 2]\nprint(raw)  # [2026, 20]\nprint(new_ls)  # [1, 2, 10, 20]\n",
+        "expected": "[1, 2, 3]\n[1, 2, 3, 4]\n[1, 2, 3, 4, 5, 6]\n6 [1, 2, 3, 4, 5]\n1 [2, 3, 4, 5]\n[99, 2, 3, 4, 5]\n[99, 2, 4, 5]\n0\n3\n3\n0\n[0, 2, 4, 5]\n[99, 2, 4, 5]\n[5, 4, 2, 99]\n[2, 4, 5, 99]\n[]\n[1, 2, 3, 4]\n[1, 2, 1, 2, 1, 2]\nFalse\nTrue\nTrue\nTrue\n[2026, 2]\n[2026, 20]\n[1, 2, 10, 20]\n"
+    },
+    "builtin_print_type": {
+        "source": "# Builtin: print, type\n\n# 测试内置函数\n\nprint()\nprint(1)\nprint(1.5)\nprint(\"a\")\nprint(\"a\", \"b\")\nprint(\"a\", \"b\", \"c\", sep=\", \")\nprint(\"a\", \"b\", \"c\", end=\" --\\n\")\nprint(\"a\", \"b\", \"c\", sep=\", \", end=\" --\\n\")\nprint(\"a\", \"b\", \"c\", sep=\", \", end=\" --\\n\")\n\nprint(type(0))\nprint(type(\"\"))\n",
+        "expected": "\n1\n1.5\na\na b\na, b, c\na b c --\na, b, c --\na, b, c --\n<class 'int'>\n<class 'str'>\n"
+    },
+    "builtin_str": {
+        "source": "# Builtin: str 方法\n\n\ns = \"Hello World\"\nprint(s.upper())  # HELLO WORLD\nprint(s.lower())  # hello world\n\ntrim_str = \"  trim  \"\nprint(trim_str.strip())  # trim\n\n# split\nsplit_src = \"a,b,c\"\nparts = split_src.split(\",\")\nprint(parts)  # ['a', 'b', 'c']\nprint(len(parts))  # 3\n\n# join\njoiner = \", \"\nprint(joiner.join(parts))  # a, b, c\n\n# replace\nreplace_src = \"abab\"\nprint(replace_src.replace(\"a\", \"x\"))  # xbxb\n\n# find / startswith / endswith\nhello_str = \"hello\"\nprint(hello_str.find(\"ll\"))  # 2\nprint(hello_str.find(\"xx\"))  # -1\nprint(hello_str.startswith(\"he\"))  # True\nprint(hello_str.endswith(\"lo\"))  # True\nprint(hello_str.endswith(\"xx\"))  # False\n",
+        "expected": "HELLO WORLD\nhello world\ntrim\n['a', 'b', 'c']\n3\na, b, c\nxbxb\n2\n-1\nTrue\nTrue\nFalse\n"
+    },
+    "builtin_tuple": {
+        "source": "# Builtin: tuple\n\ntup1 = 1,\ntup2 = 1, 2, 3\ntup3 = ()\ntup4 = (1,)\ntup5 = (1, 2, 3)\n\nprint(tup1)\nprint(tup2)\nprint(tup3)\nprint(tup4)\nprint(tup5)\n",
+        "expected": "(1,)\n(1, 2, 3)\n()\n(1,)\n(1, 2, 3)\n"
+    },
+    "class_basic": {
+        "source": "# Class: 定义与调用 (含 staticmethod / classmethod)\n\nclass MyClass:\n    class_var = 100\n\n    def __init__(self, val):\n        self.val = val\n\n    @classmethod\n    def get_class_var(cls):\n        return cls.class_var\n\n    @classmethod\n    def increment_class_var(cls):\n        cls.class_var = cls.class_var + 1\n\n    @classmethod\n    def factory(cls, x):\n        return cls(x)\n\n    @staticmethod\n    def add(a, b):\n        return a + b\n\n    @staticmethod\n    def greet(name):\n        return \"Hello, \" + name\n\n    def get_val(self):\n        return self.val\n\n\n# 通过类调用 classmethod\nprint(\"classmethod on class:\", MyClass.get_class_var())  # 100\n\n# 通过实例调用 classmethod\nobj = MyClass(42)\nprint(\"classmethod on instance:\", obj.get_class_var())  # 100\n\n# classmethod 工厂方法\nobj2 = MyClass.factory(99)\nprint(\"factory:\", obj2.get_val())  # 99\n\n# 通过类调用 staticmethod\nprint(\"staticmethod on class:\", MyClass.add(3, 7))  # 10\n\n# 通过实例调用 staticmethod\nprint(\"staticmethod on instance:\", obj.add(10, 20))  # 30\n\n# staticmethod 字符串操作\nprint(\"staticmethod greet:\", MyClass.greet(\"World\"))  # Hello, World\nprint(\"staticmethod greet instance:\", obj.greet(\"DSL\"))  # Hello, DSL\n\n# 综合调用测试\nprint(\"class_var:\", MyClass.class_var)  # 100\nMyClass.increment_class_var()\nprint(\"class_var:\", MyClass.get_class_var())  # 101\nMyClass.increment_class_var()\nobj.increment_class_var()\nprint(\"class_var:\", MyClass.class_var)  # 103\nMyClass.increment_class_var()\nprint(\"class_var:\", MyClass.get_class_var())  # 104\n",
+        "expected": "classmethod on class: 100\nclassmethod on instance: 100\nfactory: 99\nstaticmethod on class: 10\nstaticmethod on instance: 30\nstaticmethod greet: Hello, World\nstaticmethod greet instance: Hello, DSL\nclass_var: 100\nclass_var: 101\nclass_var: 103\nclass_var: 104\n"
+    },
+    "class_inherit": {
+        "source": "# Class: 继承\n\n\nclass Animal:\n    sound = \"generic\"\n\n    @classmethod\n    def make_sound(cls):\n        return cls.sound\n\n    @staticmethod\n    def info():\n        return \"I am an animal\"\n\n\nclass Dog(Animal):\n    sound = \"woof\"\n\n    @staticmethod\n    def info():\n        return \"I am a dog\"\n\n\nclass Cat(Animal):\n    sound = \"meow\"\n\n\nprint(\"Animal sound:\", Animal.make_sound())  # generic\nprint(\"Dog sound:\", Dog.make_sound())  # woof\nprint(\"Cat sound:\", Cat.make_sound())  # meow\n\n# staticmethod 也可以被子类 override\nprint(\"Animal info:\", Animal.info())  # I am an animal\nprint(\"Dog info:\", Dog.info())  # I am a dog\nprint(\"Cat info:\", Cat.info())  # I am an animal (继承)\n",
+        "expected": "Animal sound: generic\nDog sound: woof\nCat sound: meow\nAnimal info: I am an animal\nDog info: I am a dog\nCat info: I am an animal\n"
+    },
+    "edge_abs_minmax": {
+        "source": "# Edge: abs / min / max / sum\n\nprint(abs(-5))               # 5\nprint(abs(5))                # 5\nprint(abs(-3.14))            # 3.14\nprint(abs(0))                # 0\n\nprint(min(1, 2, 3))          # 1\nprint(min(3, 2, 1))          # 1\nprint(min([5, 3, 9]))        # 3\nprint(max(1, 2, 3))          # 3\nprint(max(3, 2, 1))          # 3\nprint(max([5, 3, 9]))        # 9\n\nprint(sum([1, 2, 3]))        # 6\nprint(sum([1, 2, 3], 10))    # 16\nprint(sum([]))               # 0\nprint(sum([], 5))            # 5\n\nprint(\"done\")",
+        "expected": "5\n5\n3.14\n0\n1\n1\n3\n3\n3\n9\n6\n16\n0\n5\ndone\n"
+    },
+    "edge_any_all": {
+        "source": "# Edge: any / all\n\nprint(any([True, False]))    # True\nprint(any([False, False]))   # False\nprint(any([]))               # False\nprint(any([0, \"\", []]))      # False\nprint(any([0, \"hi\"]))        # True\n\nprint(all([True, True]))     # True\nprint(all([True, False]))    # False\nprint(all([]))               # True\nprint(all([1, \"hi\", [1]]))   # True\nprint(all([1, \"\", [1]]))     # False\n\nprint(\"done\")",
+        "expected": "True\nFalse\nFalse\nFalse\nTrue\nTrue\nFalse\nTrue\nTrue\nFalse\ndone\n"
+    },
+    "edge_assert": {
+        "source": "# Edge: assert 语句\n\nassert True, \"should not fail\"\nprint(\"passed 1\")\n\ntry:\n    assert False, \"custom message\"\nexcept AssertionError as e:\n    print(str(e))          # custom message\n\ntry:\n    assert False\nexcept AssertionError as e:\n    print(str(e) == \"\")    # True (bare assert)\n\n# assert 带表达式的条件\nx = 5\nassert x == 5\nprint(\"passed 2\")\n\ntry:\n    assert x == 6, \"x != 6\"\nexcept AssertionError as e:\n    print(type(e).__name__) # AssertionError\n\nprint(\"done\")\n",
+        "expected": "passed 1\ncustom message\nTrue\npassed 2\nAssertionError\ndone\n"
+    },
+    "edge_bitwise": {
+        "source": "# Edge: 位运算\n\nprint(1 & 1)               # 1\nprint(1 & 0)               # 0\nprint(0 & 1)               # 0\nprint(3 & 5)               # 1\nprint(1 | 1)               # 1\nprint(1 | 0)               # 1\nprint(0 | 1)               # 1\nprint(3 | 5)               # 7\nprint(1 ^ 1)               # 0\nprint(1 ^ 0)               # 1\nprint(0 ^ 1)               # 1\nprint(3 ^ 5)               # 6\nprint(~0)                  # -1\nprint(~1)                  # -2\nprint(~(-1))               # 0\nprint(1 << 1)              # 2\nprint(1 << 3)              # 8\nprint(8 >> 1)              # 4\nprint(8 >> 3)              # 1\nprint(-8 >> 1)             # -4",
+        "expected": "1\n0\n0\n1\n1\n1\n1\n7\n0\n1\n1\n6\n-1\n-2\n0\n2\n8\n4\n1\n-4\n"
+    },
+    "edge_callable": {
+        "source": "# Edge: __call__ 可调用对象\n\nclass Multiplier:\n    def __init__(self, factor):\n        self.factor = factor\n\n    def __call__(self, x):\n        return x * self.factor\n\ndouble = Multiplier(2)\ntriple = Multiplier(3)\n\nprint(double(5))             # 10\nprint(triple(5))             # 15\nprint(double(10))            # 20\n\n# callable 检查\nprint(callable(double))      # True\nprint(callable(42))          # False\nprint(callable(len))         # True\n\nprint(\"done\")",
+        "expected": "10\n15\n20\nTrue\nFalse\nTrue\ndone\n"
+    },
+    "edge_chained_cmp": {
+        "source": "# Edge: 比较链 a < b < c\n\nprint(1 < 2 < 3)           # True\nprint(1 < 2 > 3)           # False\nprint(3 > 2 > 1)           # True\nprint(1 < 2 == 2)          # True\nprint(1 == 2 < 3)          # False\nprint(5 > 3 < 4)           # True\nprint(5 > 3 > 1)           # True\nprint(1 < 2 < 3 < 4)       # True\nprint(1 <= 1 < 2)          # True\nprint(1 < 2 >= 2)          # True",
+        "expected": "True\nFalse\nTrue\nTrue\nFalse\nTrue\nTrue\nTrue\nTrue\nTrue\n"
+    },
+    "edge_closure": {
+        "source": "# Edge: 闭包捕获\n\ndef make_adder(n):\n    def adder(x):\n        return x + n\n    return adder\n\nadd5 = make_adder(5)\nprint(add5(10))               # 15\n\nadd7 = make_adder(7)\nprint(add7(10))               # 17\nprint(add5(10))               # 15 (独立闭包)\n\n# 闭包修改 nonlocal\ndef counter():\n    count = 0\n    def inc():\n        nonlocal count\n        count = count + 1\n        return count\n    return inc\n\nc = counter()\nprint(c())                    # 1\nprint(c())                    # 2\nprint(c())                    # 3\n\n# 多个闭包共享环境\ndef make_counters():\n    count = 0\n    def inc():\n        nonlocal count\n        count = count + 1\n        return count\n    def dec():\n        nonlocal count\n        count = count - 1\n        return count\n    return inc, dec\n\ninc_fn, dec_fn = make_counters()\nprint(inc_fn())               # 1\nprint(inc_fn())               # 2\nprint(dec_fn())               # 1\n\nprint(\"done\")",
+        "expected": "15\n17\n15\n1\n2\n3\n1\n2\n1\ndone\n"
+    },
+    "edge_default_args": {
+        "source": "# Edge: 默认参数求值时机\n\n# 默认参数在函数定义时求值\nx = 10\n\ndef f(a=x):\n    return a\n\nprint(f())                    # 10\n\nx = 20\nprint(f())                    # 10 (已被捕获，不受后续 x 变化影响)\n\n# 可变默认参数的陷阱（Python 行为）\ndef g(lst=[]):\n    lst.append(1)\n    return lst\n\nprint(g())                    # [1]\nprint(g())                    # [1, 1] (同一个列表对象!)\nprint(g())                    # [1, 1, 1]\n\nprint(\"done\")",
+        "expected": "10\n10\n[1]\n[1, 1]\n[1, 1, 1]\ndone\n"
+    },
+    "edge_del": {
+        "source": "# Edge: del 语句\n\n# del 简单变量\nx = 42\nprint(x)                   # 42\ndel x\ntry:\n    print(x)\nexcept NameError:\n    print(\"NameError\")     # NameError\n\n# del 列表元素\nlst = [1, 2, 3, 4]\ndel lst[1]\nprint(lst)                 # [1, 3, 4]\ndel lst[-1]\nprint(lst)                 # [1, 3]\n\n# del 字典键\nd = {\"a\": 1, \"b\": 2}\ndel d[\"a\"]\nprint(d)                   # {'b': 2}\n\n# del 属性 (需要自定义类)\ntry:\n    obj = type(\"Obj\", (), {\"attr\": 5})()\n    del obj.attr\n    print(obj.attr)\nexcept AttributeError:\n    print(\"AttributeError\")",
+        "expected": "42\nNameError\n[1, 3, 4]\n[1, 3]\n{'b': 2}\nAttributeError\n"
+    },
+    "edge_dict_methods": {
+        "source": "# Edge: dict.pop / setdefault / update / popitem\n\nd = {\"a\": 1, \"b\": 2}\nprint(d.pop(\"a\"))              # 1\nprint(d)                       # {'b': 2}\n\n# pop 带默认值\nprint(d.pop(\"x\", \"default\"))   # default\nprint(d.pop(\"b\", \"default\"))   # 2\n\n# pop 不带默认值且 key 不存在\ntry:\n    d.pop(\"missing\")\nexcept KeyError as e:\n    print(type(e).__name__)    # KeyError\n\n# setdefault\ne = {}\ne.setdefault(\"a\", 0)\nprint(e)                       # {'a': 0}\ne.setdefault(\"a\", 999)\nprint(e)                       # {'a': 0} (key 存在不覆盖)\nprint(e.setdefault(\"b\"))       # None (无默认值返回 None)\n\n# update 多种形式\nf = {}\nf.update({\"x\": 1})\nprint(f)                       # {'x': 1}\nf.update(y=2, z=3)\nprint(f)                       # {'x': 1, 'y': 2, 'z': 3}\nf.update([(\"p\", 4), (\"q\", 5)])\nprint(f)                       # {'x': 1, 'y': 2, 'z': 3, 'p': 4, 'q': 5}\n\n# popitem\ng = {\"a\": 1, \"b\": 2}\npopped = g.popitem()\nprint(type(popped))            # <class 'tuple'>\nprint(popped[0] in [\"a\", \"b\"]) # True\nprint(len(g))                  # 1\n\nprint(\"done\")",
+        "expected": "1\n{'b': 2}\ndefault\n2\nKeyError\n{'a': 0}\n{'a': 0}\nNone\n{'x': 1}\n{'x': 1, 'y': 2, 'z': 3}\n{'x': 1, 'y': 2, 'z': 3, 'p': 4, 'q': 5}\n<class 'tuple'>\nTrue\n1\ndone\n"
+    },
+    "edge_for_else": {
+        "source": "# Edge: for...else\n\n# else 在正常完成时执行\nfound = False\nfor i in range(3):\n    if i == 10:\n        found = True\n        break\nelse:\n    print(\"not found\")        # not found\n\n# else 在 break 时不执行\nfound = False\nfor i in range(5):\n    if i == 2:\n        print(\"found at\", i)  # found at 2\n        break\nelse:\n    print(\"not found\")\n\n# for...else with empty iterable\nfor i in []:\n    print(\"loop\")\nelse:\n    print(\"empty else\")       # empty else\n\nprint(\"done\")",
+        "expected": "not found\nfound at 2\nempty else\ndone\n"
+    },
+    "edge_getattr": {
+        "source": "# Edge: __getattr__ / __setattr__ / __delattr__\n\nclass Proxy:\n    def __init__(self):\n        self._data = {}\n\n    def __getattr__(self, name):\n        if name.startswith(\"_\"):\n            raise AttributeError(name)\n        return self._data.get(name, \"N/A\")\n\n    def __setattr__(self, name, value):\n        if name.startswith(\"_\"):\n            object.__setattr__(self, name, value)\n        else:\n            self._data[name] = value\n\n    def __delattr__(self, name):\n        if name.startswith(\"_\"):\n            object.__delattr__(self, name)\n        elif name in self._data:\n            del self._data[name]\n\np = Proxy()\np.foo = 42\np.bar = \"hello\"\nprint(p.foo)                 # 42\nprint(p.bar)                 # hello\nprint(p.baz)                 # N/A (default from __getattr__)\n\ndel p.foo\nprint(p.foo)                 # N/A (已删除)\n\nprint(\"done\")",
+        "expected": "42\nhello\nN/A\nN/A\ndone\n"
+    },
+    "edge_hash": {
+        "source": "# Edge: __hash__ 和 hashable\n\n# 内置类型的 hash\nprint(type(hash(42)))        # <class 'int'>\nprint(type(hash(\"hello\")))   # <class 'int'>\nprint(type(hash(3.14)))      # <class 'int'>\nprint(type(hash(True)))      # <class 'int'>\n\n# 相同值有相同 hash\nprint(hash(42) == hash(42))  # True\n\n# list 不可 hash\ntry:\n    hash([1, 2, 3])\nexcept TypeError:\n    print(\"TypeError\")       # TypeError\n\n# dict 不可 hash\ntry:\n    hash({\"a\": 1})\nexcept TypeError:\n    print(\"TypeError\")       # TypeError\n\n# 自定义 __hash__\nclass Hashable:\n    def __init__(self, v):\n        self.v = v\n    def __hash__(self):\n        return hash(self.v)\n    def __eq__(self, other):\n        if isinstance(other, Hashable):\n            return self.v == other.v\n        return NotImplemented\n\nh1 = Hashable(42)\nh2 = Hashable(42)\nprint(hash(h1) == hash(h2))  # True\n\nprint(\"done\")",
+        "expected": "<class 'int'>\n<class 'int'>\n<class 'int'>\n<class 'int'>\nTrue\nTypeError\nTypeError\nTrue\ndone\n"
+    },
+    "edge_isinstance": {
+        "source": "# Edge: isinstance / issubclass\n\nprint(isinstance(42, int))           # True\nprint(isinstance(42, float))         # False\nprint(isinstance(42, object))        # True\nprint(isinstance(\"hi\", str))         # True\nprint(isinstance([1, 2], list))      # True\nprint(isinstance((1,), tuple))       # True\nprint(isinstance({}, dict))          # True\nprint(isinstance(True, bool))        # True\nprint(isinstance(True, int))         # True (bool 是 int 子类)\nprint(isinstance(None, type(None)))  # True\n\n# isinstance with tuple\nprint(isinstance(42, (int, str)))    # True\nprint(isinstance(\"hi\", (int, float)))# False\n\n# issubclass\nprint(issubclass(bool, int))         # True\nprint(issubclass(int, object))       # True\nprint(issubclass(bool, object))      # True\nprint(issubclass(str, int))          # False\n\n# 自定义类\nclass A:\n    pass\n\nclass B(A):\n    pass\n\na = A()\nb = B()\nprint(isinstance(a, A))             # True\nprint(isinstance(b, A))             # True\nprint(isinstance(a, B))             # False\nprint(issubclass(B, A))             # True\nprint(issubclass(A, B))             # False\n\nprint(\"done\")",
+        "expected": "True\nFalse\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nTrue\nFalse\nTrue\nTrue\nTrue\nFalse\nTrue\nTrue\nFalse\nTrue\nFalse\ndone\n"
+    },
+    "edge_list_sort": {
+        "source": "# Edge: list.sort 参数 (key / reverse)\n\n# 基本 sort\na = [3, 1, 2]\na.sort()\nprint(a)                       # [1, 2, 3]\n\n# reverse\nb = [3, 1, 2]\nb.sort(reverse=True)\nprint(b)                       # [3, 2, 1]\n\n# key 参数 (lambda)\nc = [\"bb\", \"a\", \"ccc\"]\nc.sort(key=len)\nprint(c)                       # ['a', 'bb', 'ccc']\n\n# key 参数 (自定义函数)\ndef last_char(s):\n    return s[-1]\n\nd = [\"ab\", \"ca\", \"bc\"]\nd.sort(key=last_char)\nprint(d)                       # ['ab', 'bc', 'ca']\n\n# sorted (返回新列表)\ne = [3, 1, 2]\nf = sorted(e)\nprint(e)                       # [3, 1, 2] (原列表不变)\nprint(f)                       # [1, 2, 3] (新列表)\n\nprint(\"done\")",
+        "expected": "[1, 2, 3]\n[3, 2, 1]\n['a', 'bb', 'ccc']\n['ca', 'ab', 'bc']\n[3, 1, 2]\n[1, 2, 3]\ndone\n"
+    },
+    "edge_neg_index": {
+        "source": "# Edge: 负索引\n\nlst = [10, 20, 30, 40]\nprint(lst[-1])             # 40\nprint(lst[-2])             # 30\nprint(lst[-4])             # 10\n\n# str 负索引\ns = \"abcd\"\nprint(s[-1])               # d\nprint(s[-3])               # b\n\n# tuple 负索引\ntup = (1, 2, 3)\nprint(tup[-1])             # 3\nprint(tup[-2])             # 2\n\n# 越界负索引\ntry:\n    print(lst[-5])\nexcept Exception as e:\n    print(type(e).__name__)",
+        "expected": "40\n30\n10\nd\nb\n3\n2\nIndexError\n"
+    },
+    "edge_nested_unpack": {
+        "source": "# Edge: 嵌套解包\n\n# 基本嵌套解包\n(a, (b, c)) = (1, (2, 3))\nprint(a, b, c)               # 1 2 3\n\n# 三层嵌套\n(a, (b, (c, d))) = (1, (2, (3, 4)))\nprint(a, b, c, d)            # 1 2 3 4\n\n# 星号 + 嵌套\na, (b, *rest), c = 1, [2, 3, 4], 5\nprint(a, b, rest, c)         # 1 2 [3, 4] 5\n\n# 混合括号和星号\nfirst, *mid, (a, b) = \"x\", \"y\", \"z\", (10, 20)\nprint(first, mid, a, b)      # x ['y', 'z'] 10 20\n\n# 解包到已有的变量交互\nx = 1\ny = 2\nx, y = y, x\nprint(x, y)                  # 2 1\n\n# 星号解包空\na, *b = [1]\nprint(a, b)                  # 1 []\n\n# 纯星号解包\n*a, = [1, 2, 3]\nprint(a)                     # [1, 2, 3]\n\nprint(\"done\")",
+        "expected": "1 2 3\n1 2 3 4\n1 2 [3, 4] 5\nx ['y', 'z'] 10 20\n2 1\n1 []\n[1, 2, 3]\ndone\n"
+    },
+    "edge_ord_chr": {
+        "source": "# Edge: ord / chr / hex / oct / bin\n\nprint(ord(\"A\"))              # 65\nprint(ord(\"a\"))              # 97\nprint(ord(\"0\"))              # 48\nprint(chr(65))               # A\nprint(chr(97))               # a\nprint(chr(48))               # 0\n\nprint(hex(255))              # 0xff\nprint(hex(16))               # 0x10\nprint(oct(8))                # 0o10\nprint(oct(64))               # 0o100\nprint(bin(5))                # 0b101\nprint(bin(255))              # 0b11111111\n\nprint(\"done\")",
+        "expected": "65\n97\n48\nA\na\n0\n0xff\n0x10\n0o10\n0o100\n0b101\n0b11111111\ndone\n"
+    },
+    "edge_pass": {
+        "source": "# Edge: pass 语句\n\nclass Empty:\n    pass\n\ndef noop():\n    pass\n\nif True:\n    pass\nelse:\n    pass\n\nfor i in range(3):\n    if i == 1:\n        pass\n    else:\n        print(i)\n\nx = 0\nwhile x < 3:\n    x = x + 1\n\n# pass 在 try 中\ntry:\n    pass\nexcept:\n    pass\nfinally:\n    pass\n\nprint(\"done\")              # done",
+        "expected": "0\n2\ndone\n"
+    },
+    "edge_property": {
+        "source": "# Edge: @property 装饰器\n\nclass Circle:\n    def __init__(self, radius):\n        self._radius = radius\n\n    @property\n    def radius(self):\n        return self._radius\n\n    @radius.setter\n    def radius(self, value):\n        if value < 0:\n            raise ValueError(\"radius must be non-negative\")\n        self._radius = value\n\n    @property\n    def area(self):\n        return 3.14159 * self._radius * self._radius\n\nc = Circle(5)\nprint(c.radius)              # 5\nprint(c.area)                # ~78.53975\n\nc.radius = 10\nprint(c.radius)              # 10\nprint(c.area)                # ~314.159\n\n# @property 只读\nclass ReadOnly:\n    def __init__(self, v):\n        self._v = v\n\n    @property\n    def v(self):\n        return self._v\n\nro = ReadOnly(42)\nprint(ro.v)                  # 42\ntry:\n    ro.v = 100\nexcept AttributeError:\n    print(\"AttributeError\")  # AttributeError\n\nprint(\"done\")",
+        "expected": "5\n78.53975\n10\n314.159\n42\nAttributeError\ndone\n"
+    },
+    "edge_protocols": {
+        "source": "# Edge: __len__ / __contains__ / __iter__ / __next__\n\n# __len__\nclass MyCollection:\n    def __init__(self, items):\n        self.items = items\n    def __len__(self):\n        return len(self.items)\n    def __contains__(self, item):\n        return item in self.items\n    def __iter__(self):\n        return iter(self.items)\n\nmc = MyCollection([1, 2, 3, 4, 5])\nprint(len(mc))               # 5\nprint(3 in mc)               # True\nprint(6 in mc)               # False\n\nfor item in mc:\n    print(item, end=\" \")     # 1 2 3 4 5\nprint()\n\n# 转列表\nprint(list(mc))              # [1, 2, 3, 4, 5]\n\nprint(\"done\")",
+        "expected": "5\nTrue\nFalse\n1 2 3 4 5 \n[1, 2, 3, 4, 5]\ndone\n"
+    },
+    "edge_recursion": {
+        "source": "# Edge: 递归深度\n\ndef factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\nprint(factorial(5))           # 120\nprint(factorial(10))          # 3628800\n\n# 相互递归\ndef is_even(n):\n    if n == 0:\n        return True\n    return is_odd(n - 1)\n\ndef is_odd(n):\n    if n == 0:\n        return False\n    return is_even(n - 1)\n\nprint(is_even(10))            # True\nprint(is_even(11))            # False\nprint(is_odd(10))             # False\nprint(is_odd(11))             # True\n\nprint(\"done\")",
+        "expected": "120\n3628800\nTrue\nFalse\nFalse\nTrue\ndone\n"
+    },
+    "edge_round_pow": {
+        "source": "# Edge: round / pow / divmod\n\nprint(round(3.14159, 2))     # 3.14\nprint(round(3.5))            # 4\nprint(round(2.5))            # 2\nprint(round(3.14159, 0))     # 3.0\n\nprint(pow(2, 3))             # 8\nprint(pow(2, 3, 5))          # 3 (2**3 % 5)\nprint(pow(2, 0))             # 1\n\nprint(divmod(10, 3))         # (3, 1)\nprint(divmod(7, 2))          # (3, 1)\nprint(divmod(5, 5))          # (1, 0)\n\nprint(\"done\")",
+        "expected": "3.14\n4\n2\n3.0\n8\n3\n1\n(3, 1)\n(3, 1)\n(1, 0)\ndone\n"
+    },
+    "edge_shortcircuit": {
+        "source": "# Edge: 短路求值 (and / or 返回操作数)\n\n# and 短路：返回第一个假值或最后一个真值\nprint(True and True)       # True\nprint(True and False)      # False\nprint(False and True)      # False\nprint(0 and 1)             # 0\nprint(1 and 0)             # 0\nprint(1 and 2)             # 2\nprint(\"\" and \"hello\")      # (空字符串)\nprint(\"hello\" and \"\")      # (空字符串)\nprint(\"a\" and \"b\")         # b\nprint([] and [1])          # []\nprint([1] and [2])         # [2]\nprint(None and 1)          # None\nprint(1 and None)          # None\n\n# or 短路：返回第一个真值或最后一个假值\nprint(True or False)       # True\nprint(False or True)       # True\nprint(0 or 1)              # 1\nprint(1 or 0)              # 1\nprint(\"\" or \"hello\")       # hello\nprint(\"hello\" or \"\")       # hello\nprint([] or [1])           # [1]\nprint([1] or [])           # [1]\nprint(None or 1)           # 1\nprint(0 or None)           # None\n\n# not: 总是返回 bool\nprint(not True)            # False\nprint(not False)           # True\nprint(not 0)               # True\nprint(not 1)               # False\nprint(not \"\")              # True\nprint(not \"hello\")         # False\nprint(not [])              # True\nprint(not [1])             # False\nprint(not None)            # True",
+        "expected": "True\nFalse\nFalse\n0\n0\n2\n\n\nb\n[]\n[2]\nNone\nNone\nTrue\nTrue\n1\n1\nhello\nhello\n[1]\n[1]\n1\nNone\nFalse\nTrue\nTrue\nFalse\nTrue\nFalse\nTrue\nFalse\nTrue\n"
+    },
+    "edge_slice": {
+        "source": "# Edge: 切片语法\n\nlst = [0, 1, 2, 3, 4, 5]\nprint(lst[1:3])                # [1, 2]\nprint(lst[1:])                 # [1, 2, 3, 4, 5]\nprint(lst[:3])                 # [0, 1, 2]\nprint(lst[:])                  # [0, 1, 2, 3, 4, 5]\nprint(lst[::2])                # [0, 2, 4]\nprint(lst[::-1])               # [5, 4, 3, 2, 1, 0]\nprint(lst[1:5:2])              # [1, 3]\nprint(lst[-1])                 # 5\nprint(lst[-3:])                # [3, 4, 5]\nprint(lst[-3:-1])              # [3, 4]\nprint(lst[:-2])                # [0, 1, 2, 3]\n\n# 字符串切片\ns = \"hello\"\nprint(s[1:3])                  # el\nprint(s[::-1])                 # olleh\n\n# 元组切片\ntup = (0, 1, 2, 3, 4)\nprint(tup[1:3])                # (1, 2)\nprint(tup[::-1])               # (4, 3, 2, 1, 0)\n\nprint(\"done\")",
+        "expected": "[1, 2]\n[1, 2, 3, 4, 5]\n[0, 1, 2]\n[0, 1, 2, 3, 4, 5]\n[0, 2, 4]\n[5, 4, 3, 2, 1, 0]\n[1, 3]\n5\n[3, 4, 5]\n[3, 4]\n[0, 1, 2, 3]\nel\nolleh\n(1, 2)\n(4, 3, 2, 1, 0)\ndone\n"
+    },
+    "edge_sorted_zip": {
+        "source": "# Edge: sorted / reversed / enumerate / zip\n\n# sorted\nprint(sorted([3, 1, 2]))              # [1, 2, 3]\nprint(sorted([3, 1, 2], reverse=True)) # [3, 2, 1]\nprint(sorted([\"bb\", \"a\", \"ccc\"], key=len)) # ['a', 'bb', 'ccc']\n\n# reversed\nprint(list(reversed([1, 2, 3])))     # [3, 2, 1]\nprint(list(reversed(\"abc\")))         # ['c', 'b', 'a']\n\n# enumerate\nprint(list(enumerate([\"a\", \"b\", \"c\"]))) # [(0, 'a'), (1, 'b'), (2, 'c')]\nprint(list(enumerate([\"a\", \"b\"], start=5))) # [(5, 'a'), (6, 'b')]\n\n# zip\nprint(list(zip([1, 2, 3], [\"a\", \"b\", \"c\"]))) # [(1, 'a'), (2, 'b'), (3, 'c')]\nprint(list(zip([1, 2], [\"a\", \"b\", \"c\"])))    # [(1, 'a'), (2, 'b')]\nprint(list(zip([1, 2, 3], [\"a\", \"b\"])))      # [(1, 'a'), (2, 'b')]\n\nprint(\"done\")",
+        "expected": "[1, 2, 3]\n[3, 2, 1]\n['a', 'bb', 'ccc']\n[3, 2, 1]\n['c', 'b', 'a']\n[(0, 'a'), (1, 'b'), (2, 'c')]\n[(5, 'a'), (6, 'b')]\n[(1, 'a'), (2, 'b'), (3, 'c')]\n[(1, 'a'), (2, 'b')]\n[(1, 'a'), (2, 'b')]\ndone\n"
+    },
+    "edge_split": {
+        "source": "# Edge: split 带 maxsplit\n\ns = \"a,b,c,d\"\nprint(s.split(\",\"))             # ['a', 'b', 'c', 'd']\nprint(s.split(\",\", 1))          # ['a', 'b,c,d']\nprint(s.split(\",\", 2))          # ['a', 'b', 'c,d']\n\n# 默认 split\ns2 = \"hello world foo bar\"\nprint(s2.split())                # ['hello', 'world', 'foo', 'bar']\nprint(s2.split(None, 1))         # ['hello', 'world foo bar']\n\n# rsplit\nprint(s.rsplit(\",\", 1))          # ['a,b,c', 'd']\nprint(s.rsplit(\",\", 2))          # ['a,b', 'c', 'd']\n\nprint(\"done\")",
+        "expected": "['a', 'b', 'c', 'd']\n['a', 'b,c,d']\n['a', 'b', 'c,d']\n['hello', 'world', 'foo', 'bar']\n['hello', 'world foo bar']\n['a,b,c', 'd']\n['a,b', 'c', 'd']\ndone\n"
+    },
+    "edge_str_methods": {
+        "source": "# Edge: 扩展字符串方法\n\nprint(\"hello\".capitalize())            # Hello\nprint(\"HELLO\".casefold())              # hello\nprint(\"hello world\".title())           # Hello World\nprint(\"Hello\".swapcase())              # hELLO\nprint(\"aaa\".count(\"a\"))                # 3\nprint(\"aaa\".count(\"a\", 1))             # 2\nprint(\"aaa\".count(\"a\", 0, 2))          # 2\nprint(\"hello\".isdigit())               # False\nprint(\"123\".isdigit())                 # True\nprint(\"hello\".isalpha())               # True\nprint(\"hello123\".isalpha())            # False\nprint(\"hello\".isalnum())               # True\nprint(\"   \".isspace())                 # True\nprint(\"hello\".islower())               # True\nprint(\"HELLO\".isupper())               # True\nprint(\"Hello\".istitle())               # True\nprint(\"hello\".center(10))              # '  hello   '\nprint(\"hello\".center(10, \"-\"))         # '--hello---'\nprint(\"hello\".ljust(10))               # 'hello     '\nprint(\"hello\".rjust(10))               # '     hello'\nprint(\"hello\".zfill(10))               # '00000hello'\nprint(\"  hello  \".strip())             # hello\nprint(\"done\")",
+        "expected": "Hello\nhello\nHello World\nhELLO\n3\n2\n2\nFalse\nTrue\nTrue\nFalse\nTrue\nTrue\nTrue\nTrue\nTrue\n  hello   \n--hello---\nhello     \n     hello\n00000hello\nhello\ndone\n"
+    },
+    "edge_str_repr": {
+        "source": "# Edge: __str__ vs __repr__\n\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def __str__(self):\n        return \"Point({}, {})\".format(self.x, self.y)\n\n    def __repr__(self):\n        return \"Point(x={}, y={})\".format(self.x, self.y)\n\np = Point(3, 5)\nprint(str(p))                # Point(3, 5)\nprint(repr(p))               # Point(x=3, y=5)\n\n# 只有 __str__\nclass OnlyStr:\n    def __str__(self):\n        return \"str only\"\n\nos = OnlyStr()\nprint(str(os))               # str only\nprint(repr(os))              # <OnlyStr object at ...>, 由于 PyGDS 无模块, 故可能与此处行为不一致\n\n# 只有 __repr__ (fallback)\nclass OnlyRepr:\n    def __repr__(self):\n        return \"repr only\"\n\nor_ = OnlyRepr()\nprint(str(or_))              # repr only\nprint(repr(or_))             # repr only\n\n# 内置类型\nprint(str(42))               # 42\nprint(repr(42))              # 42\nprint(str(\"hi\"))             # hi\nprint(repr(\"hi\"))            # 'hi'\nprint(str([1, 2, 3]))        # [1, 2, 3]\nprint(repr([1, 2, 3]))       # [1, 2, 3]\n\nprint(\"done\")",
+        "expected": "Point(3, 5)\nPoint(x=3, y=5)\nstr only\n<OnlyStr object>\nrepr only\nrepr only\n42\n42\nhi\n'hi'\n[1, 2, 3]\n[1, 2, 3]\ndone\n"
+    },
+    "edge_strip": {
+        "source": "# Edge: strip 带参数\n\ns = \"  hello  \"\nprint(repr(s.strip()))           # 'hello'\nprint(repr(s.strip(\" \")))        # 'hello'\n\ns2 = \"xxhelloxx\"\nprint(s2.strip(\"x\"))             # hello\n\ns3 = \"abc123abc\"\nprint(s3.strip(\"abc\"))           # 123\n\ns4 = \"##title##\"\nprint(s4.strip(\"#\"))             # title\n\n# lstrip\nprint(repr(\"  hi\".lstrip()))     # 'hi'\nprint(\"xxhi\".lstrip(\"x\"))        # hi\n\n# rstrip\nprint(repr(\"hi  \".rstrip()))     # 'hi'\nprint(\"hixx\".rstrip(\"x\"))        # hi\n\nprint(\"done\")",
+        "expected": "'hello'\n'hello'\nhello\n123\ntitle\n'hi'\nhi\n'hi'\nhi\ndone\n"
+    },
+    "edge_ternary": {
+        "source": "# Edge: 三目运算符嵌套结合性\n\nprint(1 if True else 2)           # 1\nprint(1 if False else 2)          # 2\nprint(1 if True else 2 if True else 3)   # 1 (右结合)\nprint(1 if False else 2 if True else 3)  # 2\nprint(1 if False else 2 if False else 3) # 3\nprint((1 if False else 2) if True else 3) # 2 (括号改变结合性)\nprint(1 if 0 else 2)              # 2 (0 为假)\nprint(1 if [] else 2)             # 2\nprint(1 if None else 2)           # 2\nprint(1 if \"a\" else 2)            # 1\nprint(\"a\" if True else \"b\" + \"c\") # a (条件为真时不求值 else)",
+        "expected": "1\n2\n1\n2\n3\n2\n2\n2\n2\n1\na\n"
+    },
+    "edge_while_else": {
+        "source": "# Edge: while...else\n\n# else 在正常退出时执行\nx = 0\nwhile x < 3:\n    print(x)\n    x = x + 1\nelse:\n    print(\"else\")             # else\n\n# else 在 break 时不执行\ny = 0\nwhile True:\n    if y == 2:\n        break\n    print(y)\n    y = y + 1\nelse:\n    print(\"not reached\")\n\nprint(\"done\")\n",
+        "expected": "0\n1\n2\nelse\n0\n1\ndone\n"
+    },
+    "err_as_binding": {
+        "source": "# Error: ArithmeticError as 绑定\n\narth_msg = \"\"\ntry:\n    x = 1 / 0\nexcept ArithmeticError as e:\n    arth_msg = str(e)\nprint(arth_msg != \"\")\n",
+        "expected": "True\n"
+    },
+    "err_bare": {
+        "source": "# Error: 裸 except\n\ntry:\n    raise TypeError(\"type error\")\nexcept:\n    print(\"caught all\")\n",
+        "expected": "caught all\n"
+    },
+    "err_base_match": {
+        "source": "# Error: 基类匹配 (except Exception)\n\nbase_caught = False\ntry:\n    raise TypeError(\"subclass\")\nexcept Exception:\n    base_caught = True\nprint(base_caught)\n",
+        "expected": "True\n"
+    },
+    "err_basic": {
+        "source": "# Error: raise + except + as\n\ntry:\n    raise ValueError(\"test error\")\nexcept ValueError as e:\n    print(\"caught:\", e)\n",
+        "expected": "caught: test error\n"
+    },
+    "err_divzero": {
+        "source": "# Error: 除零捕获\n\ncaught_div = False\ntry:\n    x = 1 / 0\nexcept:\n    caught_div = True\nprint(caught_div)\n",
+        "expected": "True\n"
+    },
+    "err_finally": {
+        "source": "# Error: finally 始终执行\n\nfinally_ran = False\ntry:\n    x = 1\nfinally:\n    finally_ran = True\nprint(finally_ran)\n",
+        "expected": "True\n"
+    },
+    "err_finally_after": {
+        "source": "# Error: finally 在 except 之后\n\nfinally_val = 0\ntry:\n    raise ValueError(\"test\")\nexcept ValueError:\n    finally_val = 1\nfinally:\n    finally_val = finally_val + 10\nprint(finally_val)\n",
+        "expected": "11\n"
+    },
+    "err_finally_exc": {
+        "source": "# Error: finally 在异常上下文中\n\nfinally_ran2 = False\ntry:\n    try:\n        raise RuntimeError(\"boom\")\n    except RuntimeError:\n        _ = 1\nfinally:\n    finally_ran2 = True\nprint(finally_ran2)\n",
+        "expected": "True\n"
+    },
+    "err_finally_only": {
+        "source": "# Error: try-finally 无 except\n\nfinally_only = 0\ntry:\n    finally_only = 1\nfinally:\n    finally_only = 2\nprint(finally_only)\n",
+        "expected": "2\n"
+    },
+    "err_inherit": {
+        "source": "# Error: 多层继承 (ArithmeticError)\n\narth_caught = False\ntry:\n    x = 1 / 0\nexcept ArithmeticError:\n    arth_caught = True\nprint(arth_caught)\n",
+        "expected": "True\n"
+    },
+    "err_mismatch": {
+        "source": "# Error: 异常类型不匹配传播\n\nmismatch_caught = False\nmismatch_outer = False\ntry:\n    try:\n        raise ValueError(\"mismatch\")\n    except TypeError:\n        mismatch_caught = True\nexcept:\n    mismatch_outer = True\nprint(mismatch_caught, mismatch_outer)\n",
+        "expected": "False True\n"
+    },
+    "err_multi": {
+        "source": "# Error: 多个 except 子句\n\ncaught_right = False\ncaught_wrong = False\ntry:\n    raise ValueError(\"val error\")\nexcept TypeError:\n    caught_wrong = True\nexcept ValueError:\n    caught_right = True\nprint(caught_right, caught_wrong)\n",
+        "expected": "True False\n"
+    },
+    "err_nested": {
+        "source": "# Error: 嵌套 try-except\n\ninner_matched = False\nouter_matched = False\ntry:\n    try:\n        raise ValueError(\"nested test\")\n    except TypeError:\n        outer_matched = True\n    except ValueError:\n        inner_matched = True\nexcept:\n    outer_matched = True\nprint(inner_matched, outer_matched)\n",
+        "expected": "True False\n"
+    },
+    "err_new_in_handler": {
+        "source": "# Error: handler 中抛出新异常\n\nnew_exc_caught = False\ntry:\n    try:\n        raise ValueError(\"original\")\n    except ValueError:\n        raise RuntimeError(\"new from handler\")\nexcept RuntimeError:\n    new_exc_caught = True\nprint(new_exc_caught)\n",
+        "expected": "True\n"
+    },
+    "err_no_error": {
+        "source": "# Error: try 无异常 + else\n\nno_error = False\ntry:\n    no_error = True\nexcept:\n    no_error = False\nprint(no_error)\n",
+        "expected": "True\n"
+    },
+    "err_propagate": {
+        "source": "# Error: 异常传播\n\ncaught_outer = False\ntry:\n    try:\n        raise ValueError(\"inner uncaught\")\n    except TypeError:\n        caught_outer = False\nexcept ValueError:\n    caught_outer = True\nprint(caught_outer)\n",
+        "expected": "True\n"
+    },
+    "err_reraise": {
+        "source": "# Error: raise 重新抛出\n\ncaught_re = False\ntry:\n    try:\n        raise ValueError(\"to re-raise\")\n    except ValueError:\n        raise\nexcept ValueError:\n    caught_re = True\nprint(caught_re)\n",
+        "expected": "True\n"
+    },
+    "err_runtime": {
+        "source": "# Error: 运行时 TypeError 捕获\n\ncaught_runtime = False\nerr_msg = \"\"\ntry:\n    len(1, 2)\nexcept TypeError as e:\n    caught_runtime = True\n    err_msg = str(e)\nprint(caught_runtime)\nprint(err_msg != \"\")\n",
+        "expected": "True\nTrue\n"
+    },
+    "err_specificity": {
+        "source": "# Error: 多层特异性匹配\n\nbase2_caught = False\nmid_caught = False\nleaf_caught = False\ntry:\n    x = 1 / 0\nexcept ZeroDivisionError:\n    leaf_caught = True\nexcept ArithmeticError:\n    mid_caught = True\nexcept Exception:\n    base2_caught = True\nprint(leaf_caught, mid_caught, base2_caught)\n",
+        "expected": "True False False\n"
+    },
+    "err_tuple": {
+        "source": "# Error: 元组 except 语法\n\ntuple_caught = False\ntry:\n    raise ValueError(\"tuple test\")\nexcept (TypeError, ValueError):\n    tuple_caught = True\nprint(tuple_caught)\n",
+        "expected": "True\n"
+    },
+    "err_tuple_mismatch": {
+        "source": "# Error: 元组 except 不匹配\n\ntuple_not_caught = False\ntry:\n    try:\n        raise KeyError(\"no match\")\n    except (TypeError, ValueError):\n        tuple_not_caught = True\nexcept KeyError:\n    tuple_not_caught = False\nprint(tuple_not_caught)\n",
+        "expected": "False\n"
+    },
+    "err_tuple_multi": {
+        "source": "# Error: 元组 except 多类型\n\ntuple_caught2 = False\ntry:\n    raise TypeError(\"tuple test 2\")\nexcept (ValueError, RuntimeError, TypeError):\n    tuple_caught2 = True\nprint(tuple_caught2)\n",
+        "expected": "True\n"
+    },
+    "expr_arithmetic": {
+        "source": "# Expression: 算术运算符\n\nprint(1 + 2 * 3)  # 7\nprint((1 - 2) * 3)  # -3\nprint(10 // 3)  # 3\nprint(10 % 3)  # 1\nprint(2 ** 10)  # 1024\nprint(-5 + 3)  # -2\n",
+        "expected": "7\n-3\n3\n1\n1024\n-2\n"
+    },
+    "expr_augassign": {
+        "source": "# Expression: 增强赋值\n\nx = 10\nx += 5\nx *= 2\nx //= 3\nprint(x)  # 10\n",
+        "expected": "10\n"
+    },
+    "expr_compare": {
+        "source": "# Expression: 比较 / 逻辑 / 布尔\n\nprint(1 < 2 and 3 > 2)  # True\nprint(1 > 2 or 3 > 2)  # True\nprint(not True)  # False\nprint(0 or \"hello\")  # hello (短路)\nprint(\"\" and 42)  # (空字符串, 短路)\nprint([] == False)  # False\nprint(None is None)  # True\nprint(\"a\" in \"abc\")  # True\n",
+        "expected": "True\nTrue\nFalse\nhello\n\nFalse\nTrue\nTrue\n"
+    },
+    "func_basic": {
+        "source": "# Function: 定义与调用\n\ndef f1(a, b, /, c, d=0, *args, e, f=1, **kwargs):\n    print(a, b, c, d, e, f, args, kwargs)\n\n\ndef f2(a, b, /, c, d=0, *args, e, f=1):\n    print(a, b, c, d, e, f, args)\n\n\ndef f3(a, b, /, c, d=0, *, e, f=1):\n    print(a, b, c, d, e, f)\n\n\ndef f4(a, b, /, c, d):\n    print(a, b, c, d)\n\n\nf1(1, 2, 3, 4, e=5)  # 1 2 3 4 5 1 () {}\nf1(1, 2, 3, 4, 5, e=6)  # 1 2 3 4 6 1 (5,) {}\nf1(1, 2, 3, e=4, f=5, g=6)  # 1 2 3 0 4 5 () {'g': 6}\nf1(1, 2, 3, 4, 5, 6, 7, e=8, f=9, g=10, h=11)  # 1 2 3 4 8 9 (5, 6, 7) {'g': 10, 'h': 11}\nf1(1, 2, 3, 4, 5, 6, 7, e=8)  # 1 2 3 4 8 1 (5, 6, 7) {}\nf1(1, 2, 3, 4, 5, 6, 7, e=8, f=9)  # 1 2 3 4 8 9 (5, 6, 7) {}\nf1(1, 2, a=3, b=4, c=5, e=6)  # 1 2 5 0 6 1 () {'a': 3, 'b': 4}\n\n# f1()  # TypeError: f1() missing 3 required positional arguments: 'a', 'b', and 'c'\n# f1(1, 2, 3)  # TypeError: f1() missing 1 required keyword-only argument: 'e'\n# f1(c=3, e=4)  # TypeError: f1() missing 2 required positional arguments: 'a' and 'b'\n# f1(a=1, b=2, c=3, e=4)  # TypeError: f1() missing 2 required positional arguments: 'a' and 'b'\n# f1(1, 2, 3, 4, e=5, f=6, c=7)  # TypeError: f1() got multiple values for argument 'c'\n# f1(1, 2, 3, 4, e=5, 6)  # SyntaxError: positional argument follows keyword argument\n# f1(1, 2, 3, 4, e=5, f=6, 7)  # SyntaxError: positional argument follows keyword argument\n# f1(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)  # TypeError: f1() missing 1 required keyword-only argument: 'e'\n# f1(1, 2, 3, 4, 5, 6, 7, e=8, f=9, c=10)  # TypeError: f1() got multiple values for argument 'c'\n# f2(1, 2, 3, 4, 5, 6, 7, e=8, x=9)  # TypeError: f2() got an unexpected keyword argument 'x'\n# f3(1, 2, 3, 4, 5, 6, e=7)  # TypeError: f3() takes from 3 to 4 positional arguments but 6 positional arguments (and 1 keyword-only argument) were given\n# f4(1, 2, a=3, b=4, c=5, d=6)  # TypeError: f4() got some positional-only arguments passed as keyword arguments: 'a, b'\n",
+        "expected": "1 2 3 4 5 1 () {}\n1 2 3 4 6 1 (5,) {}\n1 2 3 0 4 5 () {'g': 6}\n1 2 3 4 8 9 (5, 6, 7) {'g': 10, 'h': 11}\n1 2 3 4 8 1 (5, 6, 7) {}\n1 2 3 4 8 9 (5, 6, 7) {}\n1 2 5 0 6 1 () {'a': 3, 'b': 4}\n"
+    },
+    "func_error": {
+        "source": "# Function: 错误处理\n\ndef f1(a, b, /, c, d=0, *args, e, f=1, **kwargs):\n    print(a, b, c, d, e, f, args, kwargs)\n\n\ndef f2(a, b, /, c, d=0, *args, e, f=1):\n    print(a, b, c, d, e, f, args)\n\n\ndef f3(a, b, /, c, d=0, *, e, f=1):\n    print(a, b, c, d, e, f)\n\n\ndef f4(a, b, /, c, d):\n    print(a, b, c, d)\n\n\ntry:\n    f1()\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f1(1, 2, 3)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f1(c=3, e=4)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f1(a=1, b=2, c=3, e=4)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f1(1, 2, 3, 4, e=5, f=6, c=7)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f1(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f1(1, 2, 3, 4, 5, 6, 7, e=8, f=9, c=10)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f2(1, 2, 3, 4, 5, 6, 7, e=8, x=9)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f3(1, 2, 3, 4, 5, 6, e=7)\nexcept Exception as e:\n    print(type(e), e)\n\ntry:\n    f4(1, 2, a=3, b=4, c=5, d=6)\nexcept Exception as e:\n    print(type(e), e)\n",
+        "expected": "<class 'TypeError'> f1() missing 3 required positional arguments: 'a', 'b', and 'c'\n<class 'TypeError'> f1() missing 1 required keyword-only argument: 'e'\n<class 'TypeError'> f1() missing 2 required positional arguments: 'a' and 'b'\n<class 'TypeError'> f1() missing 2 required positional arguments: 'a' and 'b'\n<class 'TypeError'> f1() got multiple values for argument 'c'\n<class 'TypeError'> f1() missing 1 required keyword-only argument: 'e'\n<class 'TypeError'> f1() got multiple values for argument 'c'\n<class 'TypeError'> f2() got an unexpected keyword argument 'x'\n<class 'TypeError'> f3() takes from 3 to 4 positional arguments but 6 positional arguments (and 1 keyword-only argument) were given\n<class 'TypeError'> f4() got some positional-only arguments passed as keyword arguments: 'a, b'\n"
+    },
+    "func_recursion": {
+        "source": "# Function: 递归\n\n\ndef fib(n):\n    if n == 0 or n == 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n\n\nprint(fib(10))\n",
+        "expected": "55\n"
+    },
+    "func_syntax_err1": {
+        "source": "# Function: SyntaxError — 关键字参数后接位置参数\n\ndef f1(a, b, /, c, d=0, *args, e, f=1, **kwargs):\n    print(a, b, c, d, e, f, args, kwargs)\n\n\ntry:\n    f1(1, 2, 3, 4, e=5, 6)  # SyntaxError: positional argument follows keyword argument\nexcept Exception as e:\n    print(type(e), e)\n",
+        "expected": "SyntaxError: positional argument follows keyword argument\n"
+    },
+    "func_syntax_err2": {
+        "source": "# Function: SyntaxError — 关键字参数后接位置参数\n\ndef f1(a, b, /, c, d=0, *args, e, f=1, **kwargs):\n    print(a, b, c, d, e, f, args, kwargs)\n\n\ntry:\n    f1(1, 2, 3, 4, e=5, f=6, 7)\nexcept Exception as e:\n    print(type(e), e)\n",
+        "expected": "SyntaxError: positional argument follows keyword argument\n"
+    },
+    "func_unpack": {
+        "source": "# Function: 参数解包 (暂无计划实现)\n\n",
+        "expected": ""
+    },
+    "kwd_control": {
+        "source": "# Keyword: if/elif/else, for/while, break/continue\n\nfor i in range(5):\n    if i == 2:\n        continue\n    elif i == 4:\n        break\n    elif i == 3:\n        print(i + 10)\n    else:\n        print(i)\n\nx = 0\nwhile x <= 2:\n    x = x + 1\n    print(x)\n",
+        "expected": "0\n1\n13\n1\n2\n3\n"
+    },
+    "kwd_scope": {
+        "source": "# Keyword: global, nonlocal\n\ndef outer():\n    y = 2\n\n    def inner():\n        nonlocal y\n        y = 3\n\n    inner()\n    print(y)  # 3\n\n\ndef change_global():\n    global y\n    y = 100\n\n\ny = 1\nprint(y)  # 1\nouter()  # 3\nprint(y)  # 1\nchange_global()\nprint(y)  # 100\n",
+        "expected": "1\n3\n1\n100\n"
+    },
+    "sugar_comp": {
+        "source": "# Sugar: 推导式 (list / dict / generator)\n\ndef foo(py_generator) -> None:\n    print(py_generator)  # Python: <generator object <genexpr> at 0x0000000000000000>\n\n\ndef print_list(lst: list) -> None:\n    print(lst)\n\n\nls = [n for n in range(5) if n % 2 == 0]\nprint(ls)  # [0, 2, 4]\n\ndt = {n - 2: n * 2 for n in [n for n in range(5) if n % 2 == 0] if n % 2 == 0}\nprint(dt)  # {-2: 0, 0: 4, 2: 8}\n\nprint_list([n for n in range(10) if n % 2 == 0])  # [0, 2, 4, 6, 8]\n\ngenerator = (n for n in range(5) if n % 2 == 0)\nprint([n for n in generator])  # [0, 2, 4]\n\n# foo(n for n in range(5) if n % 2 == 0)  # DSL - 在函数调用时未显示声明会造成语法异常\n",
+        "expected": "[0, 2, 4]\n{-2: 0, 0: 4, 2: 8}\n[0, 2, 4, 6, 8]\n[0, 2, 4]\n"
+    },
+    "sugar_ternary": {
+        "source": "# Sugar: 三目运算符\n\nprint(1 if 2 > 1 else 0)  # 1\nprint(1 if False else 2)  # 2\nprint(1 if False else 2 if True else 3)  # 2\nprint(1 if True else 2 if True else 3)  # 1\nprint((10 if 5 > 2 else 20) + 5)  # 15\n",
+        "expected": "1\n2\n2\n1\n15\n"
+    },
+    "sugar_type_annot": {
+        "source": "# Sugar: 类型注解\n\ndef add(x: int | float, y: int | float) -> int | float:\n    return x + y\n\n\nclass Foo:\n    def __init__(self, x: int, y: int) -> None:\n        self.x = x\n        self.y = y\n\n    def say(self, message: str) -> None:\n        print(self.x + self.y, message)\n\n\nnumber: int = 1\nprint(add(number, 2.5))  # 3.5\n\nfoo: Foo = Foo(5, 6)\nfoo.say(\"o'clock\")  # 11 o'clock\n",
+        "expected": "3.5\n11 o'clock\n"
+    },
+    "sugar_unpack": {
+        "source": "# Sugar: 解包赋值\n\nn1, n2, (n3, n4, n5), *more = 0, 1, [2, 3, 4], (5, 6), 7,\n\nprint(n1)  # 0\nprint(n2)  # 1\nprint(n3)  # 2\nprint(n4)  # 3\nprint(n5)  # 4\nprint(more)  # [(5, 6), 7]\n\ndt = {\"a\": 10, \"b\": 20}\nfor k, v in dt.items():\n    print(k, v)  # a 20 / b 20\n",
+        "expected": "0\n1\n2\n3\n4\n[(5, 6), 7]\na 10\nb 20\n"
+    }
+}
