@@ -3,7 +3,10 @@ extends SceneTree
 ## PyGDS 挂起系统综合测试
 ## 覆盖: SLEEPING/WAITING/嵌套函数/控制流/混合/预设代码/连续挂起/on_resume回调
 
-var _dsl: PyGDS
+## 通过 preload 引用解释器脚本, 避免依赖编辑器生成的全局类缓存 (CI 无缓存可解析)
+const PYGDS_SCRIPT = preload("res://pygds.gd")
+
+var _dsl: PYGDS_SCRIPT
 var _test_queue: Array = []
 var _test_idx: int = 0
 var _passed: int = 0
@@ -169,24 +172,24 @@ func _start_next_test():
 
 
 func _on_resume(name: String, expected: String, extra_check: Callable):
-	if _dsl.state == PyGDS.State.SUSPENDED_WAITING:
-		_dsl.state = PyGDS.State.RUNNING
+	if _dsl.state == PYGDS_SCRIPT.State.SUSPENDED_WAITING:
+		_dsl.state = PYGDS_SCRIPT.State.RUNNING
 
 	var state = _dsl.run()
 
 	match state:
-		PyGDS.State.SUSPENDED_SLEEPING:
+		PYGDS_SCRIPT.State.SUSPENDED_SLEEPING:
 			pass
-		PyGDS.State.SUSPENDED_WAITING:
+		PYGDS_SCRIPT.State.SUSPENDED_WAITING:
 			_active_resume_count += 1
 			if _active_resume_count > _max_suspend:
 				printerr("  [FAIL] %s: WAITING 循环 > %d 次!" % [name, _max_suspend])
 				_start_next_test()
 				return
 			_on_resume(name, expected, extra_check)
-		PyGDS.State.FINISHED:
+		PYGDS_SCRIPT.State.FINISHED:
 			_verify(name, expected, extra_check)
-		PyGDS.State.ERROR:
+		PYGDS_SCRIPT.State.ERROR:
 			_failed += 1
 			print("  [FAIL] %s: %s" % [name, _dsl.report.last_error])
 			_start_next_test()

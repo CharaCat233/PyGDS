@@ -3,6 +3,17 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.1] - 2026-09-20
+
+### 修复
+
+- 修复 `demo/test_suspend_all.gd` 与 `demo/demo.gd` 对全局类名 `PyGDS` 的依赖：
+  改用 `const PYGDS_SCRIPT = preload("res://pygds.gd")` 引用解释器脚本，
+  使类型注解与 `State` 枚举访问不依赖编辑器生成的全局类缓存
+  （`.godot/global_script_class_cache.cfg`）
+- 修复全新 clone（无全局类缓存）下 `--script` 运行挂起测试报
+  `Could not find type "PyGDS"` 的问题，CI 挂起测试步骤现可正常通过
+
 ## [0.1.0] - 2026-09-20
 
 首个正式发布版本。

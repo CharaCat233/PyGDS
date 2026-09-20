@@ -12,13 +12,15 @@ extends Control
 ## 和按钮点击驱动执行, 真实展示挂起系统的异步特性
 
 const PYGDS_PATH = "res://pygds.gd"
+## 通过 preload 引用解释器脚本 (State 枚举访问不依赖全局类缓存)
+const PYGDS_SCRIPT = preload("res://pygds.gd")
 
 @onready var _output: RichTextLabel = $Panel/VBoxContainer/SplitContainer/LeftPanel/LeftVBox/OutputLabel
 @onready var _print_output: RichTextLabel = $Panel/VBoxContainer/SplitContainer/RightPanel/RightVBox/PrintOutput
 @onready var _run_button: Button = $Panel/VBoxContainer/ButtonContainer/RunButton
 @onready var _continue_button: Button = $Panel/VBoxContainer/ButtonContainer/ContinueButton
 
-var _dsl: PyGDS
+var _dsl: PYGDS_SCRIPT
 var _print_offset: int = 0
 
 
@@ -152,28 +154,28 @@ func _handle_state(state: int):
 		call_deferred("_on_sleeping_resumed")
 	
 	match state:
-		PyGDS.State.SUSPENDED_SLEEPING:
+		PYGDS_SCRIPT.State.SUSPENDED_SLEEPING:
 			# Timer 已由 request_suspend_sleeping 创建, 等待超时信号触发 run()
 			pass
 			
-		PyGDS.State.SUSPENDED_WAITING:
+		PYGDS_SCRIPT.State.SUSPENDED_WAITING:
 			_continue_button.visible = true  # 等待用户点击「继续」
 			
-		PyGDS.State.RUNNING:
+		PYGDS_SCRIPT.State.RUNNING:
 			_append("[color=red][WARNING] 意外的 RUNNING 状态[/color]")
 			_demo_finished()
 			
-		PyGDS.State.FINISHED:
+		PYGDS_SCRIPT.State.FINISHED:
 			_demo_finished()
 			
-		PyGDS.State.ERROR:
+		PYGDS_SCRIPT.State.ERROR:
 			_append("[color=red][ERROR] %s[/color]" % _dsl.report.last_error)
 			_demo_finished()
 
 
 func _on_continue():
 	_continue_button.visible = false
-	_dsl.state = PyGDS.State.RUNNING
+	_dsl.state = PYGDS_SCRIPT.State.RUNNING
 	_step_execute()
 
 
