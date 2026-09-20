@@ -62,7 +62,7 @@ class Lexer:
 	var line: int = 1
 	## 当前列号
 	var column: int = 1
-	## 缩进 用于生成 INDENT/DEDENT
+	## 缩进, 用于生成 INDENT/DEDENT
 	var indent_stack: Array = [0]
 	## 是否处于行首 (用于处理缩进)
 	var at_line_start: bool = true
@@ -790,7 +790,7 @@ class WhileStmt extends Stmt:
 	## else 分支语句列表 (循环正常结束未 break 时执行)
 	var _else_body: Array
 	## 构造 while 循环 [br]
-	## [param c] 循环条件表达式
+	## [param c] 循环条件表达式 [br]
 	## [param b] 循环体语句列表
 	func _init(c, b):
 		condition = c
@@ -915,7 +915,7 @@ class AssertStmt extends Stmt:
 class PassStmt extends Stmt:
 	pass
 
-## del 删除语句, 例如 del obj.attr 或 del arr[idx] [br]
+## del 删除语句, 例如 [code]del obj.attr[/code] 或 [code]del arr[idx][/code] [br]
 ## 删除对象的属性或容器中的元素
 class DelStmt extends Stmt:
 	## 删除目标表达式列表
@@ -1093,7 +1093,7 @@ class ConsoleReport:
 	func reset():
 		has_error = false
 		last_error = ""
- 
+
 ## 函数参数封装 [br]
 ## 支持普通参数, 仅位置参数 (/), *args (可变位置), 仅关键字参数 (*), **kwargs (可变关键字)
 class Param:
@@ -1124,7 +1124,7 @@ class Param:
 		is_kwargs = p_kwargs
 		is_positional_only = p_positional_only
 		is_keyword_only = p_keyword_only
- 
+
 ## 关键字参数封装 [br]
 ## 用于函数调用时的 key=value 形式参数
 class KeywordArg:
@@ -1134,12 +1134,12 @@ class KeywordArg:
 	var value: Expr
 	
 	## 构造关键字参数 [br]
-	## [param n] 参数名
+	## [param n] 参数名 [br]
 	## [param v] 参数值表达式
 	func _init(n, v):
 		name = n
 		value = v
- 
+
 ## 所有 DSL 值的基类, 定义通用的操作接口, 子类重写以实现多态 [br]
 ## DSLObject 对标 CPython PyObject, 统一对象模型的核心 [br]
 ## DSLObject 任何可能出错的方法在出错时返回 null, 并将错误信息写入自己的 last_error [br]
@@ -1513,7 +1513,7 @@ class DSLObject:
 		var o: DSLObject = DSLNone.new() if other == null else other
 		last_error = "TypeError: '%s' not supported between instances of '%s' and '%s'" % [op, _type_name(), o._type_name()]
 		return null
- 
+
 ## DSL None 类型的表示, 对应 Python None, 表示空值
 class DSLNone extends DSLObject:
 	func _type_name() -> String:
@@ -1608,7 +1608,7 @@ class DSLBool extends DSLObject:
 	func _dsl_eq(other: DSLObject) -> bool:
 		other = DSLObject._unwrap_dsl(other)
 		return (other is DSLBool) and value == other.value
- 
+
 ## DSL 异常类型, 对应 Python BaseException, 表示错误和异常情况
 class DSLException extends DSLObject:
 	## 错误消息字符串
@@ -3343,7 +3343,7 @@ class DSLTuple extends DSLObject:
 		var proto = DSLTuple.new([])
 		_tup_descriptors["count"] = DSLMethodDescriptor.new("count", Callable(proto, "_tup_count"))
 		_tup_descriptors["index"] = DSLMethodDescriptor.new("index", Callable(proto, "_tup_index"))
- 
+
 ## DSL 字典类型, 对应 Python dict
 class DSLDict extends DSLObject:
 	## 字典数据 (键为 Variant, 值为 DSLObject)
@@ -3652,7 +3652,7 @@ class DSLDict extends DSLObject:
 		_dict_descriptors["copy"] = DSLMethodDescriptor.new("copy", Callable(proto, "builtin_copy"))
 		_dict_descriptors["setdefault"] = DSLMethodDescriptor.new("setdefault", Callable(proto, "builtin_setdefault"))
 		_dict_descriptors["popitem"] = DSLMethodDescriptor.new("popitem", Callable(proto, "builtin_popitem"))
- 
+
 ## DSL dict_keys 视图包装器, 对应 Python dict_keys
 class DSLDictKeys extends DSLObject:
 	## 键列表
@@ -3680,7 +3680,7 @@ class DSLDictKeys extends DSLObject:
 			var item = keys_list[i]
 			s += "'" + item.value + "'" if item is DSLString else item._dsl_str()
 		return "[" + s + "]"
- 
+
 ## DSL dict_values 视图包装器, 对应 Python dict_values
 class DSLDictValues extends DSLObject:
 	## 值列表
@@ -3708,7 +3708,7 @@ class DSLDictValues extends DSLObject:
 			var item = values_list[i]
 			s += "'" + item.value + "'" if item is DSLString else item._dsl_str()
 		return "[" + s + "]"
- 
+
 ## DSL Property 描述符, 对应 Python @property 装饰器 [br]
 ## 实现数据描述符协议 (__get__ / __set__ / __delete__) [br]
 ## 存储 getter 函数和可选的 setter/deleter 函数
@@ -3783,7 +3783,7 @@ class DSLProperty extends DSLObject:
 	func deleter(deleter_func):
 		fdel = deleter_func
 		return self
- 
+
 ## DSL 用户自定义函数对象, 对应 Python function
 class DSLFunction extends DSLObject:
 	## 函数声明 AST 节点
@@ -3832,7 +3832,7 @@ class DSLFunction extends DSLObject:
 		if instance == null:
 			return self
 		return DSLMethod.new(instance, self, _cls_interp)
- 
+
 ## DSL 内置函数或绑定方法对象, 对应 Python builtin_function_or_method
 class DSLBuiltinFunction extends DSLObject:
 	## 函数名称
@@ -3908,7 +3908,7 @@ class DSLBuiltinFunction extends DSLObject:
 	## [returns] 对应的 DSLObject
 	func _wrap(v: Variant) -> DSLObject:
 		return _wrap_static(v)
- 
+
 ## DSL 类级别非魔法方法描述符, 对应 Python method_descriptor
 class DSLMethodDescriptor extends DSLObject:
 	## 方法名称
@@ -3946,7 +3946,7 @@ class DSLMethodDescriptor extends DSLObject:
 		var bf = DSLBuiltinFunction.new(name, callback)
 		bf.__self__ = instance
 		return bf
- 
+
 ## DSL 类级别魔法方法描述符, 对应  Python wrapper_descriptor
 class DSLWrappedDescriptor extends DSLObject:
 	## 方法名称
@@ -3982,7 +3982,7 @@ class DSLWrappedDescriptor extends DSLObject:
 		if instance == null:
 			return self
 		return DSLMethodWrapper.new(self, instance)
- 
+
 ## DSL 实例级别魔法方法包装, 对应 Python method-wrapper
 class DSLMethodWrapper extends DSLObject:
 	## 所属描述符
@@ -4013,7 +4013,7 @@ class DSLMethodWrapper extends DSLObject:
 		var callv_args = [full_args, kwargs]
 		var raw_result = descriptor.callback.callv(callv_args)
 		return DSLBuiltinFunction._wrap_static(raw_result)
- 
+
 ## DSL 用户定义绑定方法, 对应 Python method
 class DSLMethod extends DSLObject:
 	## 方法所属实例
@@ -4221,7 +4221,7 @@ class DSLDictKeyIterator extends DSLIterator:
 		if typeof(raw) == TYPE_BOOL:
 			return DSLBool.new(raw)
 		return DSLNone.new()
- 
+
 ## DSLString 迭代器 (逐字符迭代)
 class DSLStringIterator extends DSLIterator:
 	## 被迭代的字符
@@ -4243,7 +4243,7 @@ class DSLStringIterator extends DSLIterator:
 		var ch = value[index]
 		index += 1
 		return DSLString.new(ch)
- 
+
 ## 变量作用域环境, 管理变量的定义, 读写和作用域链 [br]
 ## 支持 global/nonlocal 声明, 通过 enclosing 链实现嵌套作用域
 class DSLEnvironment:
@@ -4365,7 +4365,7 @@ class DSLEnvironment:
 		nonlocal_bindings[name] = target_env
 		if values.has(name):
 			values.erase(name)
- 
+
 ## 递归下降语法分析器, 将 Token 序列转换为 AST [br]
 ## 采用经典的递归下降解析策略, 每个非终结符对应一个解析函数 [br]
 ## 支持完整的 Python 风格语法: 函数/类定义, 控制流, 表达式, 推导式, 解包等
@@ -4965,7 +4965,7 @@ class Parser:
 			var else_token = consume(TokenType.ELSE, "Expected 'else' in conditional expression")
 			if else_token == null:
 				return null
-			var false_expr = conditional_expression()  # 递归, 实现右结合
+			var false_expr = conditional_expression() # 递归, 实现右结合
 			return ConditionalExpr.new(condition, expr, false_expr)
 		return expr
 		
@@ -5087,7 +5087,7 @@ class Parser:
 		var expr = unary()
 		if match_types([TokenType.STARSTAR]):
 			var op = previous()
-			var right = power() 
+			var right = power()
 			expr = Binary.new(expr, op, right)
 		return expr
 		
@@ -5598,7 +5598,8 @@ class Parser:
 		var idx = current
 		var has_target = false
 		var has_comma_or_star_or_paren = false
-		var depth = 0   # 括号嵌套深度
+		# 括号嵌套深度
+		var depth = 0
 		
 		while idx < tokens.size():
 			var t = tokens[idx]
@@ -5650,7 +5651,7 @@ class Parser:
 				idx += 2
 				continue
 				
-			# 逗号 (深度内也需重置has_target)
+			# 逗号 (深度内也需重置 has_target)
 			if t.type == TokenType.COMMA:
 				if not has_target:
 					return false
@@ -5700,10 +5701,21 @@ class Interpreter:
 	static var _cached_false: DSLBool
 	## 内置类型 proto 缓存, 防止 _inject_builtin_methods 中的 Callable 引用的 proto 被 GC
 	static var _builtin_protos: Dictionary = {}
+
+	## 执行结果枚举, 用于控制流程跳转
+	enum ExecResult {
+		NORMAL,
+		RETURN,
+		BREAK,
+		CONTINUE,
+		ERROR,
+		RAISE,
+		SUSPENDED
+	}
+
 	## 控制台报告器
 	var report: ConsoleReport
-	## 执行结果枚举, 用于控制流程跳转
-	enum ExecResult {NORMAL, RETURN, BREAK, CONTINUE, ERROR, RAISE}
+	## 全局作用域
 	var globals: DSLEnvironment
 	## 当前作用域
 	var environment: DSLEnvironment
@@ -5719,6 +5731,18 @@ class Interpreter:
 	var last_exception = null
 	## 异常继承层级: type_name -> base_name, 用于 isinstance 检查
 	var exception_hierarchy: Dictionary[String, String] = {}
+	## 执行栈 (exec_block 递归层级追踪)
+	var _exec_stack: Array = []
+	## 函数调用栈
+	var _call_stack: Array = []
+	## 挂起标志位 (是否已挂起)
+	var _suspended: bool = false
+	## 表达式求值完成标志 (区分 sleep() 已求值 vs 函数调用未求值)
+	var _expr_evaluated: bool = false
+	## 挂起类型 (false = SLEEPING(自动恢复) / true = WAITING(手动恢复))
+	var _is_waiting: bool = false
+	## PyGDS 宿主引用
+	var owner: PyGDS = null
 	
 	## 构造解释器实例 [br]
 	## [param p_reporter] 控制台报告器 [br]
@@ -6077,20 +6101,75 @@ class Interpreter:
 	## [param statements] 语句数组 [br]
 	## [param env] 要使用的环境
 	func exec_block(statements: Array, env: DSLEnvironment) -> ExecResult:
+		var start_pc = 0
+		var resume_info = {}
+		
+		# 搜索整个 _exec_stack 寻找匹配帧 (嵌套调用时栈顶可能是内层帧)
+		var match_idx = -1
+		for j in range(_exec_stack.size() - 1, -1, -1):
+			var f = _exec_stack[j]
+			if f.statements == statements and f.env == env:
+				match_idx = j
+				start_pc = f.pc
+				resume_info = f.resume_info if f.has("resume_info") else {}
+				break
+		
+		if match_idx >= 0:
+			_exec_stack.remove_at(match_idx)
+			# 清理栈中重复的 stale 帧 (相同 statements 和 env)
+			var j = 0
+			while j < _exec_stack.size():
+				var sf = _exec_stack[j]
+				if sf.statements == statements and sf.env == env:
+					_exec_stack.remove_at(j)
+				else:
+					j += 1
+		
 		var prev_env = environment
 		environment = env
-		for stmt in statements:
+		
+		# 压入当前帧
+		var frame = {
+			"statements": statements,
+			"pc": 0,
+			"env": env,
+			"resume_info": resume_info
+		}
+		_exec_stack.append(frame)
+		
+		var i = start_pc
+		while i < statements.size():
 			if report.has_error:
+				_exec_stack.pop_back()
 				environment = prev_env
 				if last_exception != null:
 					return ExecResult.RAISE
 				return ExecResult.ERROR
+			
+			frame.pc = i
+			var stmt = statements[i]
+			i += 1
+			
 			var res = execute(stmt)
+			if res == ExecResult.SUSPENDED:
+				# 保存下次恢复的位置
+				if _expr_evaluated:
+					# 表达式已求值, 跳过当前语句 (如 sleep(1))
+					frame.pc = i
+					_expr_evaluated = false
+				else:
+					# 表达式未求值, 恢复时重新执行 (如嵌套函数调用挂起)
+					frame.pc = i - 1
+				environment = prev_env
+				return ExecResult.SUSPENDED
 			if res == ExecResult.ERROR and last_exception != null:
 				res = ExecResult.RAISE
 			if res != ExecResult.NORMAL:
+				_exec_stack.pop_back()
 				environment = prev_env
 				return res
+		
+		_exec_stack.pop_back()
 		environment = prev_env
 		return ExecResult.NORMAL
 		
@@ -6107,58 +6186,134 @@ class Interpreter:
 			
 		if stmt is ExpressionStmt:
 			var val = evaluate(stmt.expression)
+			if _suspended:
+				_expr_evaluated = (val != null)
+				return ExecResult.SUSPENDED
 			if val == null or report.has_error:
 				return ExecResult.ERROR
 			return ExecResult.NORMAL
 			
 		if stmt is IfStmt:
+			# 检查 resume_info 是否跳过条件求值
+			var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
+			var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
+			if ri.get("type") == "if":
+				var branch = ri.get("branch", "then")
+				if branch == "then":
+					return exec_block(stmt.then_branch, environment)
+				elif branch == "elif":
+					var idx = ri.get("elif_idx", 0)
+					return exec_block(stmt.elif_branches[idx][1], environment)
+				elif branch == "else":
+					if stmt.else_branch.size() > 0:
+						return exec_block(stmt.else_branch, environment)
+					return ExecResult.NORMAL
+			
 			var cond = evaluate(stmt.condition)
+			if _suspended:
+				_expr_evaluated = (cond != null)
+				return ExecResult.SUSPENDED
 			if cond == null or report.has_error:
 				return ExecResult.ERROR
 			if cond._dsl_bool():
+				# 设置 resume_info
+				var f = _exec_stack.back() if _exec_stack.size() > 0 else null
+				if f != null and f is Dictionary:
+					f.resume_info = {"type": "if", "branch": "then"}
 				return exec_block(stmt.then_branch, environment)
 			else:
-				for branch in stmt.elif_branches:
+				for branch_idx in range(stmt.elif_branches.size()):
+					var branch = stmt.elif_branches[branch_idx]
 					cond = evaluate(branch[0])
+					if _suspended:
+						_expr_evaluated = (cond != null)
+						return ExecResult.SUSPENDED
 					if cond == null or report.has_error:
 						return ExecResult.ERROR
 					if cond._dsl_bool():
+						var f = _exec_stack.back() if _exec_stack.size() > 0 else null
+						if f != null and f is Dictionary:
+							f.resume_info = {"type": "if", "branch": "elif", "elif_idx": branch_idx}
 						return exec_block(branch[1], environment)
 				if stmt.else_branch.size() > 0:
+					var f = _exec_stack.back() if _exec_stack.size() > 0 else null
+					if f != null and f is Dictionary:
+						f.resume_info = {"type": "if", "branch": "else"}
 					return exec_block(stmt.else_branch, environment)
+			# 清除 resume_info 防止泄漏到后续语句
+			var _f = _exec_stack.back() if _exec_stack.size() > 0 else null
+			if _f != null and _f is Dictionary:
+				_f.resume_info = {}
 			return ExecResult.NORMAL
 		
 		if stmt is WhileStmt:
+			# 检查 resume_info 是否跳过条件求值
+			var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
+			var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
+			var skip_cond = ri.get("type") == "while"
+			
 			var did_break = false
 			while true:
-				var cond = evaluate(stmt.condition)
-				if cond == null or report.has_error:
-					return ExecResult.ERROR
-				if not cond._dsl_bool():
-					break
+				if not skip_cond:
+					var cond = evaluate(stmt.condition)
+					if _suspended:
+						_expr_evaluated = (cond != null)
+						_exec_stack.back().resume_info = {"type": "while"}
+						return ExecResult.SUSPENDED
+					if cond == null or report.has_error:
+						return ExecResult.ERROR
+					if not cond._dsl_bool():
+						break
+				skip_cond = false
+				
+				# 设置 resume_info
+				var f = _exec_stack.back() if _exec_stack.size() > 0 else null
+				if f != null and f is Dictionary:
+					f.resume_info = {"type": "while"}
+				
 				var res = exec_block(stmt.body, environment)
 				if res == ExecResult.BREAK:
 					did_break = true
 					break
 				elif res == ExecResult.CONTINUE:
 					continue
-				elif res == ExecResult.ERROR or res == ExecResult.RETURN or res == ExecResult.RAISE:
+				elif res == ExecResult.ERROR or res == ExecResult.RETURN or res == ExecResult.RAISE or res == ExecResult.SUSPENDED:
 					return res
 			if not did_break and stmt.has_meta("_else_body"):
 				var else_body = stmt.get_meta("_else_body")
 				exec_block(else_body, DSLEnvironment.new(environment.report, environment))
+			# 清除 resume_info 防止泄漏到后续语句
+			var _f = _exec_stack.back() if _exec_stack.size() > 0 else null
+			if _f != null and _f is Dictionary:
+				_f.resume_info = {}
 			return ExecResult.NORMAL
 			
 		if stmt is ForStmt:
-			var iterable = evaluate(stmt.iterable)
-			if iterable == null or iterable is DSLNone:
-				raise_exception("RuntimeError", "iterable is null in for loop")
-				return ExecResult.RAISE
-			var iterator = iterable._dsl_iter()
-			if iterator == null:
-				raise_exception_from_last_error(iterable.last_error if iterable.last_error else "TypeError: object is not iterable")
-				return ExecResult.RAISE
+			# 检查 resume_info 是否跳过迭代器重建
+			var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
+			var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
+			var iterator = null
 			var did_break = false
+			
+			if ri.get("type") == "for":
+				# 从 resume_info 恢复迭代器
+				iterator = ri.get("iterator")
+				if iterator == null:
+					raise_exception("RuntimeError", "cannot resume for loop: iterator lost")
+					return ExecResult.RAISE
+			else:
+				var iterable = evaluate(stmt.iterable)
+				if _suspended:
+					_expr_evaluated = (iterable != null)
+					return ExecResult.SUSPENDED
+				if iterable == null or iterable is DSLNone:
+					raise_exception("RuntimeError", "iterable is null in for loop")
+					return ExecResult.RAISE
+				iterator = iterable._dsl_iter()
+				if iterator == null:
+					raise_exception_from_last_error(iterable.last_error if iterable.last_error else "TypeError: object is not iterable")
+					return ExecResult.RAISE
+			
 			while iterator.has_next():
 				var item = iterator.next()
 				if stmt.variables.size() == 1:
@@ -6175,19 +6330,35 @@ class Interpreter:
 					if seq.size() != stmt.variables.size():
 						raise_exception("ValueError", "Unpacking mismatch: expected %d, got %d" % [stmt.variables.size(), seq.size()])
 						return ExecResult.RAISE
-					for i in range(stmt.variables.size()):
-						environment.set_val(stmt.variables[i], seq[i] if seq[i] is DSLObject else _wrap(seq[i]))
+					for j in range(stmt.variables.size()):
+						environment.set_val(stmt.variables[j], seq[j] if seq[j] is DSLObject else _wrap(seq[j]))
+				
+				# 设置 resume_info
+				var f = _exec_stack.back() if _exec_stack.size() > 0 else null
+				if f != null and f is Dictionary:
+					f.resume_info = {"type": "for", "iterator": iterator}
+				
+				# 清除之前迭代残留的 body frame (防止跨迭代复用导致跳过执行)
+				for _j in range(_exec_stack.size() - 1, -1, -1):
+					if _exec_stack[_j].statements == stmt.body and _exec_stack[_j].env == environment:
+						_exec_stack.remove_at(_j)
+						break
+				
 				var res = exec_block(stmt.body, environment)
 				if res == ExecResult.BREAK:
 					did_break = true
 					break
 				elif res == ExecResult.CONTINUE:
 					continue
-				elif res == ExecResult.RETURN or res == ExecResult.RAISE or res == ExecResult.ERROR:
+				elif res == ExecResult.RETURN or res == ExecResult.RAISE or res == ExecResult.ERROR or res == ExecResult.SUSPENDED:
 					return res
 			if not did_break and stmt.has_meta("_else_body"):
 				var else_body = stmt.get_meta("_else_body")
 				exec_block(else_body, DSLEnvironment.new(environment.report, environment))
+			# 清除 resume_info 防止泄漏到后续语句
+			var _f = _exec_stack.back() if _exec_stack.size() > 0 else null
+			if _f != null and _f is Dictionary:
+				_f.resume_info = {}
 			return ExecResult.NORMAL
 			
 		if stmt is FunctionStmt:
@@ -6214,6 +6385,9 @@ class Interpreter:
 			
 		if stmt is ReturnStmt:
 			return_value = evaluate(stmt.value) if stmt.value else DSLNone.new()
+			if _suspended:
+				_expr_evaluated = (return_value != null)
+				return ExecResult.SUSPENDED
 			if stmt.value and (return_value == null or report.has_error):
 				return ExecResult.ERROR
 			return ExecResult.RETURN
@@ -6247,6 +6421,9 @@ class Interpreter:
 		
 		if stmt is AssertStmt:
 			var test_val = evaluate(stmt.test)
+			if _suspended:
+				_expr_evaluated = (test_val != null)
+				return ExecResult.SUSPENDED
 			if test_val == null:
 				return ExecResult.ERROR
 			if not test_val._dsl_bool():
@@ -6271,6 +6448,9 @@ class Interpreter:
 						return ExecResult.RAISE
 				elif target is GetAttr:
 					var obj = evaluate(target.object)
+					if _suspended:
+						_expr_evaluated = false
+						return ExecResult.SUSPENDED
 					if obj == null:
 						return ExecResult.ERROR
 					obj._dsl_delattr(target.name)
@@ -6279,9 +6459,15 @@ class Interpreter:
 						return ExecResult.RAISE
 				elif target is GetItem:
 					var obj = evaluate(target.object)
+					if _suspended:
+						_expr_evaluated = false
+						return ExecResult.SUSPENDED
 					if obj == null:
 						return ExecResult.ERROR
 					var index = evaluate(target.index)
+					if _suspended:
+						_expr_evaluated = false
+						return ExecResult.SUSPENDED
 					if index == null:
 						return ExecResult.ERROR
 					obj._dsl_delitem(index)
@@ -6433,6 +6619,8 @@ class Interpreter:
 	## [param expr] 表达式节点 [br]
 	## [returns] 求值结果 DSLObject, 出错时返回 null
 	func evaluate(expr) -> DSLObject:
+		if _suspended:
+			return null
 		if expr is Literal:
 			return _wrap(expr.value)
 			
@@ -6667,6 +6855,33 @@ class Interpreter:
 				return evaluate(expr.false_expr)
 				
 		if expr is Call:
+			# 拦截 sleep 内置函数
+			if expr.callee_expr is Variable and expr.callee_expr.name == "sleep":
+				if expr.arguments.size() != 1:
+					raise_exception("TypeError", "sleep() takes exactly 1 argument (%d given)" % expr.arguments.size())
+					return null
+				var sleep_val = evaluate(expr.arguments[0])
+				if _suspended:
+					return null
+				if sleep_val == null:
+					return null
+				var sleep_num = 0.0
+				if sleep_val is DSLInteger:
+					sleep_num = float(sleep_val.value)
+				elif sleep_val is DSLFloat:
+					sleep_num = sleep_val.value
+				else:
+					raise_exception("TypeError", "sleep() argument must be a number")
+					return null
+				if sleep_num < 0:
+					raise_exception("ValueError", "sleep 参数不能为负数")
+					return null
+				_suspended = true
+				_is_waiting = false
+				if owner != null:
+					owner.request_suspend_sleeping(sleep_num)
+				return DSLNone.new()
+			
 			var callee = evaluate(expr.callee_expr)
 			if callee == null:
 				return null
@@ -6683,13 +6898,24 @@ class Interpreter:
 					return null
 				kw_dict[kw.name] = val
 			if callee is DSLMethod:
-				return callee.magic_call(pos_args, kw_dict)
+				var result = callee.magic_call(pos_args, kw_dict)
+				if _suspended:
+					return null
+				return result
 			elif callee is DSLFunction:
-				return call_user_function(callee, pos_args, kw_dict)
+				var result = call_user_function(callee, pos_args, kw_dict)
+				if _suspended:
+					return null
+				return result
 			elif callee is DSLClass:
-				return callee.magic_call(pos_args, kw_dict)
+				var result = callee.magic_call(pos_args, kw_dict)
+				if _suspended:
+					return null
+				return result
 			else:
 				var result = callee.magic_call(pos_args, kw_dict)
+				if _suspended:
+					return DSLNone.new()
 				if report.has_error:
 					return null
 				# Check for errors from builtin methods (which set last_error on the proto)
@@ -7035,12 +7261,49 @@ class Interpreter:
 			if p.is_kwargs and not local.values.has(p.name):
 				local.define(p.name, DSLDict.new())
 				
+		# 检查 _call_stack 是否有恢复信息 (嵌套函数调用挂起恢复)
+		var saved_env = null
+		var saved_pc = 0
+		for j in range(_call_stack.size() - 1, -1, -1):
+			var cs = _call_stack[j]
+			if cs.get("function") == function:
+				saved_env = cs.get("local_env")
+				saved_pc = cs.get("return_pc", 0)
+				_call_stack.remove_at(j)
+				break
+		
 		var prev_env = environment
-		environment = local
+		var exec_env = saved_env if saved_env != null else local
+		if saved_env != null:
+			# 从挂起中恢复: 推回保存的帧让 exec_block 能找到
+			_exec_stack.append({
+				"statements": decl.body,
+				"pc": saved_pc,
+				"env": saved_env,
+				"resume_info": {}
+			})
+		environment = exec_env
 		var res = exec_block(decl.body, environment)
 		environment = prev_env
 		
-		if res == ExecResult.RETURN:
+		if res == ExecResult.SUSPENDED:
+			# 压入函数调用栈帧
+			var return_pc = 0
+			# 从 _exec_stack 中搜索当前函数体的帧 (嵌套调用时栈顶可能是内层帧)
+			for j in range(_exec_stack.size() - 1, -1, -1):
+				var f = _exec_stack[j]
+				if f.statements == decl.body:
+					return_pc = f.pc
+					break
+			_call_stack.append({
+				"function": function,
+				"return_env": prev_env,
+				"return_pc": return_pc,
+				"local_env": exec_env,
+			})
+			_suspended = true
+			return null
+		elif res == ExecResult.RETURN:
 			return return_value
 		elif res == ExecResult.ERROR or res == ExecResult.RAISE:
 			return null
@@ -8148,7 +8411,7 @@ class Interpreter:
 		elif bases_obj is DSLClass:
 			superclass = bases_obj
 		elif bases_obj is DSLTuple and bases_obj.items.size() == 0:
-			pass  # empty tuple, use object
+			pass # empty tuple, use object
 		else:
 			raise_exception("TypeError", "bases must be types")
 			return null
@@ -8643,39 +8906,113 @@ class Interpreter:
 				d.dict[_wrap(k)] = _wrap(v[k])
 			return d
 		return _cached_none if _cached_none else DSLNone.new()
- 
+
 # ============================================================
 # Main DSL class
 # ============================================================
- 
+
 ## 调试模式开关, 控制是否输出详细调试信息
 var debug: bool = true
- 
+
 ## DSL 源代码文本
 var dsl_script: String = ""
+## 预设代码源文本 (在用户代码之前执行)
+var _preset_script: String = ""
 ## 累积的 print 输出文本
 var print_output: String = ""
 ## 控制台输出文本 (日志/错误)
 var console_output: String = ""
-## 解析后的 AST 语句列表
+## 用户代码解析后的 AST 语句列表
 var statements: Array = []
+## 预设代码解析后的 AST 语句
+var _preset_statements: Array = []
 ## 解释器实例
 var interpreter: Interpreter = null
 ## 控制台报告器实例
 var report: ConsoleReport = null
 ## 日志输出级别
 var log_level: ConsoleReport.Level = ConsoleReport.Level.INFO
- 
+
+## SLEEPING 恢复回调, 在 run() 恢复执行前调用
+var _sleeping_resume_callback: Callable = Callable()
+## WAITING 恢复回调, 在 run() 恢复执行前调用
+var _waiting_resume_callback: Callable = Callable()
+
+## 最大执行步数 (传入 Interpreter)
+var _config_max_steps: int = 50000
 ## 外部 API 函数注册 名称 -> Callable 的映射
 var api_functions: Dictionary[String, Callable] = {}
- 
+
+## 状态机枚举
+enum State {
+	## 空闲
+	IDLE,
+	## 运行
+	RUNNING,
+	## 挂起睡眠中 (sleep 触发, Timer 超时后自动恢复)
+	SUSPENDED_SLEEPING,
+	## 挂起等待中 (request_suspend_waiting 触发, 外部设置 RUNNING 后手动调用 run() 恢复)
+	SUSPENDED_WAITING,
+	## 完成
+	FINISHED,
+	## 错误
+	ERROR
+}
+## 当前状态
+var state: State = State.IDLE
+
+## 请求睡眠挂起, 适用于已知等待时间的场景 [br]
+## Timer 超时后自动调用 [method run] 恢复执行 [br]
+## [param value] 挂起秒数 [br]
+## [param on_resume] 可选, 恢复执行前回调 (在 run() 被唤醒后调用)
+func request_suspend_sleeping(value: float, on_resume: Callable = Callable()) -> void:
+	if state != State.RUNNING or interpreter == null:
+		return
+	interpreter._suspended = true
+	interpreter._is_waiting = false
+	state = State.SUSPENDED_SLEEPING
+	if on_resume.is_valid():
+		_sleeping_resume_callback = on_resume
+
+	var tree = Engine.get_main_loop() as SceneTree
+	if tree != null:
+		tree.create_timer(value).timeout.connect(run)
+	else:
+		run.call_deferred()
+
+## 请求等待挂起, 适用于未知等待时间的场景 [br]
+## 外部需先设置 [member state] = RUNNING, 再调用 [method run] 恢复执行 [br]
+## [param on_resume] 可选, 恢复执行前回调 (在 run() 被唤醒后调用)
+func request_suspend_waiting(on_resume: Callable = Callable()) -> void:
+	if state != State.RUNNING or interpreter == null:
+		return
+	interpreter._suspended = true
+	interpreter._is_waiting = true
+	state = State.SUSPENDED_WAITING
+	_waiting_resume_callback = on_resume
+
+## 返回当前状态码
+func get_state() -> State:
+	return state
+
+## 重置所有运行时状态
+func reset() -> void:
+	statements = []
+	report = null
+	interpreter = null
+	state = State.IDLE
+	_sleeping_resume_callback = Callable()
+	_waiting_resume_callback = Callable()
+	print_output = ""
+	console_output = ""
+
 ## 设置调试模式 [br]
 ## [param need_debug] 是否开启调试模式
 func set_debug_mode(need_debug: bool) -> void:
 	debug = need_debug
 	if report:
 		report.debug_mode = need_debug
- 
+
 ## 设置日志输出级别 [br]
 ## [param log_lv] 日志级别
 func set_log_level(log_lv: ConsoleReport.Level) -> void:
@@ -8683,36 +9020,112 @@ func set_log_level(log_lv: ConsoleReport.Level) -> void:
 	if report:
 		report.report_log_level = log_lv
 		report.refresh_output()
- 
+
 ## 注册外部 API 函数 [br]
 ## [param api] 名称 -> Callable 的字典映射
 func register_api(api: Dictionary):
-	api_functions = api
- 
+	for key in api:
+		api_functions[key] = api[key]
+
+## 注册单个外部 API 函数
+func register_api_pair(api_name: String, callable: Callable) -> void:
+	api_functions[api_name] = callable
+
+## 设置预设代码 [br]
+## 预设代码会在用户代码之前执行, 用户代码可直接使用其中定义的变量, 函数, 导入等 [br]
+## [param source] 预设 DSL 源代码, 传空字符串可清除预设
+func set_preset_script(source: String) -> void:
+	_preset_script = source
+
+	if _preset_script.is_empty():
+		_preset_statements = []
+	else:
+		var r = ConsoleReport.new(self, debug)
+		var tokens = []
+		var lexer = Lexer.new(r, _preset_script)
+		tokens = lexer.scan()
+		if r.has_error:
+			push_error("[PresetScriptError] " + r.last_error)
+			_preset_statements = []
+		else:
+			var parser = Parser.new(r, tokens)
+			_preset_statements = parser.parse()
+			if r.has_error:
+				push_error("[PresetScriptError] " + r.last_error)
+				_preset_statements = []
+
+	if not dsl_script.is_empty():
+		write_dsl_script(dsl_script)
+
 ## 解析 DSL 源代码为 AST [br]
 ## 经过词法分析 (Lexer) 和语法分析 (Parser), [br]
 ## 结果存入 [member statements] [br]
 ## [param source] DSL 源代码字符串
 func write_dsl_script(source: String):
-	if dsl_script != source:
-		print_output = ""
-		console_output = ""
-		statements = []
-		report = ConsoleReport.new(self, debug)
-		# 尝试解析并执行
-		var tokens = []
-		var lexer = Lexer.new(report, source)
-		tokens = lexer.scan()
-		if not report.has_error:
-			var parser = Parser.new(report, tokens)
-			statements = parser.parse()
-		if report.has_error:
-			report.fatal_error(report.last_error)
- 
+	if state != State.IDLE:
+		reset()
+	dsl_script = source
+	print_output = ""
+	console_output = ""
+	statements = []
+	report = ConsoleReport.new(self, debug)
+	var tokens = []
+	var lexer = Lexer.new(report, source)
+	tokens = lexer.scan()
+	if not report.has_error:
+		var parser = Parser.new(report, tokens)
+		statements = parser.parse()
+	if report.has_error:
+		report.fatal_error(report.last_error)
+		return
+	# 在用户代码之前插入预设代码
+	if not _preset_statements.is_empty():
+		var combined = _preset_statements.duplicate()
+		combined.append_array(statements)
+		statements = combined
+
 ## 执行已解析的 DSL 代码 [br]
 ## 创建解释器实例并运行所有 AST 语句
-func run():
+func run() -> State:
 	if report.has_error:
-		return
-	interpreter = Interpreter.new(report, api_functions)
+		state = State.ERROR
+		return state
+	
+	if state == State.FINISHED or state == State.ERROR:
+		return state
+	
+	if state == State.SUSPENDED_WAITING:
+		# WAITING 挂起, 外部需先设置 state = State.RUNNING 再调用 run()
+		return state
+	
+	if state == State.SUSPENDED_SLEEPING:
+		state = State.RUNNING
+		if _sleeping_resume_callback.is_valid():
+			_sleeping_resume_callback.call()
+			_sleeping_resume_callback = Callable()
+	
+	if interpreter != null and interpreter._suspended:
+		# 从挂起中恢复 (SLEEPING 被 Timer 唤醒, 或 WAITING 被外部设为 RUNNING)
+		interpreter._suspended = false
+		state = State.RUNNING
+		if _waiting_resume_callback.is_valid():
+			_waiting_resume_callback.call()
+			_waiting_resume_callback = Callable()
+	
+	if state == State.IDLE:
+		interpreter = Interpreter.new(report, api_functions)
+		interpreter.owner = self
+		interpreter.max_steps = _config_max_steps
+	
+	state = State.RUNNING
 	interpreter.interpret(statements)
+	
+	if interpreter != null and interpreter._suspended:
+		if interpreter._is_waiting:
+			state = State.SUSPENDED_WAITING
+		else:
+			state = State.SUSPENDED_SLEEPING
+	elif state == State.RUNNING and not report.has_error:
+		state = State.FINISHED
+	
+	return state

@@ -31,7 +31,7 @@ flowchart TD
 - Replace GDScript for core game logic — core logic remains in GDScript
 - Provide a full Python standard library — only basic types (`str`/`list`/`dict`) and a few built-in functions
 - Support `import`/module system — scripts are standalone single files
-- Support `async`/`await`/`yield` — game scripting interactions are synchronous
+- Support `async`/`await`/`yield` — The game script interaction is synchronous, but it provides a suspended system
 
 ---
 
@@ -119,7 +119,7 @@ PyGDS implements a complete interpreter pipeline:
 Source Code (Python-like) → Lexer → Parser → AST → Interpreter → Execution
 ```
 
-### Core Components
+***Core Components***
 
 | Component | Responsibility |
 | :--- | :--- |
@@ -129,21 +129,6 @@ Source Code (Python-like) → Lexer → Parser → AST → Interpreter → Execu
 | **DSLObject System** | Multiple runtime object types, all inheriting from DSLObject, with unified type lookup via the `klass` field (matching CPython's `PyObject.ob_type`). The `fields` dictionary (Python's `__dict__`, `null` = built-in types without `__dict__`) stores instance attributes, implementing Python's "everything is an object" semantics |
 | **DSLClass** | Class system supporting inheritance, method overrides, `@staticmethod`, `@classmethod`, `@property`. DSLObject directly serves as instances (no separate DSLInstance layer needed), with a three-level naming convention: `_dsl_*` (internal fast path), `magic_*` (DSL magic method protocol), `builtin_*` (DSL built-in methods) |
 | **PyGDS** | Main controller, integrating Lexer/Parser/Interpreter, providing the public API |
-
----
-
-## Detailed Documentation
-
-| Document | Description |
-| :--- | :--- |
-| [docs/architecture.md](docs/architecture.md) | Architecture details and execution flow |
-| [docs/method_type_system.md](docs/method_type_system.md) | Method type system (matching CPython) |
-| [docs/class_system.md](docs/class_system.md) | Class and instance system |
-| [docs/builtin_types.md](docs/builtin_types.md) | Built-in type details |
-| [docs/exception_system.md](docs/exception_system.md) | Exception system |
-| [docs/usage.md](docs/usage.md) | Usage guide and API registration |
-
-> The document is only available in Chinese version
 
 ---
 
@@ -174,6 +159,47 @@ print(result)
 
 ---
 
+## Suspend System
+
+PyGDS provides a suspend mechanism that allows DSL scripts to pause during execution and resume when external conditions are met. This is a unique PyGDS feature not found in standard Python, suitable for game scenarios like delays, waiting for player input, and playing animations.
+
+Two types of suspension:
+
+| Type | Call Method | Use Case | Resume |
+| :--- | :--- | :--- | :--- |
+| SLEEPING | DSL calls `sleep(n)`, API functions call `request_suspend_sleeping()` | Known wait time | Timer fires, automatically calls `run()` |
+| WAITING | API functions call `request_suspend_waiting()` | Unknown wait time | External sets `state = RUNNING` then calls `run()` |
+
+The `run()` method returns a `State` enum value (`FINISHED` / `SUSPENDED_SLEEPING` / `SUSPENDED_WAITING` / `ERROR`), allowing external code to drive the execution flow.
+
+```gdscript
+var dsl = PyGDS.new()
+
+# SLEEPING suspend auto-resumes via SceneTree.create_timer
+# Set _sleeping_resume_callback for additional logic on resume
+# (called before run() resumes execution; Timer always calls run(), callback is for extra logic only)
+
+# WAITING suspend is triggered by API functions calling request_suspend_waiting()
+dsl.register_api_pair("wait_for_confirm", func(_args, _kwargs):
+    dsl.request_suspend_waiting()
+)
+
+dsl.write_dsl_script("""
+print("Start")
+sleep(1.0)
+print("Continues after 1 second")
+wait_for_confirm()
+print("Continues after manual resume")
+""")
+
+var state = dsl.run()
+# state == PyGDS.State.SUSPENDED_SLEEPING, waiting for Timer
+# When Timer fires, run() is called automatically, encounters wait_for_confirm() → SUSPENDED_WAITING
+# External sets dsl.state = PyGDS.State.RUNNING then calls dsl.run() to continue
+```
+
+---
+
 ## Behavioral Tests
 
 The [py_package](./py_package/) package contains a [tests](./py_package/tests/) folder and a [test.py](./py_package/test.py) file. Running it will execute all Python files in the [tests](./py_package/tests/) folder, capture console output, and save results based on the `OUTPUT_FILE` variable (defaults to `./expected.json`).
@@ -187,3 +213,22 @@ godot --headless --path /your/project/path --script /pygds/path/test.gd
 ```
 
 to verify that PyGDS behavior matches Python.
+
+---
+
+## Demo Tests
+
+The `demo/` directory contains a complete demo scene for the suspend system. Open the scene file in the Godot editor to run it, visually demonstrating three suspend modes (passive, active, and active + on_resume callback) in a turn-based combat simulation.
+
+---
+
+## Detailed Documentation
+
+| Document | Description |
+| :--- | :--- |
+| [architecture.md](docs/en/architecture.md) | Architecture details and execution flow |
+| [method_type_system.md](docs/en/method_type_system.md) | Method type system (matching CPython) |
+| [class_system.md](docs/en/class_system.md) | Class and instance system |
+| [builtin_types.md](docs/en/builtin_types.md) | Built-in type details |
+| [exception_system.md](docs/en/exception_system.md) | Exception system |
+| [usage.md](docs/en/usage.md) | Usage guide and API registration |

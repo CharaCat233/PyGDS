@@ -31,7 +31,7 @@ flowchart TD
 - 替代 GDScript 开发游戏核心逻辑 — 核心逻辑仍用 GDScript
 - 提供完整的 Python 标准库 — 只提供 `str`/`list`/`dict` 等基础类型和少量内置函数
 - 支持 `import`/模块系统 — 脚本是独立的单文件
-- 支持 `async`/`await`/`yield` — 游戏脚本交互是同步的
+- 支持 `async`/`await`/`yield` — 游戏脚本交互是同步的，但提供了挂起系统
 
 ---
 
@@ -119,7 +119,7 @@ PyGDS 实现了一条完整的解释器管线：
 源码 (Python-like) → Lexer → Parser → AST → Interpreter → 执行
 ```
 
-### 核心组件
+***核心组件***
 
 | 组件 | 职责 |
 | :--- | :--- |
@@ -129,21 +129,6 @@ PyGDS 实现了一条完整的解释器管线：
 | **DSLObject 体系** | 多种运行时对象类型，所有对象继承自 DSLObject，通过 `klass` 字段实现统一类型查找（对标 CPython `PyObject.ob_type`）。`fields` 字典（对应 Python `__dict__`，`null` = 内置类型无 `__dict__`）实现实例属性存储，"万物皆对象"的 Python 语义 |
 | **DSLClass** | 类系统，支持继承、方法覆写、`@staticmethod`、`@classmethod`。DSLObject 直接作为实例（无需 DSLInstance 中间层），内置 `_dsl_*`（内部快速通道）、`magic_*`（DSL 魔法方法协议）、`builtin_*`（DSL 内置方法）三层命名规范 |
 | **PyGDS** | 主控制器，汇集 Lexer/Parser/Interpreter，提供对外 API |
-
----
-
-## 详细文档
-
-| 文档 | 说明 |
-| :--- | :--- |
-| [docs/architecture.md](docs/architecture.md) | 架构详解与执行流程 |
-| [docs/method_type_system.md](docs/method_type_system.md) | 方法类型系统（对标 CPython） |
-| [docs/class_system.md](docs/class_system.md) | 类与实例系统 |
-| [docs/builtin_types.md](docs/builtin_types.md) | 内置类型详解 |
-| [docs/exception_system.md](docs/exception_system.md) | 异常系统 |
-| [docs/usage.md](docs/usage.md) | 使用指南与 API 注册 |
-
-> 文档仅中文版本
 
 ---
 
@@ -174,6 +159,47 @@ print(result)
 
 ---
 
+## 挂起系统
+
+PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复。这是 PyGDS 区别于标准 Python 的独有特性，适用于游戏中的延时、等待玩家输入、播放动画等场景
+
+挂起分为两种类型：
+
+| 类型 | 调用方法 | 适用范围 | 恢复方式 |
+| :--- | :--- | :--- | :--- |
+| SLEEPING | DSL 内部调用 `sleep(n)`，API 函数调用 `request_suspend_sleeping()` | 已知等待时间 | Timer 超时后自动调用 `run()` 恢复 |
+| WAITING | API 函数调用 `request_suspend_waiting()` | 等待时间不确定 | 外部设置 `state = RUNNING` 后调用 `run()` |
+
+`run()` 方法返回 `State` 枚举值（`FINISHED` / `SUSPENDED_SLEEPING` / `SUSPENDED_WAITING` / `ERROR`），外部代码根据返回值驱动后续执行流程
+
+```gdscript
+var dsl = PyGDS.new()
+
+# SLEEPING 挂起通过 SceneTree.create_timer 自动恢复
+# 如需在恢复时执行额外逻辑, 可设置 _sleeping_resume_callback
+# (该回调在 run() 恢复执行前调用, Timer 始终调用 run(), 回调仅用于附加逻辑)
+
+# WAITING 挂起通过注册 API 函数调用 request_suspend_waiting() 触发
+dsl.register_api_pair("wait_for_confirm", func(_args, _kwargs):
+    dsl.request_suspend_waiting()
+)
+
+dsl.write_dsl_script("""
+print("开始")
+sleep(1.0)
+print("1 秒后继续")
+wait_for_confirm()
+print("手动恢复后继续")
+""")
+
+var state = dsl.run()
+# state == PyGDS.State.SUSPENDED_SLEEPING, 等待 Timer 超时
+# Timer 超时后自动调用 run(), 遇到 wait_for_confirm() 返回 SUSPENDED_WAITING
+# 外部设置 dsl.state = PyGDS.State.RUNNING 后调用 dsl.run() 继续
+```
+
+---
+
 ## 行为测试
 
 [py_package](./py_package/) 包内含有 [tests](./py_package/tests/) 文件夹以及 [test.py](./py_package/test.py) 文件，运行该文件后，将对 [tests](./py_package/tests/) 文件夹内的所有 Python 文件进行调用，并获取控制台输出，根据 `OUTPUT_FILE` 变量获取保存地址（默认为 `./expected.json`）
@@ -187,3 +213,22 @@ godot --headless --path /你的项目路径 --script /pygds路径/test.gd
 ```
 
 运行 gdscript 测试文件，以确保 PyGDS 行为是否与 Python 一致
+
+---
+
+## Demo 测试
+
+`demo/` 目录下包含一些完整的演示场景，在 Godot 编辑器中打开场景文件即可运行
+
+---
+
+## 详细文档
+
+| 文档 | 说明 |
+| :--- | :--- |
+| [architecture.md](docs/zh-CN/architecture.md) | 架构详解与执行流程 |
+| [method_type_system.md](docs/zh-CN/method_type_system.md) | 方法类型系统（对标 CPython） |
+| [class_system.md](docs/zh-CN/class_system.md) | 类与实例系统 |
+| [builtin_types.md](docs/zh-CN/builtin_types.md) | 内置类型详解 |
+| [exception_system.md](docs/zh-CN/exception_system.md) | 异常系统 |
+| [usage.md](docs/zh-CN/usage.md) | 使用指南与 API 注册 |

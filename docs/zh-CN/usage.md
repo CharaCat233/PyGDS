@@ -36,10 +36,11 @@ Hello, PyGDS!
       │   └── 存入 self.statements
       │
       └── run()
-          ├── 创建 Interpreter 实例
+          ├── 首次执行 (IDLE) 时创建 Interpreter 实例，后续恢复时复用
           ├── interpret(statements) — 遍历执行所有 AST 语句
+          ├── 遇到挂起时保存执行栈，返回对应挂起状态
           ├── 收集 print_output / console_output
-          └── report.has_error 反映执行结果
+          └── 返回 State 枚举值反映当前状态
 ```
 
 ---
@@ -471,12 +472,12 @@ divide(10, 0)   # AssertionError: divisor cannot be zero
 ```gdscript
 var dsl = PyGDS.new()
 dsl.write_dsl_script(source_code)
-dsl.run()
+var state = dsl.run()
 
-if dsl.report.has_error:
+if state == PyGDS.State.ERROR:
     print("DSL execution failed!")
     print("Error: ", dsl.report.last_error)
-else:
+elif state == PyGDS.State.FINISHED:
     print("DSL execution succeeded!")
 ```
 
@@ -546,7 +547,7 @@ print(x)  # 错误: x 不在作用域内！
 dsl.run()
 ```
 
-> **注意**：每次调用 `write_dsl_script` 都会创建一个全新的解析环境（新的 AST 语句列表），而 `run()` 会创建一个新的 `Interpreter` 实例，因此变量不会在两次 `run()` 之间共享
+> **注意**：每次调用 `write_dsl_script` 都会创建一个全新的解析环境（新的 AST 语句列表），并重置内部状态。首次 `run()` 会创建 `Interpreter` 实例，后续挂起恢复时复用同一实例。因此变量不会在两次 `write_dsl_script` 之间共享，但挂起恢复期间变量会保留
 
 ### 查看两轮执行的输出
 
@@ -565,46 +566,182 @@ print("Round 2:", output2)   # Round 2: 2
 
 ---
 
-## 性能考虑
+## 挂起系统
 
-### 步数限制
+PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复执行。这在游戏开发中非常有用，例如等待动画播放完毕、等待玩家输入、或实现延时逻辑
 
-解释器有一个步数上限（`max_steps`），默认为防止无限循环而设置。每次执行一条语句时会递增步数计数器，超出限制时自动抛出异常
+挂起系统将挂起分为两种类型
+
+| 类型 | 状态 | 触发方式 | 恢复方式 |
+| :--- | :--- | :--- | :--- |
+| SLEEPING | `SUSPENDED_SLEEPING` | `sleep(n)` / `request_suspend_sleeping(n)` | Timer 超时后自动恢复 |
+| WAITING | `SUSPENDED_WAITING` | `request_suspend_waiting()` (GDScript 端) | 外部设置 `state = RUNNING` 后调用 `run()` |
+
+### 状态机
+
+`PyGDS.State` 枚举定义了 DSL 实例的完整生命周期
+
+- `IDLE`：初始状态，尚未执行
+- `RUNNING`：正在执行中
+- `SUSPENDED_SLEEPING`：SLEEPING 挂起，Timer 超时后自动恢复
+- `SUSPENDED_WAITING`：WAITING 挂起，等待外部设置 `state = RUNNING` 后手动恢复
+- `FINISHED`：执行完毕
+- `ERROR`：执行出错
+
+`run()` 方法返回当前状态，外部代码根据返回值决定后续行为
+
+### SLEEPING 挂起
+
+SLEEPING 挂起适用于已知等待时间的场景，例如战斗中的技能冷却、对话中的文字打印延时。`request_suspend_sleeping` 内部通过 `SceneTree.create_timer` 创建 Timer，超时后自动调用 `run()` 恢复执行
+
+***DSL 内置函数***
 
 ```python
-# 默认情况下下面的无限循环会被中断
-# while True:
-#     pass
-# → RuntimeError: maximum step count exceeded
+sleep(1.5)  # 挂起 1.5 秒后自动恢复
 ```
 
-### 每次 run() 的开销
+***GDScript 端直接调用***
 
-- 创建新的 `Interpreter` 实例
-- 注册所有内置函数和异常类型
-- 构建全局作用域链
+```gdscript
+dsl.request_suspend_sleeping(2.0)  # 挂起 2 秒后自动恢复
 
-这意味着频繁调用 `write_dsl_script` + `run()` 时会有固定开销，对于性能敏感的场景，建议将逻辑集中在一次执行中完成
+# 也可传入 on_resume 回调, 在 run() 恢复执行前调用
+dsl.request_suspend_sleeping(2.0, func():
+    print("即将从 SLEEPING 恢复")
+)
+```
 
----
+***自定义恢复回调***
+
+如果你需要在每次 Timer 超时后执行额外逻辑（如更新 UI），可以设置 `_sleeping_resume_callback`。该回调在 `run()` 恢复执行**前**被调用（注意：Timer 超时后始终由 `run()` 自动恢复，回调仅用于附加逻辑，不应再调用 `run()`）：
+
+```gdscript
+dsl._sleeping_resume_callback = func():
+    print("从 SLEEPING 恢复")
+    # 更新 UI 等附加逻辑 (不要在此调用 run())
+```
+
+> **注意**：`_sleeping_resume_callback` 在每次调用后被清除。如需在每次 SLEEPING 恢复时都触发，请在回调中或状态处理函数中重新设置
+
+### WAITING 挂起
+
+WAITING 挂起适用于等待时间不确定的场景，例如等待玩家点击按钮、等待动画播放完毕、等待网络请求返回
+
+***GDScript 端使用***
+
+WAITING 挂起不是 DSL 内置函数，而是通过注册的 API 函数在 GDScript 端调用 `request_suspend_waiting()` 触发
+
+```gdscript
+# 注册 API 来触发 WAITING 挂起
+dsl.register_api_pair("wait_for_confirm", func(_args, _kwargs):
+    dsl.request_suspend_waiting()
+    # 执行挂起, run() 将返回 SUSPENDED_WAITING
+)
+
+dsl.write_dsl_script("""
+print("请确认...")
+wait_for_confirm()
+print("已确认!")
+""")
+
+# 首次执行
+var state = dsl.run()
+# state == PyGDS.State.SUSPENDED_WAITING
+
+# 外部恢复
+dsl.state = PyGDS.State.RUNNING
+state = dsl.run()
+# 继续执行, 输出 "已确认!"
+```
+
+***自定义恢复回调***
+
+`request_suspend_waiting` 支持可选的 `on_resume` 回调参数，在恢复执行**前**自动调用，适合执行清理或状态切换逻辑
+
+```gdscript
+dsl.register_api_pair("play_animation", func(args, _kwargs):
+    var name = args[0].value
+    print("开始播放动画: " + name)
+    dsl.request_suspend_waiting(func():
+        print("动画 '%s' 播放完毕!" % name)
+    )
+)
+```
+
+当外部恢复执行时，`on_resume` 回调先触发，然后 DSL 从挂起点继续执行
+
+### 挂起 API 执行顺序
+
+请注意，在 API 侧调用挂起请求函数（`request_suspend_sleeping` 与 `request_suspend_waiting`）时，总是 **先执行完函数再挂起** 的，例如
+
+```gdscript
+func move():
+    move_start()
+    request_suspend_waiting()  # on_resume = Callable()
+    move_end()
+```
+
+该段代码的执行顺序为 `move_start -> request_suspend_waiting -> move_end -> 挂起 -(恢复后)-> on_resume.call()`
+
+若需要代码块在恢复后运行，请使用 `on_resume` 参数，例如
+
+```gdscript
+func move():
+    move_start()
+    request_suspend_waiting(move_end)  # on_resume = move_end
+```
+
+该段代码的执行顺序为 `move_start -> request_suspend_waiting -> 挂起 -(恢复后)-> move_end.call()`
+
+### 事件驱动执行模式
+
+在实际游戏中使用挂起系统时，推荐采用 **事件驱动** 模式而非轮询：
+
+```gdscript
+# 推荐: 事件驱动
+func _step_execute():
+    var state = dsl.run()
+    match state:
+        PyGDS.State.SUSPENDED_SLEEPING:
+            pass  # Timer 回调会自动触发 _step_execute()
+        PyGDS.State.SUSPENDED_WAITING:
+            show_continue_button()  # 等待用户点击
+        PyGDS.State.FINISHED:
+            on_script_finished()
+        PyGDS.State.ERROR:
+            on_script_error()
+
+func _on_continue_button():
+    dsl.state = PyGDS.State.RUNNING
+    _step_execute()
+```
+
+### 预设代码
+
+`set_preset_script` 允许在用户代码之前注入预设代码（如常量定义、工具函数），预设代码与用户代码 **独立解析**，确保错误行号准确
+
+```gdscript
+var dsl = PyGDS.new()
+
+dsl.set_preset_script("""
+MAX_HP = 100
+def clamp(value, lo, hi):
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value
+""")
+
+dsl.write_dsl_script("""
+print(MAX_HP)         # 100
+print(clamp(150, 0, 100))  # 100
+""")
+```
+
+预设代码和用户代码的 AST 在解析后拼接执行，因此同名变量/函数/类会被后续定义覆盖，符合 Python 语义
 
 ## 限制与注意事项
-
-### 不支持的特性
-
-| 特性 | 状态 |
-| :--- | :--- |
-| `import` / 模块系统 | ❌ 不支持 |
-| `async` / `await` | ❌ 不支持 |
-| `yield` / 生成器 | ❌ 不支持 |
-| `with` 语句 | ❌ 不支持 |
-| `classmethod` / `staticmethod` 装饰器 | ✅ 支持 |
-| `@property` 装饰器 | ✅ 支持（getter / setter / deleter 完整支持） |
-| 多继承 | ❌ 不支持（仅单继承） |
-| `set` 类型 | ❌ 不支持 |
-| comprehension（列表推导/字典推导） | ✅ 支持 |
-| `lambda` 表达式 | ❌ 不支持 |
-| `try/except/finally` 中 `else` 和 `finally` | ✅ 支持（部分） |
 
 ### 浮点精度
 
@@ -612,8 +749,8 @@ print("Round 2:", output2)   # Round 2: 2
 
 ```python
 # Godot 的 str() 与 Python 的 str() 输出格式可能不同
-print(1.15)  # 在 Godot 中可能输出 "1.15"，而 Python 中为 "1.15"
-print(1.0 / 3.0)  # 浮点精度一致，但字符串表示可能不同
+print(1.15)  # 在 Godot 中可能输出 "1.15", 而 Python 中为 "1.15"
+print(1.0 / 3.0)  # 浮点精度一致, 但字符串表示可能不同
 ```
 
 ### 字符串方法差异

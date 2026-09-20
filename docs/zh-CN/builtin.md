@@ -423,6 +423,17 @@ name = input("Enter name: ")
 > [!WARNING]
 > 该方法始终抛出 `EOFError` 异常
 
+### `sleep(seconds)`
+
+模仿 Python `time.sleep()`，挂起当前 DSL 脚本执行指定的秒数，超时后自动恢复
+
+- `seconds`：挂起时长（秒），必须为非负数值
+
+```python
+sleep(1.5)  # 挂起 1.5 秒后自动恢复
+sleep(0.0)  # 立即恢复 (无延迟)
+```
+
 ---
 
 ## 内置类型的方法

@@ -23,7 +23,7 @@ ExecBlock → execute → evaluate
 ### 完整生命周期
 
 1. **用户调用 `write_dsl_script(source)`** —— 依次执行词法分析和语法分析
-2. **用户调用 `run()`** —— 创建 `Interpreter` 实例，注册内置函数和异常类型，然后执行内置类定义和用户的顶层语句
+2. **用户调用 `run()`** —— 首次执行时（IDLE 状态）创建 `Interpreter` 实例并注册内置函数和异常类型，然后执行内置类定义和用户的顶层语句。挂起恢复时复用同一实例
 3. 执行过程中，整个环境在 `DSLEnvironment` 作用域链中逐层管理
 
 ---
@@ -260,6 +260,7 @@ interpret(statements)
 | `CONTINUE` | 继续下一次循环 | `continue` 语句 |
 | `ERROR` | 执行错误 | 运算错误、类型错误等 |
 | `RAISE` | 抛出异常 | `raise` 语句或运行时异常 |
+| `SUSPENDED` | 执行挂起 | 挂起请求 |
 
 ### `evaluate()` —— 最大的分发函数
 
@@ -542,13 +543,18 @@ Exception
 | :--- | :--- | :--- |
 | `debug` | `bool` | 调试模式开关 |
 | `dsl_script` | `String` | DSL 源代码文本 |
+| `_preset_script` | `String` | 预设代码源文本 |
 | `print_output` | `String` | 累积的 print 输出 |
 | `console_output` | `String` | 控制台日志输出 |
 | `statements` | `Array` | 解析后的 AST 语句列表 |
+| `_preset_statements` | `Array` | 预设代码解析后的 AST 语句 |
 | `interpreter` | `Interpreter` | 解释器实例 |
 | `report` | `ConsoleReport` | 控制台报告器 |
 | `log_level` | `Level` | 日志级别 |
 | `api_functions` | `Dictionary` | 外部 API 注册表 |
+| `state` | `State` | 当前状态（IDLE / RUNNING / SUSPENDED_SLEEPING / SUSPENDED_WAITING / FINISHED / ERROR） |
+| `_sleeping_resume_callback` | `Callable` | SLEEPING 恢复前回调，在 run() 恢复执行前调用 |
+| `_waiting_resume_callback` | `Callable` | WAITING 恢复回调 |
 
 | 静态属性 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -561,8 +567,70 @@ Exception
 | `set_debug_mode(bool)` | 设置调试模式 |
 | `set_log_level(Level)` | 设置日志级别 |
 | `register_api(Dictionary)` | 注册外部 API 函数 |
+| `register_api_pair(name, callable)` | 注册单个外部 API 函数 |
 | `write_dsl_script(String)` | 源码 → Lexer → Parser → AST |
-| `run()` | 创建 Interpreter → 注册内置函数和异常 → 执行 |
+| `set_preset_script(String)` | 设置预设代码，在用户代码之前执行 |
+| `run() -> State` | 创建 Interpreter → 注册内置函数和异常 → 执行，返回当前状态 |
+| `reset()` | 重置所有运行时状态 |
+| `request_suspend_sleeping(value: float, on_resume: Callable)` | 请求 SLEEPING 挂起，Timer 超时后自动调用 run()，可选 on_resume 回调 |
+| `request_suspend_waiting(on_resume: Callable)` | 请求 WAITING 挂起，可选恢复回调 |
+
+---
+
+## 第七部分 - 挂起系统
+
+挂起系统允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复。它通过在解释器层引入 `_suspended` 旁路通道，在 PyGDS 层引入状态机，实现了两层分离的挂起架构
+
+### 架构分层
+
+```txt
+DSL 层
+  sleep(n)                     — DSL 内置函数
+GDScript 层
+  request_suspend_waiting()    — GDScript API 函数
+     ↓
+解释器层 (Interpreter)
+  ExecResult.SUSPENDED  — 控制流信号（不区分挂起类型）
+  _suspended: bool     — 旁路通道，传递挂起事实
+  _is_waiting: bool    — 旁路通道，传递挂起类型 (false=SLEEPING, true=WAITING)
+     ↓
+PyGDS 层
+  State.SUSPENDED_SLEEPING / SUSPENDED_WAITING  — 对外状态
+  _sleeping_resume_callback  — SLEEPING 恢复前回调 (在 run() 恢复执行前调用)
+  _waiting_resume_callback  — WAITING 恢复回调 (on_resume)
+```
+
+### SLEEPING 挂起流程
+
+```txt
+DSL: sleep(1.5)
+  → Interpreter._suspended = true, _is_waiting = false
+  → PyGDS.request_suspend_sleeping(1.5)
+     → state = SUSPENDED_SLEEPING
+     → SceneTree.create_timer(1.5).timeout.connect(run)
+  → run() 返回 SUSPENDED_SLEEPING
+  → ... Timer 超时 ...
+  → run() 被调用 → _sleeping_resume_callback.call() → _suspended 清除 → 解释器从挂起点继续
+```
+
+### WAITING 挂起流程
+
+```txt
+GDScript API: request_suspend_waiting(on_resume)
+  → Interpreter._suspended = true, _is_waiting = true
+  → PyGDS.request_suspend_waiting(on_resume)
+     → state = SUSPENDED_WAITING
+     → _waiting_resume_callback = on_resume
+  → run() 返回 SUSPENDED_WAITING
+  → 外部代码: state = RUNNING
+  → run() 被调用 → _waiting_resume_callback.call() → 解释器从挂起点继续
+```
+
+### 恢复执行机制
+
+解释器从挂起中恢复的关键在于 `_exec_stack` 和 `_call_stack`。当 `interpret()` 遇到 `SUSPENDED` 时，解释器的执行栈（包含 `exec_block` 的递归层级和恢复点）和调用栈（函数调用返回点）完整保留。下次调用 `run()` 时，`interpret()` 从栈中恢复状态，从挂起点继续执行
+
+`resume_info` 字典用于避免 `IfStmt`/`WhileStmt`/`ForStmt` 恢复时重新求值条件表达式
 
 ---
 

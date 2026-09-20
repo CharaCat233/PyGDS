@@ -23,3 +23,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.sublime-*
+
+# Test Folder
+tests
