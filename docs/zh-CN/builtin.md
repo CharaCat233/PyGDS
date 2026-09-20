@@ -434,6 +434,76 @@ sleep(1.5)  # 挂起 1.5 秒后自动恢复
 sleep(0.0)  # 立即恢复 (无延迟)
 ```
 
+### `getattr(obj, name, default=None)`
+
+对应 Python `getattr()`，获取对象的属性
+
+- 属性存在时返回属性值
+- 属性不存在且提供了 `default` 时返回 `default`
+- 属性不存在且未提供 `default` 时抛出 `AttributeError`
+- 返回类型：任意 DSLObject
+
+```python
+class Point:
+    def __init__(self):
+        self.x = 42
+
+p = Point()
+getattr(p, "x")                 # 42
+getattr(p, "missing", "N/A")    # "N/A"
+getattr(p, "missing")           # AttributeError
+getattr([], "append")           # 获取绑定方法 (可调用)
+```
+
+### `setattr(obj, name, value)`
+
+对应 Python `setattr()`，设置对象的属性
+
+```python
+class Point:
+    pass
+
+p = Point()
+setattr(p, "x", 10)
+print(p.x)                      # 10
+```
+
+### `delattr(obj, name)`
+
+对应 Python `delattr()`，删除对象的属性，属性不存在时抛出 `AttributeError`
+
+```python
+p = Point()
+setattr(p, "y", 5)
+delattr(p, "y")
+getattr(p, "y", "gone")         # "gone"
+```
+
+### `map(func, iterable, ...)`
+
+对应 Python `map()`，对可迭代对象的每个元素应用函数
+
+- 支持多个可迭代对象（逐元素并行传入函数）
+- **注意**：本实现为立即求值并返回列表（非 CPython 的惰性 map 对象），但行为上可与 `list()`/`for` 循环等配合使用
+
+```python
+list(map(lambda x: x * 2, [1, 2, 3]))          # [2, 4, 6]
+list(map(str, [1, 2, 3]))                      # ["1", "2", "3"]
+list(map(lambda a, b: a + b, [1, 2], [10, 20])) # [11, 22]
+```
+
+### `filter(func, iterable)`
+
+对应 Python `filter()`，保留满足条件的元素
+
+- `func` 为 `None` 时按元素真值过滤
+- **注意**：本实现为立即求值并返回列表
+
+```python
+list(filter(lambda x: x > 1, [0, 1, 2, 3]))   # [2, 3]
+list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
+```
+
 ---
 
 ## 内置类型的方法

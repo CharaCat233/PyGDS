@@ -8,8 +8,8 @@ enum TokenType {
 	LPAREN, RPAREN, LBRACKET, RBRACKET,
 	LBRACE, RBRACE, COMMA, COLON, NEWLINE,
 	EQUAL_EQUAL, NOT_EQUAL, GREATER_EQUAL, LESS_EQUAL,
-	IDENTIFIER, STRING, INTEGER, FLOAT,
-	IF, ELIF, ELSE, WHILE, FOR, IN, ASSERT,
+	IDENTIFIER, STRING, FSTRING, INTEGER, FLOAT,
+	IF, ELIF, ELSE, WHILE, FOR, IN, ASSERT, LAMBDA,
 	AND, OR, NOT, TRUE, FALSE,
 	DEF, CLASS, RETURN, BREAK, CONTINUE, PASS,
 	GLOBAL, NONLOCAL, DEL,
@@ -81,6 +81,7 @@ class Lexer:
 		"global": TokenType.GLOBAL, "nonlocal": TokenType.NONLOCAL, "del": TokenType.DEL,
 		"try": TokenType.TRY, "except": TokenType.EXCEPT, "finally": TokenType.FINALLY,
 		"raise": TokenType.RAISE, "as": TokenType.AS,
+		"lambda": TokenType.LAMBDA,
 		"is": TokenType.IS
 	}
 	
@@ -303,8 +304,11 @@ class Lexer:
 	## 将字符串中的转义序列还原为实际字符 [br]
 	## 支持 \n, \t, \r, \\, \", \' 等常见转义序列 [br]
 	## [param s] 包含转义序列的原始字符串 [br]
+	## [param is_raw] 是否为原始字符串 (r 前缀, 不做转义) [br]
 	## [returns] 转义后的字符串
-	func _unescape_string(s: String) -> String:
+	func _unescape_string(s: String, is_raw: bool = false) -> String:
+		if is_raw:
+			return s
 		var result = ""
 		var i = 0
 		while i < s.length():
@@ -342,6 +346,10 @@ class Lexer:
 		while peek().is_valid_identifier() or peek().is_valid_int():
 			advance()
 		var text = source.substr(start, current - start)
+		# 字符串前缀 (f/r/b/u 及组合) 后跟引号 → 扫描带前缀字符串
+		if _is_string_prefix(text) and (peek() == '"' or peek() == "'"):
+			scan_prefixed_string(text)
+			return
 		var type = keywords.get(text, TokenType.IDENTIFIER)
 		if type == TokenType.TRUE:
 			add_token(type, true)
@@ -352,12 +360,196 @@ class Lexer:
 		else:
 			add_token(type, text)
 
+	## 判断标识符是否为字符串前缀 (f/r/b/u 及其组合) [br]
+	## [param text] 标识符文本 [br]
+	## [returns] 是否可作为字符串前缀
+	func _is_string_prefix(text: String) -> bool:
+		var prefixes = ["f", "F", "r", "R", "b", "B", "u", "U",
+			"rf", "rF", "Rf", "RF", "fr", "Fr", "fR", "FR",
+			"rb", "rB", "Rb", "RB", "br", "Br", "bR", "BR"]
+		return prefixes.has(text)
+
+	## 扫描带前缀的字符串字面量 (f-string / raw / bytes) [br]
+	## [param prefix] 前缀文本 (如 "f", "rf")
+	func scan_prefixed_string(prefix: String):
+		var is_fstring = prefix.find("f") != -1 or prefix.find("F") != -1
+		var is_raw = prefix.find("r") != -1 or prefix.find("R") != -1
+		var quote_char = peek()
+		var triple = peek() == quote_char and peek_next() == quote_char
+		advance()
+		if triple:
+			advance()
+			advance()
+			var content_start = current
+			while not is_at_end():
+				if peek() == quote_char and peek_next() == quote_char:
+					var saved = current
+					advance()
+					advance()
+					if not is_at_end() and peek() == quote_char:
+						advance()
+						var raw_body = source.substr(content_start, current - content_start - 3)
+						if is_fstring:
+							add_token(TokenType.FSTRING, _scan_fstring_parts(raw_body, quote_char, is_raw))
+						else:
+							add_token(TokenType.STRING, _unescape_string(raw_body, is_raw))
+						return
+					else:
+						current = saved
+				if peek() == '\n':
+					line += 1
+					column = 1
+				advance()
+			report.error("Unterminated triple-quoted string at line %d" % line)
+			return
+
+		# 单行字符串
+		while peek() != quote_char and not is_at_end():
+			if peek() == '\n':
+				line += 1
+				column = 1
+			advance()
+		if is_at_end():
+			report.error("Unterminated string at line %d" % line)
+			return
+		advance()
+		var body_start = start + prefix.length() + 1
+		var raw_body = source.substr(body_start, current - body_start - 1)
+		if is_fstring:
+			add_token(TokenType.FSTRING, _scan_fstring_parts(raw_body, quote_char, is_raw))
+		else:
+			add_token(TokenType.STRING, _unescape_string(raw_body, is_raw))
+
+	## 扫描 f-string 主体, 拆分为字面量片段与替换字段 [br]
+	## 返回 parts 数组, 每个元素为 {"is_literal": bool, "text": String, "expr": String, "conv": String, "fmt": String} [br]
+	## [param body] 引号之间的原始内容 [br]
+	## [param quote_char] 引号字符 [br]
+	## [param is_raw] 是否原始字符串 [br]
+	## [returns] parts 数组
+	func _scan_fstring_parts(body: String, _quote_char: String, is_raw: bool) -> Array:
+		var parts: Array = []
+		var lit = ""
+		var i = 0
+		while i < body.length():
+			var ch = body[i]
+			if ch == '{':
+				# 转义的 {{ → 字面 {
+				if i + 1 < body.length() and body[i + 1] == '{':
+					lit += '{'
+					i += 2
+					continue
+				if lit != "":
+					parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
+					lit = ""
+				i += 1
+				var field = _scan_fstring_field(body, i)
+				if field == null:
+					return [ {"is_literal": true, "text": "", "expr": null, "conv": "", "fmt": ""}]
+				parts.append({"is_literal": false, "text": "", "expr": field.expr, "conv": field.conv, "fmt": field.fmt})
+				i = field.end
+			elif ch == '}':
+				if i + 1 < body.length() and body[i + 1] == '}':
+					lit += '}'
+					i += 2
+					continue
+				report.error("f-string: single '}' is not allowed")
+				return [ {"is_literal": true, "text": "", "expr": null, "conv": "", "fmt": ""}]
+			else:
+				lit += ch
+				i += 1
+		if lit != "":
+			parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
+		return parts
+
+	## 扫描 f-string 中的一个替换字段 {expr[!conv][:fmt]} [br]
+	## 从开括号后一位开始, 正确处理嵌套花括号与字段内字符串字面量 [br]
+	## [param body] f-string 主体 [br]
+	## [param start] 开括号后一位的索引 [br]
+	## [returns] {"expr": String, "conv": String, "fmt": String, "end": int}
+	func _scan_fstring_field(body: String, start: int) -> Dictionary:
+		var expr_src = ""
+		var conv = ""
+		var fmt = ""
+		var i = start
+		var depth = 1
+		while i < body.length():
+			var ch = body[i]
+			if ch == '"' or ch == "'":
+				var skip = _skip_string_literal(body, i)
+				expr_src += body.substr(i, skip - i)
+				i = skip
+				continue
+			if ch == '{':
+				depth += 1
+				expr_src += ch
+				i += 1
+				continue
+			if ch == '}':
+				depth -= 1
+				if depth == 0:
+					# 转换标志 (!r/!s/!a) 与格式说明符 (:fmt) 已在花括号内部解析
+					# 闭括号后遇到 ! 或 : 属于字段之外的普通文本, 原样保留
+					return {"expr": expr_src, "conv": conv, "fmt": fmt, "end": i + 1}
+			if ch == '!' and depth == 1:
+				if i + 1 < body.length():
+					conv = body[i + 1]
+					i += 2
+					continue
+				i += 1
+				continue
+			if ch == ':' and depth == 1:
+				i += 1
+				var fmt_start = i
+				var fmt_depth = 0
+				while i < body.length():
+					var fc = body[i]
+					if fc == '{':
+						fmt_depth += 1
+					elif fc == '}':
+						if fmt_depth == 0:
+							break
+						fmt_depth -= 1
+					i += 1
+				fmt = body.substr(fmt_start, i - fmt_start)
+				if i < body.length() and body[i] == '}':
+					i += 1
+				return {"expr": expr_src, "conv": conv, "fmt": fmt, "end": i}
+			expr_src += ch
+			i += 1
+		report.error("f-string: unterminated replacement field")
+		return {"expr": expr_src, "conv": conv, "fmt": fmt, "end": body.length()}
+
+	## 跳过字段表达式内的字符串字面量 (含三引号), 返回结束后的索引 [br]
+	## [param body] 字段源码 [br]
+	## [param start] 引号起始索引 [br]
+	## [returns] 字符串结束后的索引
+	func _skip_string_literal(body: String, start: int) -> int:
+		var q = body[start]
+		var i = start + 1
+		if i + 1 < body.length() and body[i] == q and body[i + 1] == q:
+			i += 2
+			while i < body.length():
+				if body[i] == q and i + 2 < body.length() and body[i + 1] == q and body[i + 2] == q:
+					return i + 3
+				i += 1
+			return i
+		while i < body.length():
+			if body[i] == '\\':
+				i += 2
+				continue
+			if body[i] == q:
+				return i + 1
+			i += 1
+		return i
+
 ## AST 节点
 class ASTNode:
 	pass
 
 ## Statements 声明基类
 class Stmt:
+	## 语句所在源文件行号 (运行时错误定位用)
+	var line: int = 0
 	pass
 
 ## Expressions 声明基类
@@ -757,6 +949,41 @@ class ConditionalExpr extends Expr:
 		condition = c
 		true_expr = t
 		false_expr = f
+
+## lambda 表达式, 例如 lambda x, y=1: x + y [br]
+## 解析时捕获参数列表与单表达式函数体, 运行时构造为 DSLFunction [br]
+class LambdaExpr extends Expr:
+	## 参数列表
+	var params: Array
+	## 函数体 (单个表达式, 运行时包装为 return)
+	var body: Expr
+	## 构造 lambda 表达式 [br]
+	## [param p] 参数列表 (实际类型 Array[Param]) [br]
+	## [param b] 函数体表达式
+	func _init(p, b):
+		params = p
+		body = b
+
+## f-string 表达式, 例如 f"hello {name}" [br]
+## parts 为混合字面量与替换字段的数组 [br]
+## 每个 part 为 Dictionary: {"is_literal": bool, "text": String, "expr": Expr, "conv": String, "fmt": String}
+class FStringExpr extends Expr:
+	## 混合字面量/替换字段数组
+	var parts: Array
+	## 构造 f-string 表达式 [br]
+	## [param p] parts 数组
+	func _init(p):
+		parts = p
+
+## super() 表达式, 运行时解析为 DSLSuper 代理 [br]
+## 支持零参数 super() (Python 3 风格) 与双参数 super(Class, obj) [br]
+class SuperExpr extends Expr:
+	## 位置参数表达式数组 (0 或 2 个)
+	var arguments: Array
+	## 构造 super 表达式 [br]
+	## [param a] 参数表达式数组
+	func _init(a):
+		arguments = a
 
 ## if/elif/else 条件语句 [br]
 ## 支持 elif 分支链和可选的 else 分支
@@ -3792,6 +4019,8 @@ class DSLFunction extends DSLObject:
 	var closure: DSLEnvironment
 	## 方法类型 0=普通函数, 1=classmethod, 2=staticmethod
 	var method_type: int = 0
+	## 定义该方法的类 (super() 定位), 顶层函数为 null
+	var _defining_class: DSLClass = null
 	## 类解释器引用
 	var _cls_interp: Interpreter = null
 	## 默认参数值数组
@@ -4154,6 +4383,48 @@ class DSLClass extends DSLObject:
 	func _dsl_setattr(attr_name: String, value: DSLObject):
 		class_attrs[attr_name] = value
 
+## DSL super() 代理对象, 用于调用父类方法 [br]
+## 持有父类引用与绑定实例, 属性查找沿父类 MRO 并绑定到实例 [br]
+class DSLSuper extends DSLObject:
+	## 开始查找的类 (父类)
+	var sup_cls: DSLClass = null
+	## 绑定的实例 (self)
+	var sup_instance: DSLObject = null
+	## 解释器引用
+	var sup_interp: Interpreter = null
+
+	## 构造 super 代理 [br]
+	## [param p_cls] 父类 [br]
+	## [param p_instance] 绑定实例 [br]
+	## [param p_interp] 解释器引用
+	func _init(p_cls, p_instance, p_interp):
+		super._init()
+		sup_cls = p_cls
+		sup_instance = p_instance
+		sup_interp = p_interp
+
+	func _type_name() -> String:
+		return "super"
+
+	func _dsl_str() -> String:
+		if sup_cls != null:
+			return "<super: <class '%s'>>" % sup_cls.name
+		return "<super object>"
+
+	## 属性访问: 沿父类查找并绑定到实例 [br]
+	## 等价于 CPython super 代理的 __getattribute__ [br]
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if sup_cls == null:
+			last_error = "RuntimeError: super(): no class"
+			return DSLNone.new()
+		var method = sup_cls._dsl_getattribute(name)
+		if method != null and not (method is DSLNone):
+			if method.has_method("__get__"):
+				return method.__get__(sup_instance, sup_cls)
+			return method
+		last_error = "AttributeError: 'super' object has no attribute '%s'" % name
+		return DSLNone.new()
+
 ## DSL 迭代器基类, 对应 Python 迭代器协议 (鸭子类型) [br]
 ## DSLIterator 从未暴露, 无需继承自 DSLObject [br]
 ## 提供 has_next() / next() 接口的子类可 for 循环使用
@@ -4455,12 +4726,22 @@ class Parser:
 			pass
 	
 	## 解析一条顶层语句 (定义, 声明, 控制流或表达式) [br]
-	## 这是所有顶层语法结构的入口分发函数 [br]
+	## 记录语句起始行号 (运行时错误定位), 再分发到具体解析函数 [br]
 	## [returns] 解析出的 Stmt 或 Expr 节点, 末尾或出错时返回 null
 	func declaration():
 		skip_newlines()
 		if is_at_end():
 			return null
+		var start_line = peek().line
+		var result = declaration_impl()
+		if result is Stmt:
+			result.line = start_line
+		return result
+
+	## 语句解析分发函数 [br]
+	## 根据当前 Token 类型匹配对应的语法结构 [br]
+	## [returns] 解析出的 Stmt 节点, 出错时返回 null
+	func declaration_impl():
 		if match_types([TokenType.AT]):
 			return decorated_declaration()
 		if match_types([TokenType.DEF]):
@@ -5100,14 +5381,22 @@ class Parser:
 			return Unary.new(op, unary())
 		return primary()
 		
-	## 解析基本表达式 (字面量, 变量, 括号组, 列表, 字典) [br]
+	## 解析基本表达式 (字面量, 变量, 括号组, 列表, 字典, lambda, f-string, super) [br]
 	## 所有基本表达式解析后都会通过 finish_call_or_index 进行后缀链式处理 [br]
+	## lambda 例外: 其函数体自行吸收后缀, 直接返回 LambdaExpr [br]
 	## [returns] 解析出的 Expr 节点
 	func primary():
 		if match_types([TokenType.INTEGER, TokenType.FLOAT, TokenType.STRING, TokenType.TRUE, TokenType.FALSE, TokenType.NULL]):
 			return finish_call_or_index(Literal.new(previous().literal))
+		if match_types([TokenType.FSTRING]):
+			return finish_call_or_index(parse_fstring_expr(previous().literal))
 		if match_types([TokenType.IDENTIFIER]):
-			return finish_call_or_index(Variable.new(previous().lexeme))
+			var name = previous().lexeme
+			if name == "super" and check(TokenType.LPAREN):
+				return finish_call_or_index(parse_super_call())
+			return finish_call_or_index(Variable.new(name))
+		if match_types([TokenType.LAMBDA]):
+			return lambda_expression()
 		if match_types([TokenType.LPAREN]):
 			return finish_call_or_index(parse_group_or_generator())
 		if match_types([TokenType.LBRACKET]):
@@ -5116,6 +5405,121 @@ class Parser:
 			return finish_call_or_index(parse_dict_or_dictcomp())
 		report.error("Unexpected token '%s'" % peek().lexeme)
 		return null
+
+	## 解析 lambda 表达式: lambda [params]: body [br]
+	## 支持默认值, *args, **kwargs 与仅关键字参数 (* 分隔) [br]
+	## [returns] LambdaExpr 节点, 出错时返回 null
+	func lambda_expression() -> Expr:
+		var params: Array[Param] = []
+		var saw_star = false
+		if not check(TokenType.COLON):
+			while true:
+				if report.has_error:
+					return null
+				if check(TokenType.STAR):
+					var next_idx = current + 1
+					var is_star_only = false
+					if next_idx >= tokens.size():
+						is_star_only = true
+					else:
+						var nt = tokens[next_idx].type
+						if nt == TokenType.IDENTIFIER or nt == TokenType.COLON or nt == TokenType.EQUAL:
+							is_star_only = false
+						else:
+							is_star_only = true
+					if is_star_only:
+						advance()
+						saw_star = true
+						if not match_types([TokenType.COMMA]):
+							break
+						continue
+					else:
+						advance()
+						var tok = consume(TokenType.IDENTIFIER, "Expected parameter name")
+						if tok == null:
+							return null
+						params.append(Param.new(tok.lexeme, null, true, false, false, false))
+						saw_star = true
+						if not match_types([TokenType.COMMA]):
+							break
+						continue
+				elif check(TokenType.STARSTAR):
+					advance()
+					var tok = consume(TokenType.IDENTIFIER, "Expected parameter name")
+					if tok == null:
+						return null
+					params.append(Param.new(tok.lexeme, null, false, true))
+					break
+				else:
+					var tok = consume(TokenType.IDENTIFIER, "Expected parameter name")
+					if tok == null:
+						return null
+					var param_name = tok.lexeme
+					var default_expr = null
+					if match_types([TokenType.EQUAL]):
+						default_expr = simple_expression()
+						if report.has_error:
+							return null
+					params.append(Param.new(param_name, default_expr, false, false, false, saw_star))
+				if not match_types([TokenType.COMMA]):
+					break
+		var colon = consume(TokenType.COLON, "Expected ':' in lambda expression")
+		if colon == null:
+			return null
+		var body = simple_expression()
+		if body == null or report.has_error:
+			return null
+		return LambdaExpr.new(params, body)
+
+	## 解析 super(...) 调用 [br]
+	## 支持零参数 super() 与双参数 super(Class, obj) [br]
+	## [returns] SuperExpr 节点
+	func parse_super_call() -> Expr:
+		var args: Array[Expr] = []
+		if match_types([TokenType.LPAREN]):
+			if not check(TokenType.RPAREN):
+				while true:
+					if report.has_error:
+						return null
+					var e = simple_expression()
+					if e == null:
+						return null
+					args.append(e)
+					if not match_types([TokenType.COMMA]):
+						break
+			consume(TokenType.RPAREN, "Expected ')' after super")
+		return SuperExpr.new(args)
+
+	## 解析 f-string 的 parts, 将替换字段的源码片段解析为 Expr [br]
+	## [param parts_raw] Lexer 产出的原始 parts (expr 为源码字符串) [br]
+	## [returns] FStringExpr 节点, 出错时返回 null
+	func parse_fstring_expr(parts_raw: Array) -> Expr:
+		var parts: Array = []
+		for part in parts_raw:
+			if part.get("is_literal", true):
+				parts.append({"is_literal": true, "text": part.text, "expr": null, "conv": "", "fmt": ""})
+			else:
+				var expr_src: String = part.expr
+				var parsed = parse_sub_expression(expr_src)
+				if parsed == null:
+					return null
+				parts.append({"is_literal": false, "text": "", "expr": parsed, "conv": part.conv, "fmt": part.fmt})
+		return FStringExpr.new(parts)
+
+	## 将一段源码字符串独立解析为单个表达式 [br]
+	## 用于 f-string 内嵌表达式 [br]
+	## [param src] 源码片段 [br]
+	## [returns] Expr 节点, 出错时返回 null
+	func parse_sub_expression(src: String) -> Expr:
+		var lexer = Lexer.new(report, src)
+		var toks = lexer.scan()
+		if report.has_error:
+			return null
+		var sub_parser = Parser.new(report, toks)
+		var expr = sub_parser.simple_expression()
+		if report.has_error or expr == null:
+			return null
+		return expr
 		
 	## 后缀链式处理: 函数调用 (args), 索引访问 [index], 属性访问 .attr [br]
 	## 循环消费紧跟在基本表达式后面的 LPAREN, LBRACKET, DOT, 构建链式 AST [br]
@@ -5741,6 +6145,12 @@ class Interpreter:
 	var _expr_evaluated: bool = false
 	## 挂起类型 (false = SLEEPING(自动恢复) / true = WAITING(手动恢复))
 	var _is_waiting: bool = false
+	## 当前执行语句的行号 (运行时错误定位)
+	var _current_line: int = 0
+	## 当前正在执行的方法所属的类 (super() 定位)
+	var _current_class: DSLClass = null
+	## 当前正在执行的方法的 self/cls (super() 定位)
+	var _current_self: DSLObject = null
 	## PyGDS 宿主引用
 	var owner: PyGDS = null
 	
@@ -5754,7 +6164,8 @@ class Interpreter:
 		environment = globals
 		register_builtins()
 	
-	## 抛出 DSL 异常, 设置 last_exception 并报告错误
+	## 抛出 DSL 异常, 设置 last_exception 并报告错误 [br]
+	## 若已知当前语句行号, 会在错误消息后附加 "(line N)" [br]
 	func raise_exception(err_type: String, msg: String):
 		var exc_class = globals.get_val(err_type)
 		if exc_class is DSLClass:
@@ -5762,7 +6173,10 @@ class Interpreter:
 			last_exception = exc_class.magic_call(exc_args, {})
 		else:
 			last_exception = DSLException.new(msg, err_type)
-		report.error(err_type + ": " + msg)
+		var line_suffix = ""
+		if _current_line > 0:
+			line_suffix = " (line %d)" % _current_line
+		report.error(err_type + ": " + msg + line_suffix)
 	
 	## 尝试调用实例类的 magic 方法, 失败时回退 fallback [br]
 	## [param obj] 目标对象 [br]
@@ -5947,7 +6361,7 @@ class Interpreter:
 	## 注册内置函数 (print/len/range/type/id 等) 及 API 函数, [br]
 	## 定义内置异常继承层级
 	func register_builtins():
-		# === Programmatic built-in type class registration ===
+		# Programmatic built-in type class registration
 		# Create object class (user class base, still uses api_object_new + _object_init)
 		var obj_methods = {}
 		obj_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_object_new"))
@@ -6064,6 +6478,11 @@ class Interpreter:
 		globals.define("bin", _make_builtin("bin", Callable(self, "builtin_bin")))
 		globals.define("isinstance", _make_builtin("isinstance", Callable(self, "builtin_isinstance")))
 		globals.define("issubclass", _make_builtin("issubclass", Callable(self, "builtin_issubclass")))
+		globals.define("getattr", _make_builtin("getattr", Callable(self, "builtin_getattr")))
+		globals.define("setattr", _make_builtin("setattr", Callable(self, "builtin_setattr")))
+		globals.define("delattr", _make_builtin("delattr", Callable(self, "builtin_delattr")))
+		globals.define("map", _make_builtin("map", Callable(self, "builtin_map")))
+		globals.define("filter", _make_builtin("filter", Callable(self, "builtin_filter")))
 		
 		for name in api_funcs:
 			globals.define(name, DSLBuiltinFunction.new(name, api_funcs[name]))
@@ -6151,6 +6570,9 @@ class Interpreter:
 			i += 1
 			
 			var res = execute(stmt)
+			# 为直接 report.error 的运行时错误 (如 NameError) 附加行号
+			if report.has_error and report.last_error != "" and not report.last_error.contains("(line "):
+				report.last_error += " (line %d)" % _current_line
 			if res == ExecResult.SUSPENDED:
 				# 保存下次恢复的位置
 				if _expr_evaluated:
@@ -6178,6 +6600,9 @@ class Interpreter:
 	func execute(stmt) -> ExecResult:
 		if report.has_error:
 			return ExecResult.ERROR
+			
+		if stmt is Stmt:
+			_current_line = stmt.line
 			
 		step_count += 1
 		if step_count > max_steps:
@@ -7090,8 +7515,328 @@ class Interpreter:
 						return null
 			return result
 			
+		if expr is LambdaExpr:
+			return _make_lambda_function(expr)
+
+		if expr is FStringExpr:
+			return _evaluate_fstring(expr)
+
+		if expr is SuperExpr:
+			return _evaluate_super(expr)
+
 		return DSLNone.new()
-		
+
+	## 将 LambdaExpr 构造为可调用的 DSLFunction [br]
+	## 复用 FunctionStmt 与 call_user_function 机制, 使 lambda 行为与普通函数一致 [br]
+	## [param expr] LambdaExpr 节点 [br]
+	## [returns] DSLFunction
+	func _make_lambda_function(expr: LambdaExpr) -> DSLFunction:
+		var body: Array[Stmt] = [ReturnStmt.new(expr.body)]
+		var fstmt = FunctionStmt.new("<lambda>", expr.params, body)
+		var func_obj = DSLFunction.new(fstmt, environment)
+		func_obj._cls_interp = self
+		func_obj._defining_class = _current_class
+		for p in fstmt.params:
+			if p.is_args or p.is_kwargs:
+				func_obj.default_values.append(null)
+				continue
+			if p.default_value != null:
+				var prev_env = environment
+				environment = func_obj.closure
+				var val = evaluate(p.default_value)
+				environment = prev_env
+				func_obj.default_values.append(val)
+			else:
+				func_obj.default_values.append(null)
+		return func_obj
+
+	## 求值 f-string, 拼接字面量片段与替换字段 [br]
+	## [param expr] FStringExpr 节点 [br]
+	## [returns] DSLString
+	func _evaluate_fstring(expr: FStringExpr) -> DSLString:
+		var result = ""
+		for part in expr.parts:
+			if part.get("is_literal", true):
+				result += part.text
+				continue
+			var val = evaluate(part.expr)
+			if val == null:
+				return DSLString.new(result)
+			result += _format_value(val, part.conv, part.fmt)
+		return DSLString.new(result)
+
+	## 求值 super(...) 表达式, 构造 DSLSuper 代理 [br]
+	## 零参数 super() 使用当前方法上下文; 双参数 super(Class, obj) 显式指定 [br]
+	## [param expr] SuperExpr 节点 [br]
+	## [returns] DSLSuper, 出错时返回 null
+	func _evaluate_super(expr: SuperExpr) -> DSLObject:
+		if expr.arguments.size() == 0:
+			if _current_class == null or _current_self == null:
+				raise_exception("RuntimeError", "super(): no arguments")
+				return null
+			return DSLSuper.new(_current_class.superclass, _current_self, self)
+		if expr.arguments.size() == 2:
+			var cls_val = evaluate(expr.arguments[0])
+			if cls_val == null or not (cls_val is DSLClass):
+				raise_exception("TypeError", "super(): argument 1 must be a class")
+				return null
+			var obj_val = evaluate(expr.arguments[1])
+			if obj_val == null:
+				return null
+			return DSLSuper.new(cls_val.superclass, obj_val, self)
+		raise_exception("TypeError", "super() takes 0 or 2 arguments")
+		return null
+
+	## 按 Python f-string 格式说明符格式化值 [br]
+	## 支持对齐 (< > ^ =), 填充字符, 符号 (+ - 空格), 备用形式 (#), 零填充 (0), 宽度, 千分位逗号, 精度, 类型 (d f e g s x X o b c %) [br]
+	## [param value] DSLObject 值 [br]
+	## [param conv] 转换标志 (s/r/a, 可空) [br]
+	## [param fmt] 格式说明符 [br]
+	## [returns] 格式化字符串
+	func _format_value(value: DSLObject, conv: String, fmt: String) -> String:
+		var is_numeric = _is_numeric_value(value)
+		# 转换标志优先于格式说明符
+		if conv == "r" or conv == "a":
+			var r = value.magic_repr([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			return r.value if r is DSLString else value._dsl_str()
+		if conv == "s":
+			var st = value.magic_str([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			return st.value if st is DSLString else value._dsl_str()
+		if fmt == "":
+			if is_numeric:
+				return _format_default_number(value)
+			return value._dsl_str()
+
+		# 解析格式说明符
+		var i = 0
+		var fill = " "
+		var align = ""
+		var sign = ""
+		var alt = false
+		var zero_pad = false
+		var width = 0
+		var comma = false
+		var precision = -1
+		var type_c = ""
+		# [fill]align
+		if i < fmt.length() and fmt[i] in "<>^=":
+			align = fmt[i]
+			i += 1
+		elif i + 1 < fmt.length() and fmt[i + 1] in "<>^=":
+			fill = fmt[i]
+			align = fmt[i + 1]
+			i += 2
+		# 符号
+		if i < fmt.length() and fmt[i] in "+- ":
+			sign = fmt[i]
+			i += 1
+		# 备用形式
+		if i < fmt.length() and fmt[i] == "#":
+			alt = true
+			i += 1
+		# 零填充
+		if i < fmt.length() and fmt[i] == "0":
+			zero_pad = true
+			i += 1
+		# 宽度
+		while i < fmt.length() and fmt[i].is_valid_int():
+			width = width * 10 + int(fmt[i])
+			i += 1
+		# 千分位
+		if i < fmt.length() and fmt[i] == ",":
+			comma = true
+			i += 1
+		# 精度
+		if i < fmt.length() and fmt[i] == ".":
+			i += 1
+			precision = 0
+			while i < fmt.length() and fmt[i].is_valid_int():
+				precision = precision * 10 + int(fmt[i])
+				i += 1
+		# 类型
+		if i < fmt.length():
+			type_c = fmt[i]
+			i += 1
+
+		var s = _format_with_type(value, type_c, precision, comma)
+		# 符号前缀
+		if is_numeric and sign != "" and not s.begins_with("-"):
+			if sign == "+":
+				s = "+" + s
+			elif sign == " ":
+				s = " " + s
+		# 备用形式 (进制前缀)
+		if alt and type_c in ["x", "X", "o", "b"] and _is_numeric_value(value):
+			var prefix = "0x" if type_c == "x" else ("0X" if type_c == "X" else ("0o" if type_c == "o" else "0b"))
+			if not s.begins_with(prefix):
+				s = prefix + s
+		# 零填充
+		if zero_pad and align == "" and width > s.length():
+			var pad = width - s.length()
+			if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
+				s = s[0] + "0".repeat(pad) + s.substr(1)
+			else:
+				s = "0".repeat(pad) + s
+		# 对齐与宽度
+		if width > s.length():
+			var pad = width - s.length()
+			if align == ">":
+				s = fill.repeat(pad) + s
+			elif align == "^":
+				var left = pad / 2
+				s = fill.repeat(left) + s + fill.repeat(pad - left)
+			elif align == "<" or align == "":
+				s = s + fill.repeat(pad)
+			elif align == "=":
+				if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
+					s = s[0] + fill.repeat(pad) + s.substr(1)
+				else:
+					s = fill.repeat(pad) + s
+		return s
+
+	## 判断对象是否为数值类型 [br]
+	func _is_numeric_value(value: DSLObject) -> bool:
+		return value is DSLInteger or value is DSLFloat
+
+	## 数值默认格式化 (整数直接, 浮点按 str) [br]
+	func _format_default_number(value: DSLObject) -> String:
+		if value is DSLInteger:
+			return str(value.value)
+		return value._dsl_str()
+
+	## 按类型字符格式化值 [br]
+	func _format_with_type(value: DSLObject, type_c: String, precision: int, comma: bool) -> String:
+		var is_int = value is DSLInteger
+		var is_float = value is DSLFloat
+		if type_c == "s":
+			var st = value.magic_str([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			return st.value if st is DSLString else value._dsl_str()
+		if type_c == "c":
+			var code = value.value if is_int else int(value._dsl_str())
+			return char(code)
+		if type_c in ["x", "X", "o", "b"]:
+			var n = value.value if is_int else int(value._dsl_str())
+			var neg = n < 0
+			var body = ""
+			match type_c:
+				"x": body = _to_base(abs(n), 16)
+				"X": body = _to_base(abs(n), 16).to_upper()
+				"o": body = _to_base(abs(n), 8)
+				"b": body = _to_base(abs(n), 2)
+			if comma:
+				body = _add_thousands(body)
+			return ("-" if neg else "") + body
+		if type_c == "d":
+			var n = int(value.value) if is_float else value.value
+			var body = str(n)
+			return _add_thousands(body) if comma else body
+		if type_c == "e" or type_c == "E":
+			var num = float(value.value) if is_int else value.value
+			var p = precision if precision >= 0 else 6
+			var body = _format_scientific(num, p, type_c == "E")
+			return _add_thousands(body) if comma else body
+		if type_c == "g" or type_c == "G":
+			var num = float(value.value) if is_int else value.value
+			return _format_general(num, precision, type_c == "G")
+		if type_c == "%":
+			var num = float(value.value) if is_int else value.value
+			var p = precision if precision >= 0 else 6
+			return _format_fixed(num * 100.0, p) + "%"
+		if type_c in ["f", "F"]:
+			var num = float(value.value) if is_int else value.value
+			var p = precision if precision >= 0 else 6
+			var body = _format_fixed(num, p)
+			return _add_thousands(body) if comma else body
+		# 默认数值类型
+		if is_int:
+			var body = str(value.value)
+			return _add_thousands(body) if comma else body
+		return value._dsl_str()
+
+	## 整数转任意进制字符串 [br]
+	func _to_base(n: int, base: int) -> String:
+		if n == 0:
+			return "0"
+		var chars = "0123456789abcdef"
+		var result = ""
+		while n > 0:
+			result = chars[n % base] + result
+			n /= base
+		return result
+
+	## 千分位逗号 [br]
+	func _add_thousands(s: String) -> String:
+		var neg = s.begins_with("-")
+		if neg:
+			s = s.substr(1)
+		var dot = s.find(".")
+		var int_part = s if dot == -1 else s.substr(0, dot)
+		var frac = "" if dot == -1 else s.substr(dot)
+		var result = ""
+		var count = 0
+		for i in range(int_part.length() - 1, -1, -1):
+			result = int_part[i] + result
+			count += 1
+			if count % 3 == 0 and i > 0:
+				result = "," + result
+		return (("-" if neg else "") + result + frac)
+
+	## 定点浮点格式化 [br]
+	func _format_fixed(num: float, precision: int) -> String:
+		return ("%." + str(precision) + "f") % num
+
+	## 科学计数法格式化 [br]
+	func _format_scientific(num: float, precision: int, upper: bool) -> String:
+		if num == 0.0:
+			return "0." + "0".repeat(precision) + ("E" if upper else "e") + "+00"
+		var exp = floor(log(abs(num)) / log(10.0))
+		var mantissa = num / pow(10.0, exp)
+		if abs(mantissa) >= 10.0:
+			mantissa /= 10.0
+			exp += 1
+		if abs(mantissa) < 1.0 and mantissa != 0.0:
+			mantissa *= 10.0
+			exp -= 1
+		var mant_str = ("%." + str(precision) + "f") % mantissa
+		var exp_sign = "+" if exp >= 0 else "-"
+		var exp_abs = int(abs(exp))
+		var exp_str = exp_sign + ("0" if exp_abs < 10 else "") + str(exp_abs)
+		return mant_str + ("E" if upper else "e") + exp_str
+
+	## 通用格式 g/G (近似 Python 语义) [br]
+	func _format_general(num: float, precision: int, upper: bool) -> String:
+		var p = precision if precision >= 0 else 6
+		if num == 0.0:
+			return "0"
+		var exp = floor(log(abs(num)) / log(10.0))
+		var use_sci = exp < -4 or exp >= p
+		if use_sci:
+			var mant_p = p - 1
+			if mant_p < 0:
+				mant_p = 0
+			return _strip_g_zeros(_format_scientific(num, mant_p, upper))
+		var dec = p - 1 - int(exp)
+		if dec < 0:
+			dec = 0
+		return _strip_g_zeros(("%." + str(dec) + "f") % num)
+
+	## 去除 g 格式尾部的零与小数点 [br]
+	func _strip_g_zeros(s: String) -> String:
+		var e_idx = -1
+		var e_part = ""
+		for i in range(s.length()):
+			if s[i] == "e" or s[i] == "E":
+				e_idx = i
+				e_part = s.substr(i)
+				break
+		var mant = s if e_idx == -1 else s.substr(0, e_idx)
+		if mant.find(".") != -1:
+			while mant.ends_with("0"):
+				mant = mant.substr(0, mant.length() - 1)
+			if mant.ends_with("."):
+				mant = mant.substr(0, mant.length() - 1)
+		return mant + e_part
+
 	## 调用用户自定义函数 [br]
 	## [param function] DSLFunction 对象 [br]
 	## [param args] 实参数组 (实际类型 Array[DSLObject]) [br]
@@ -7282,9 +8027,19 @@ class Interpreter:
 				"env": saved_env,
 				"resume_info": {}
 			})
+		# 记录当前方法上下文 (super() 定位), 嵌套调用时保存并恢复
+		var saved_class = _current_class
+		var saved_self = _current_self
+		_current_class = function._defining_class
+		if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
+			_current_self = args[0]
+		else:
+			_current_self = null
 		environment = exec_env
 		var res = exec_block(decl.body, environment)
 		environment = prev_env
+		_current_class = saved_class
+		_current_self = saved_self
 		
 		if res == ExecResult.SUSPENDED:
 			# 压入函数调用栈帧
@@ -7326,18 +8081,22 @@ class Interpreter:
 			superclass_obj = environment.get_val("object")
 		var methods = {}
 		var class_attrs = {}
+		# 提前创建 DSLClass 骨架, 使方法能引用其定义类 (super() 定位)
+		var class_obj = DSLClass.new(stmt.name, superclass_obj, {}, self)
 		for body_stmt in stmt.body:
 			if body_stmt is FunctionStmt:
 				if body_stmt.method_type == 3:
 					# @property getter
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
+					func_obj._defining_class = class_obj
 					var prop = DSLProperty.new(body_stmt.name, func_obj, self)
 					methods[body_stmt.name] = prop
 				elif body_stmt.method_type == 4:
 					# @name.setter
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
+					func_obj._defining_class = class_obj
 					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
 					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
 						(methods[prop_name] as DSLProperty).setter(func_obj)
@@ -7350,6 +8109,7 @@ class Interpreter:
 					# @name.deleter
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
+					func_obj._defining_class = class_obj
 					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
 					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
 						(methods[prop_name] as DSLProperty).deleter(func_obj)
@@ -7361,6 +8121,7 @@ class Interpreter:
 					# Regular method, @classmethod, @staticmethod
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
+					func_obj._defining_class = class_obj
 					methods[body_stmt.name] = func_obj
 			elif body_stmt is ExpressionStmt and body_stmt.expression is Assign:
 				var assign = body_stmt.expression as Assign
@@ -7368,11 +8129,11 @@ class Interpreter:
 				if val == null:
 					return ExecResult.ERROR
 				class_attrs[assign.name] = val
-		var class_obj = DSLClass.new(stmt.name, superclass_obj, methods, self)
+		class_obj.methods = methods
 		class_obj.class_attrs = class_attrs
 		environment.define(stmt.name, class_obj)
 		return ExecResult.NORMAL
-	
+
 	## 向 preamble 中定义的内置类型类注入对应的方法描述 [br]
 	## 根据 [param cls_name] 匹配目标类型 (str/list/tuple/dict/int) [br]
 	## [param class_obj] 目标 DSLClass [br]
@@ -8189,6 +8950,115 @@ class Interpreter:
 				return DSLBool.new(true)
 			current = current.superclass
 		return DSLBool.new(false)
+
+	## getattr(obj, name, default) - 获取对象属性 [br]
+	## 属性不存在时返回 default (若提供), 否则抛 AttributeError [br]
+	func builtin_getattr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or args.size() > 3:
+			raise_exception("TypeError", "getattr expected 2 or 3 arguments, got %d" % args.size())
+			return null
+		var obj = args[0]
+		var name_obj = args[1]
+		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		var result = obj._dsl_getattribute(name)
+		if result != null and not (result is DSLNone):
+			return result
+		if obj.last_error != "":
+			obj.last_error = ""
+			if args.size() == 3:
+				return args[2]
+			raise_exception("AttributeError", "'%s' object has no attribute '%s'" % [obj._type_name(), name])
+			return null
+		return result
+
+	## setattr(obj, name, value) - 设置对象属性 [br]
+	func builtin_setattr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 3:
+			raise_exception("TypeError", "setattr expected 3 arguments, got %d" % args.size())
+			return null
+		var obj = args[0]
+		var name_obj = args[1]
+		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		obj._dsl_setattr(name, args[2])
+		if obj.last_error != "":
+			raise_exception_from_last_error(obj.last_error)
+			obj.last_error = ""
+			return null
+		return DSLNone.new()
+
+	## delattr(obj, name) - 删除对象属性 [br]
+	func builtin_delattr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "delattr expected 2 arguments, got %d" % args.size())
+			return null
+		var obj = args[0]
+		var name_obj = args[1]
+		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		obj._dsl_delattr(name)
+		if obj.last_error != "":
+			raise_exception_from_last_error(obj.last_error)
+			obj.last_error = ""
+			return null
+		return DSLNone.new()
+
+	## map(func, iterable, ...) - 对可迭代对象逐元素应用函数 [br]
+	## 支持多可迭代对象 (逐元素并行); 本实现为立即求值并返回列表 [br]
+	func builtin_map(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLList:
+		if args.size() < 2:
+			raise_exception("TypeError", "map() must have at least 2 arguments")
+			return null
+		var fn = args[0]
+		var iter_lists: Array = []
+		for i in range(1, args.size()):
+			var it = args[i]._dsl_iter()
+			if it == null:
+				raise_exception("TypeError", "map() argument %d is not iterable" % (i + 1))
+				return null
+			var items: Array[DSLObject] = []
+			while it.has_next():
+				items.append(it.next())
+			iter_lists.append(items)
+		var count = iter_lists[0].size()
+		if iter_lists.size() > 1:
+			for lst in iter_lists:
+				if lst.size() < count:
+					count = lst.size()
+		var result = DSLList.new()
+		for i in range(count):
+			var call_args: Array[DSLObject] = []
+			for lst in iter_lists:
+				call_args.append(lst[i])
+			var r = fn.magic_call(call_args, {} as Dictionary[String, DSLObject])
+			if r == null:
+				return null
+			result.items.append(r)
+		return result
+
+	## filter(func, iterable) - 保留满足条件的元素 [br]
+	## func 为 null 时按真值过滤 [br]
+	func builtin_filter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLList:
+		if args.size() != 2:
+			raise_exception("TypeError", "filter() takes exactly 2 arguments")
+			return null
+		var fn = args[0]
+		var it = args[1]._dsl_iter()
+		if it == null:
+			raise_exception("TypeError", "filter() argument 2 is not iterable")
+			return null
+		var result = DSLList.new()
+		while it.has_next():
+			var item = it.next()
+			var keep = false
+			if fn == null or fn is DSLNone:
+				keep = item._dsl_bool()
+			else:
+				var r = fn.magic_call([item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if r == null:
+					return null
+				keep = r._dsl_bool()
+			if keep:
+				result.items.append(item)
+		return result
 		
 	## int(x, base) - 转换为整数 [br]
 	func builtin_int(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLInteger:

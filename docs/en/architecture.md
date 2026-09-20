@@ -43,8 +43,8 @@ The `PyGDS.TokenType` enumeration values are as follows:
 | Delimiters | `LPAREN`, `RPAREN`, `LBRACKET`, `RBRACKET`, `LBRACE`, `RBRACE`, `COMMA`, `COLON`, `NEWLINE` |
 | Comparison (two-char) | `EQUAL_EQUAL`, `NOT_EQUAL`, `GREATER_EQUAL`, `LESS_EQUAL` |
 | Augmented Assignment | `PLUS_EQ`, `MINUS_EQ`, `STAR_EQ`, `SLASH_EQ`, `DOUBLESLASH_EQ`, `STARSTAR_EQ`, `PERCENT_EQ` |
-| Keywords | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS` |
-| Literals | `IDENTIFIER`, `STRING`, `INTEGER`, `FLOAT` |
+| Keywords | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA` |
+| Literals | `IDENTIFIER`, `STRING`, `FSTRING`, `INTEGER`, `FLOAT` |
 | Special | `INDENT`, `DEDENT`, `EOF`, `AT`, `NULL`, `IS_NOT` |
 
 ### Token Structure

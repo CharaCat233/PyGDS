@@ -223,6 +223,47 @@ first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
 | Assignment | `=`, `+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `**=` |
 | Membership | `in`, `not in` |
 
+### String Interpolation (f-string)
+
+Supports Python 3.6+ f-string syntax, embedding expressions directly in strings
+
+```python
+name = "Alice"
+age = 30
+print(f"Hello, {name}!")            # Hello, Alice!
+print(f"Age: {age}")                # Age: 30
+print(f"Sum: {1 + 2}")              # Sum: 3
+print(f"Upper: {'hello'.upper()}")  # Upper: HELLO
+print(f"literal {{braces}}")        # literal {braces}
+```
+
+**Format specifiers**: alignment (`<` `>` `^` `=`), fill character, sign (`+` `-` space), zero padding, width, thousands separator, precision and type (`d` `f` `e` `g` `s` `x` `X` `o` `b` `c` `%`)
+
+```python
+print(f"{42:05d}")                  # 00042
+print(f"{3.14159:.2f}")             # 3.14
+print(f"|{42:>6}|")                 # |    42|
+print(f"|{'hi':*^8}|")              # |***hi***|
+print(f"{255:x} {5:b} {8:o}")       # ff 101 10
+print(f"{1000000:,}")               # 1,000,000
+print(f"{0.25:.1%}")                # 25.0%
+```
+
+**Conversion flags**: `!s` (str), `!r` (repr), `!a` (ascii)
+
+```python
+print(f"{[1, 2, 3]!r}")             # [1, 2, 3]
+```
+
+**Nested expressions**: dict/list subscription, function calls, conditional expressions, etc.
+
+```python
+d = {"k": "v"}
+print(f"d = {d['k']}")              # d = v
+lst = [10, 20, 30]
+print(f"lst[1] = {lst[1]}")         # lst[1] = 20
+```
+
 ### Conditional Statements
 
 ```python
@@ -306,6 +347,42 @@ def config(host, *, port=80, **kwargs):
 
 config("localhost", port=8080, debug=True, timeout=30)
 # localhost 8080 {"debug": True, "timeout": 30}
+```
+
+### lambda Anonymous Functions
+
+Supports Python `lambda` expressions; they behave like ordinary functions (callable, usable as `key`/function arguments for `sort`/`map`/`filter`)
+
+```python
+# Basic usage
+f = lambda x: x * 2
+print(f(21))                        # 42
+
+# Immediately invoked
+print((lambda x: x + 1)(9))         # 10
+
+# Default parameters
+g = lambda a, b=10: a + b
+print(g(5))                         # 15
+print(g(5, 100))                    # 105
+
+# No arguments
+h = lambda: "no args"
+print(h())                          # no args
+
+# As sort / sorted key
+lst = [3, 1, 2]
+lst.sort(key=lambda x: -x)
+print(lst)                          # [3, 2, 1]
+
+# Combined with map / filter
+print(list(map(lambda x: x ** 2, [1, 2, 3])))               # [1, 4, 9]
+print(list(filter(lambda x: x % 2 == 0, [1, 2, 3, 4])))     # [2, 4]
+
+# Capturing outer variables (closure)
+base = 100
+add_base = lambda x: x + base
+print(add_base(1))                  # 101
 ```
 
 ### global / nonlocal
@@ -453,6 +530,50 @@ d = Dog("Buddy")
 print(d.speak())                # Buddy barks
 ```
 
+#### `super()` Calling Parent Methods
+
+Supports Python 3 style zero-argument `super()` to call parent methods or constructors from a subclass method; the two-argument form `super(Class, obj)` is also supported
+
+```python
+class Animal:
+    def __init__(self, name):
+        self.name = name
+
+    def speak(self):
+        return self.name + " makes a sound"
+
+class Dog(Animal):
+    def __init__(self, name):
+        super().__init__(name)          # call parent constructor
+
+    def speak(self):
+        return super().speak() + " (from Dog)"   # call parent method
+
+d = Dog("Buddy")
+print(d.speak())                # Buddy makes a sound (from Dog)
+
+# Multi-level inheritance: super() walks up the chain
+class A:
+    def val(self):
+        return 1
+class B(A):
+    def val(self):
+        return super().val() + 10
+class C(B):
+    def val(self):
+        return super().val() + 100
+print(C().val())                # 111
+
+# Two-argument form super(Class, obj)
+class Q(P):
+    def greet(self):
+        return "child"
+q = Q()
+print(super(Q, q).greet())      # parent
+```
+
+> **Note**: `super()` can only be used inside class methods (static methods have no self/cls and raise `RuntimeError: super(): no arguments`).
+
 ### assert Statement
 
 ```python
@@ -499,6 +620,18 @@ print(10 / 0)                 # ZeroDivisionError
 print(10 // 0)                # ZeroDivisionError
 print(10 % 0)                 # ZeroDivisionError
 ```
+
+### Runtime Error Line Numbers
+
+Uncaught runtime errors append the line number of the offending statement to the error message, making it easier to locate problems
+
+```python
+a = 1
+b = 2
+c = a + undefined_var         # NameError: name 'undefined_var' is not defined (line 3)
+```
+
+The error message is available via `dsl.report.last_error`, in the format `ErrorType: message (line N)`.
 
 ### Debugging Tips
 

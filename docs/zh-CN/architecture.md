@@ -43,8 +43,8 @@ Token 类型枚举 `PyGDS.TokenType` 的枚举值如下
 | 分隔符 | `LPAREN`, `RPAREN`, `LBRACKET`, `RBRACKET`, `LBRACE`, `RBRACE`, `COMMA`, `COLON`, `NEWLINE` |
 | 比较（双字符） | `EQUAL_EQUAL`, `NOT_EQUAL`, `GREATER_EQUAL`, `LESS_EQUAL` |
 | 增强赋值 | `PLUS_EQ`, `MINUS_EQ`, `STAR_EQ`, `SLASH_EQ`, `DOUBLESLASH_EQ`, `STARSTAR_EQ`, `PERCENT_EQ` |
-| 关键字 | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS` |
-| 字面量 | `IDENTIFIER`, `STRING`, `INTEGER`, `FLOAT` |
+| 关键字 | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA` |
+| 字面量 | `IDENTIFIER`, `STRING`, `FSTRING`, `INTEGER`, `FLOAT` |
 | 特殊 | `INDENT`, `DEDENT`, `EOF`, `AT`, `NULL`, `IS_NOT` |
 
 ### Token 结构体

@@ -68,6 +68,35 @@ warn("这是一条 WARN 日志")
 
 ---
 
+## 安装与集成
+
+PyGDS 提供两种集成方式：
+
+### 方式一：单文件集成（推荐）
+
+PyGDS 的全部核心代码位于单个文件 [pygds.gd](./pygds.gd) 中，无外部依赖
+
+1. 将 `pygds.gd` 复制到你的 Godot 项目目录（任意位置，建议项目根目录）
+2. 文件顶部的 `class_name PyGDS` 会自动注册为全局类，无需额外配置
+3. 即可通过 `PyGDS.new()` 或 `load("res://pygds.gd").new()` 使用
+
+```gdscript
+var dsl = PyGDS.new()
+dsl.write_dsl_script("print('Hello!')")
+dsl.run()
+```
+
+### 方式二：作为编辑器插件（可选）
+
+项目自带的 [addons/pygds](./addons/pygds/) 提供了一个编辑器插件，在 `Project > Tools` 菜单增加「Run PyGDS Script...」动作，可直接选择并运行项目内的 `.py` 脚本，输出打印到编辑器控制台
+
+1. 将 `addons/pygds/` 目录复制到你的项目（依赖根目录的 `pygds.gd`）
+2. 在 Godot 编辑器中打开 **项目设置 → 插件**，启用 **PyGDS**
+
+> 插件的核心仍是单文件的 `pygds.gd`，编辑器插件仅为开发便利
+
+---
+
 ## Python 兼容性矩阵
 
 | 特性 | 支持程度 | 说明 |
@@ -101,6 +130,12 @@ warn("这是一条 WARN 日志")
 | Descriptor 协议 | ✅ 完整 | `__get__` 实现类级/实例级绑定 |
 | 魔法方法 | ✅ 完整 | `__add__`/`__str__`/`__init__` 等类级注册 |
 | 运算符 | ✅ 完整 | 二元/一元/比较/增强赋值全部支持 |
+| f-string | ✅ 完整 | `f"value: {x:.2f}"`，含格式说明符与转换标志 |
+| lambda | ✅ 完整 | 匿名函数，支持默认参数与闭包 |
+| `super()` | ✅ 完整 | 单继承下调用父类方法/构造函数 |
+| `getattr`/`setattr`/`delattr` | ✅ 完整 | 内置反射函数 |
+| `map()`/`filter()` | ✅ 完整 | 内置函数式工具 |
+| 运行时错误行号 | ✅ 完整 | 未捕获异常附带 `(line N)` |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
 | `async`/`await` | ❌ 不支持 | — |
 | 生成器/`yield` | ❌ 不支持 | — |
@@ -214,11 +249,61 @@ godot --headless --path /你的项目路径 --script /pygds路径/test.gd
 
 运行 gdscript 测试文件，以确保 PyGDS 行为是否与 Python 一致
 
+### 新增测试与重新生成 expected.json
+
+向 [tests](./py_package/tests/) 添加新的 `*.py` 测试文件后，需要将真实 Python 的输出记录到 `expected.json`：
+
+```cmd
+cd py_package
+python test.py
+```
+
+> **注意**：`expected.json` 是**人工整理**的基线文件。`test.py` 会全量重写它，其中个别用例（如 `edge_str_repr` 的对象内存地址）需要手动规范化为 `<OnlyStr object>` 形式。因此建议：运行 `test.py` 后**只把新增用例的 `expected` 合并进现有文件**，保留原有已整理条目，再运行 `test.gd` 验证
+
 ---
 
 ## Demo 测试
 
 `demo/` 目录下包含一些完整的演示场景，在 Godot 编辑器中打开场景文件即可运行
+
+---
+
+## 常见问题 FAQ
+
+### 如何从文件加载脚本？
+
+推荐将 DSL 代码写入独立的 `.py` 文件（避免 GDScript 字符串的转义与 Tab 缩进问题），运行时读取并执行：
+
+```gdscript
+func run_script_file(path: String) -> void:
+    var file = FileAccess.open(path, FileAccess.READ)
+    var source = file.get_as_text()
+    file.close()
+    dsl.write_dsl_script(source)
+    dsl.run()
+```
+
+### 如何让脚本与场景/节点交互？
+
+通过 `register_api()` 将节点或游戏逻辑暴露给脚本。API 函数在 GDScript 端定义，可捕获外部变量（如节点引用）：
+
+```gdscript
+dsl.register_api_pair("move_player", func(args, _kwargs):
+    var dx = args[0]._dsl_str()
+    player.position.x += float(dx)   # player 为脚本外捕获的节点引用
+    return PyGDS.DSLNone.new(),
+)
+```
+
+脚本端调用 `move_player(10)` 即可操作场景节点
+
+### 为什么 `print()` 在 Godot 控制台看不到输出？
+
+非调试模式下输出不会实时打印到控制台，而是累积到 `dsl.print_output`。调用 `dsl.set_debug_mode(true)` 可让 `print()` 直接输出到控制台
+
+### 脚本能读取玩家输入或网络数据吗？
+
+可以。通过 `register_api()` 把 GDScript 侧的能力暴露给脚本；需要等待的异步场景通过挂起系统实现（`sleep` / `request_suspend_waiting`），而非 Python 的 `async/await`
 
 ---
 

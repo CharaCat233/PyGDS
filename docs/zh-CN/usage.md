@@ -223,6 +223,47 @@ first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
 | 赋值 | `=`, `+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `**=` |
 | 成员检查 | `in`, `not in` |
 
+### 字符串插值 (f-string)
+
+支持 Python 3.6+ 的 f-string 语法，可在字符串中直接嵌入表达式
+
+```python
+name = "Alice"
+age = 30
+print(f"Hello, {name}!")            # Hello, Alice!
+print(f"Age: {age}")                # Age: 30
+print(f"Sum: {1 + 2}")              # Sum: 3
+print(f"Upper: {'hello'.upper()}")  # Upper: HELLO
+print(f"literal {{braces}}")        # literal {braces}
+```
+
+**格式说明符**：支持对齐（`<` `>` `^` `=`）、填充字符、符号（`+` `-` 空格）、零填充、宽度、千分位逗号、精度与类型（`d` `f` `e` `g` `s` `x` `X` `o` `b` `c` `%`）
+
+```python
+print(f"{42:05d}")                  # 00042
+print(f"{3.14159:.2f}")             # 3.14
+print(f"|{42:>6}|")                 # |    42|
+print(f"|{'hi':*^8}|")              # |***hi***|
+print(f"{255:x} {5:b} {8:o}")       # ff 101 10
+print(f"{1000000:,}")               # 1,000,000
+print(f"{0.25:.1%}")                # 25.0%
+```
+
+**转换标志**：`!s`（str）、`!r`（repr）、`!a`（ascii）
+
+```python
+print(f"{[1, 2, 3]!r}")             # [1, 2, 3]
+```
+
+**嵌套表达式**：支持字典/列表下标、函数调用、三目表达式等
+
+```python
+d = {"k": "v"}
+print(f"d = {d['k']}")              # d = v
+lst = [10, 20, 30]
+print(f"lst[1] = {lst[1]}")         # lst[1] = 20
+```
+
 ### 条件语句
 
 ```python
@@ -306,6 +347,42 @@ def config(host, *, port=80, **kwargs):
 
 config("localhost", port=8080, debug=True, timeout=30)
 # localhost 8080 {"debug": True, "timeout": 30}
+```
+
+### lambda 匿名函数
+
+支持 Python 的 `lambda` 表达式，行为与普通函数一致（可调用、可作 `sort`/`map`/`filter` 的 `key`/函数参数）
+
+```python
+# 基本用法
+f = lambda x: x * 2
+print(f(21))                        # 42
+
+# 立即调用
+print((lambda x: x + 1)(9))         # 10
+
+# 默认参数
+g = lambda a, b=10: a + b
+print(g(5))                         # 15
+print(g(5, 100))                    # 105
+
+# 无参数
+h = lambda: "no args"
+print(h())                          # no args
+
+# 作为 sort / sorted 的 key
+lst = [3, 1, 2]
+lst.sort(key=lambda x: -x)
+print(lst)                          # [3, 2, 1]
+
+# 与 map / filter 配合
+print(list(map(lambda x: x ** 2, [1, 2, 3])))               # [1, 4, 9]
+print(list(filter(lambda x: x % 2 == 0, [1, 2, 3, 4])))     # [2, 4]
+
+# 捕获外部变量 (闭包)
+base = 100
+add_base = lambda x: x + base
+print(add_base(1))                  # 101
 ```
 
 ### global / nonlocal
@@ -453,6 +530,50 @@ d = Dog("Buddy")
 print(d.speak())                # Buddy barks
 ```
 
+#### `super()` 调用父类方法
+
+支持 Python 3 风格的零参数 `super()`，在子类方法中调用父类方法或构造函数，也支持双参数形式 `super(Class, obj)`
+
+```python
+class Animal:
+    def __init__(self, name):
+        self.name = name
+
+    def speak(self):
+        return self.name + " makes a sound"
+
+class Dog(Animal):
+    def __init__(self, name):
+        super().__init__(name)          # 调用父类构造函数
+
+    def speak(self):
+        return super().speak() + " (from Dog)"   # 调用父类方法
+
+d = Dog("Buddy")
+print(d.speak())                # Buddy makes a sound (from Dog)
+
+# 多层继承链: super() 沿继承链逐层向上
+class A:
+    def val(self):
+        return 1
+class B(A):
+    def val(self):
+        return super().val() + 10
+class C(B):
+    def val(self):
+        return super().val() + 100
+print(C().val())                # 111
+
+# 双参数形式 super(Class, obj)
+class Q(P):
+    def greet(self):
+        return "child"
+q = Q()
+print(super(Q, q).greet())      # parent
+```
+
+> **注意**：`super()` 只能在类的方法内使用（静态方法中无 self/cls，会抛出 `RuntimeError: super(): no arguments`）。
+
 ### assert 断言
 
 ```python
@@ -499,6 +620,18 @@ print(10 / 0)                 # ZeroDivisionError
 print(10 // 0)                # ZeroDivisionError
 print(10 % 0)                 # ZeroDivisionError
 ```
+
+### 运行时错误行号
+
+未捕获的运行时错误会在错误消息后附加出错语句所在的行号，便于定位问题
+
+```python
+a = 1
+b = 2
+c = a + undefined_var         # NameError: name 'undefined_var' is not defined (line 3)
+```
+
+错误消息通过 `dsl.report.last_error` 获取，格式为 `错误类型: 错误信息 (line N)`。
 
 ### 调试技巧
 

@@ -25,4 +25,4 @@ Thumbs.db
 *.sublime-*
 
 # Test Folder
-tests
+/tests/

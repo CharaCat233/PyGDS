@@ -68,6 +68,35 @@ warn("This is a WARN log")
 
 ---
 
+## Installation & Integration
+
+PyGDS offers two ways to integrate:
+
+### Option 1: Single-File Integration (recommended)
+
+All of PyGDS's core code lives in a single file, [pygds.gd](./pygds.gd), with no external dependencies.
+
+1. Copy `pygds.gd` into your Godot project (any location, project root recommended)
+2. The `class_name PyGDS` at the top of the file is auto-registered as a global class; no extra setup needed
+3. Use it via `PyGDS.new()` or `load("res://pygds.gd").new()`
+
+```gdscript
+var dsl = PyGDS.new()
+dsl.write_dsl_script("print('Hello!')")
+dsl.run()
+```
+
+### Option 2: As an Editor Plugin (optional)
+
+The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds a **Project > Tools > Run PyGDS Script...** action to select and run `.py` scripts from your project, printing output to the editor console.
+
+1. Copy the `addons/pygds/` directory into your project (it depends on `pygds.gd` in the project root)
+2. In the Godot editor, open **Project Settings → Plugins** and enable **PyGDS**
+
+> The plugin's core is still the single-file `pygds.gd`; the editor plugin is just a development convenience.
+
+---
+
 ## Python Compatibility Matrix
 
 | Feature | Support | Notes |
@@ -101,6 +130,12 @@ warn("This is a WARN log")
 | Descriptor Protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
 | Magic Methods | ✅ Full | `__add__`/`__str__`/`__init__`, etc., registered at class level |
 | Operators | ✅ Full | Binary/unary/comparison/augmented all supported |
+| f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers and conversion flags |
+| lambda | ✅ Full | Anonymous functions with default arguments and closures |
+| `super()` | ✅ Full | Call parent methods/constructors under single inheritance |
+| `getattr`/`setattr`/`delattr` | ✅ Full | Built-in reflection functions |
+| `map()`/`filter()` | ✅ Full | Built-in functional tools |
+| Runtime error line numbers | ✅ Full | Uncaught exceptions include `(line N)` |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |
 | `async`/`await` | ❌ Not Supported | — |
 | Generators/`yield` | ❌ Not Supported | — |
@@ -214,11 +249,61 @@ godot --headless --path /your/project/path --script /pygds/path/test.gd
 
 to verify that PyGDS behavior matches Python.
 
+### Adding Tests and Regenerating expected.json
+
+After adding a new `*.py` test file to [tests](./py_package/tests/), record the real Python output into `expected.json`:
+
+```cmd
+cd py_package
+python test.py
+```
+
+> **Note**: `expected.json` is a **curated** baseline. `test.py` rewrites it entirely, and a few cases (e.g., the object memory address in `edge_str_repr`) need manual normalization to the `<OnlyStr object>` form. Recommended workflow: after running `test.py`, **merge only the `expected` values of newly added cases** into the existing file, keep the already-curated entries, then run `test.gd` to verify.
+
 ---
 
 ## Demo Tests
 
 The `demo/` directory contains a complete demo scene for the suspend system. Open the scene file in the Godot editor to run it, visually demonstrating three suspend modes (passive, active, and active + on_resume callback) in a turn-based combat simulation.
+
+---
+
+## FAQ
+
+### How do I load a script from a file?
+
+It is recommended to write DSL code in standalone `.py` files (avoiding GDScript string escaping and Tab indentation issues), then read and execute them at runtime:
+
+```gdscript
+func run_script_file(path: String) -> void:
+    var file = FileAccess.open(path, FileAccess.READ)
+    var source = file.get_as_text()
+    file.close()
+    dsl.write_dsl_script(source)
+    dsl.run()
+```
+
+### How do scripts interact with scenes/nodes?
+
+Expose nodes or game logic to scripts via `register_api()`. API functions are defined on the GDScript side and can capture outer variables (such as node references):
+
+```gdscript
+dsl.register_api_pair("move_player", func(args, _kwargs):
+    var dx = args[0]._dsl_str()
+    player.position.x += float(dx)   # player is a node reference captured outside the script
+    return PyGDS.DSLNone.new(),
+)
+```
+
+The script can then call `move_player(10)` to manipulate the scene node.
+
+### Why don't I see `print()` output in the Godot console?
+
+In non-debug mode, output is not printed to the console in real time; it accumulates in `dsl.print_output`. Call `dsl.set_debug_mode(true)` to make `print()` output directly to the console.
+
+### Can scripts read player input or network data?
+
+Yes. Expose GDScript-side capabilities to scripts via `register_api()`; asynchronous scenarios that need to wait are implemented with the suspend system (`sleep` / `request_suspend_waiting`) rather than Python's `async/await`.
 
 ---
 

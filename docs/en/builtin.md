@@ -434,6 +434,76 @@ sleep(1.5)  # Suspend for 1.5 seconds, then automatically resume
 sleep(0.0)  # Resume immediately (no delay)
 ```
 
+### `getattr(obj, name, default=None)`
+
+Corresponds to Python `getattr()`, getting an attribute of an object
+
+- Returns the attribute value if it exists
+- Returns `default` if the attribute is missing and `default` is provided
+- Raises `AttributeError` if the attribute is missing and `default` is not provided
+- Return type: any DSLObject
+
+```python
+class Point:
+    def __init__(self):
+        self.x = 42
+
+p = Point()
+getattr(p, "x")                 # 42
+getattr(p, "missing", "N/A")    # "N/A"
+getattr(p, "missing")           # AttributeError
+getattr([], "append")           # gets a bound method (callable)
+```
+
+### `setattr(obj, name, value)`
+
+Corresponds to Python `setattr()`, setting an attribute of an object
+
+```python
+class Point:
+    pass
+
+p = Point()
+setattr(p, "x", 10)
+print(p.x)                      # 10
+```
+
+### `delattr(obj, name)`
+
+Corresponds to Python `delattr()`, deleting an attribute of an object; raises `AttributeError` if the attribute does not exist
+
+```python
+p = Point()
+setattr(p, "y", 5)
+delattr(p, "y")
+getattr(p, "y", "gone")         # "gone"
+```
+
+### `map(func, iterable, ...)`
+
+Corresponds to Python `map()`, applying a function to every element of an iterable
+
+- Supports multiple iterables (elements passed to the function in parallel)
+- **Note**: this implementation eagerly evaluates and returns a list (unlike CPython's lazy map object), but it composes with `list()` / `for` loops etc. in the same way
+
+```python
+list(map(lambda x: x * 2, [1, 2, 3]))          # [2, 4, 6]
+list(map(str, [1, 2, 3]))                      # ["1", "2", "3"]
+list(map(lambda a, b: a + b, [1, 2], [10, 20])) # [11, 22]
+```
+
+### `filter(func, iterable)`
+
+Corresponds to Python `filter()`, keeping only the elements that satisfy the condition
+
+- If `func` is `None`, filters by the truthiness of each element
+- **Note**: this implementation eagerly evaluates and returns a list
+
+```python
+list(filter(lambda x: x > 1, [0, 1, 2, 3]))   # [2, 3]
+list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
+```
+
 ---
 
 ## Built-in Type Methods
