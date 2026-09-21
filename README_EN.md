@@ -151,7 +151,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |
 | `async`/`await` | ❌ Not Supported | — |
-| Generators/`yield` | ❌ Not Supported | Generator expressions are supported (lazy `generator` objects); `yield` generator functions are not |
+| Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators, and closures persisting across `yield` |
 | Decorators | ⚠️ Partial | `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) |
 | `with` Statement | ❌ Not Supported | — |
 | User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator) |
@@ -159,6 +159,10 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 > **⚠️ Breaking Change (v0.3.0)**: Generator expressions `(x for x in iterable)` have changed from "eagerly evaluated to a list" to "lazy generator object".
 > Code that directly subscripts/`len()`s or calls list methods on a generator expression result will fail — convert with `list(g)` / `tuple(g)` first
 > generators are one-shot iterators (re-iterating does not restart).
+>
+> **⚠️ Breaking Change (v0.4.0)**: `yield` is now a reserved keyword and can no longer be used as an identifier (variable/function name, etc.). Code that used `yield` as a name must rename it.
+>
+> **⚠️ Known Differences (v0.4.0)**: calling `sleep()` inside a generator body raises a clear error ("generator body cannot suspend") — generator functions do not yet coexist with the suspend system. `yield` resumption uses statement re-execution, so a side-effecting prefix before a yield re-evaluates on resume (e.g. in `f(a(), (yield 1))`, `a()` runs twice); the `x = yield from it` assignment form is not supported, and `send` / `throw` are not forwarded into a `yield from` sub-generator; calling `sleep()` inside a generator-expression element is still unreliable (a v0.3.0 leftover — avoid `sleep()` inside generators/comprehensions).
 
 ---
 

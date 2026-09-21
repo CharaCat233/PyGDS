@@ -151,7 +151,7 @@ dsl.run()
 | `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
 | `async`/`await` | ❌ 不支持 | — |
-| 生成器/`yield` | ❌ 不支持 | 生成器表达式已支持（惰性 `generator` 对象）；`yield` 生成器函数计划在 `v0.4.0` 版本实现 |
+| 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套、闭包跨 `yield` 保持 |
 | 装饰器 | ⚠️ 部分 | `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter） |
 | `with` 语句 | ❌ 不支持 | — |
 | 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator） |
@@ -159,6 +159,10 @@ dsl.run()
 > **⚠️ 破坏性变更（v0.3.0）**：生成器表达式 `(x for x in iterable)` 的语义已从「急切求值为列表」改为「惰性生成器对象」
 > 旧代码若直接对生成器表达式结果做下标/`len()`/列表方法会报错，需先 `list(g)` / `tuple(g)` 转换
 > 生成器为一次性迭代器，重复迭代不会从头开始
+>
+> **⚠️ 破坏性变更（v0.4.0）**：`yield` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；若旧代码以 `yield` 命名变量，需改名
+>
+> **⚠️ 已知差异（v0.4.0）**：生成器体内调用 `sleep()` 会明确报错（「generator body cannot suspend」），与挂起系统暂不共存；`yield` 表达式恢复时采用语句重执行续延，含副作用的前缀表达式会在恢复时重复求值（如 `f(a(), (yield 1))` 中 `a()` 会执行两次），`x = yield from it` 的赋值形式与 `send` / `throw` 向 `yield from` 子生成器的转发不支持；生成器表达式元素内含 `sleep()` 的行为仍不可靠（v0.3.0 遗留，建议避免在生成器/推导式内调用 `sleep()`）
 
 ---
 

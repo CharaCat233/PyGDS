@@ -44,7 +44,7 @@ The `PyGDS.TokenType` enumeration values are as follows:
 | Comparison (two-char) | `EQUAL_EQUAL`, `NOT_EQUAL`, `GREATER_EQUAL`, `LESS_EQUAL` |
 | Augmented Assignment | `PLUS_EQ`, `MINUS_EQ`, `STAR_EQ`, `SLASH_EQ`, `DOUBLESLASH_EQ`, `STARSTAR_EQ`, `PERCENT_EQ` |
 | Assignment expression | `COLON_EQ` (the `:=` walrus operator) |
-| Keywords | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA` |
+| Keywords | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA`, `YIELD` |
 | Literals | `IDENTIFIER`, `STRING`, `FSTRING`, `INTEGER`, `FLOAT` |
 | Special | `INDENT`, `DEDENT`, `EOF`, `AT`, `NULL`, `IS_NOT` |
 
@@ -225,6 +225,7 @@ The AST is divided into two base classes: **`PyGDS.Stmt`** (statements) and **`P
 | `PyGDS.SetComp` | `elt_expr`, `clauses: Array[CompClause]` | Set comprehension |
 | `PyGDS.DictComp` | `key_expr`, `value_expr`, `clauses: Array[CompClause]` | Dictionary comprehension |
 | `PyGDS.GenComp` | `elt_expr`, `clauses: Array[CompClause]` | Generator expression (evaluates to a lazy generator) |
+| `PyGDS.YieldExpr` | `value: Expr` (nullable), `from_expr: Expr` (nullable) | `yield` expression (including `yield from` delegation) |
 | `PyGDS.ConditionalExpr` | `condition`, `true_expr`, `false_expr` | Ternary conditional expression |
 | `PyGDS.UnpackAssign` | `targets: Array`, `value: Expr` | Unpacking assignment |
 | `PyGDS.StarredTarget` | `target: Variable` | Starred unpacking target |
@@ -297,6 +298,22 @@ The return status `PyGDS.Interpreter.ExecResult` that controls execution flow is
 | `SetComp` | Like a list comprehension, collecting into a DSLSet (auto-deduplicated) |
 | `DictComp` | Like a list comprehension, evaluating key and value per binding → DSLDict |
 | `GenComp` | Builds a DSLGenerator (lazy; a frame stack holds each clause's iterator) |
+| `YieldExpr` | On first execution it suspends (returns `null`, propagating through the expression layer); on resume it injects the `send` value at the yield position; `yield from` delegates to a sub-iterable and saves its state |
+
+### Generator Functions and Stack Switching
+
+A `def` containing `yield` is marked as a generator at **definition time** by the parser, which recursively walks the body (skipping nested `def` / lambda / comprehension scopes). Calling it goes through `call_user_function`, binds parameters, then **does not execute the body** — it directly builds a `PyGDS.DSLFunctionGenerator`. Each `next()` / `send()` / `for` drives one step via `DSLFunctionGenerator._step()`:
+
+```txt
+_step():
+  1. Save the interpreter's current state (environment / _exec_stack / _call_stack / _current_class / _current_self / _suspended)
+  2. Swap in the generator's own suspended state
+  3. exec_block(generator body) — frame lookup matches on (statements, env) value+identity and resumes from the saved pc
+  4. Handle the result: 1 = a value was produced, 2 = finished normally (return value stored in _result_value), 3 = finished with an exception
+  5. Save the generator state, swap the caller's state back
+```
+
+A `yield` suspension sets `_suspend_reason = YIELD` (distinct from `sleep` / `waiting`) and returns `null` to propagate through the expression layer; on statement re-execution the first `yield` injects the `send` value (or a `throw`-injected exception). Calling `sleep()` inside a generator body is explicitly rejected — generator functions do not yet coexist with the suspend system.
 
 ### Binary Operation Dispatch Details
 

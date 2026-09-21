@@ -642,6 +642,92 @@ list(islice((x * x for x in count()), 5))   # [0, 1, 4, 9, 16] (with infinite se
 > Old code that directly subscripts / `len()`s / calls list methods on the result will fail — convert with `list(g)` / `tuple(g)` first
 > generators are **one-shot iterators** (re-iterating does not restart).
 
+### Generator Functions (`yield`)
+
+A `def` whose body contains `yield` is a generator function: **calling it does not execute the body** and returns a lazy generator object. Each `next()` / `send()` / `for` resumes from the previous `yield`. Local variables persist across `yield`, and closures remain visible:
+
+```python
+def counter(n):
+    i = 0
+    while i < n:
+        yield i
+        i += 1
+
+type(counter(3))        # <class 'generator'>
+list(counter(3))        # [0, 1, 2]
+next(counter(3))        # 0 (advance one step; one-shot iterator)
+
+g = counter(2)
+print(next(g), next(g)) # 0 1
+print(list(g))          # [] (exhausted)
+print(list(g))          # [] (re-iterating does not restart)
+
+# usable with for loops and consumer functions
+total = 0
+for x in counter(4):
+    total += x
+print(total)            # 6
+print(sum(counter(5)))  # 10
+```
+
+**Expression-level `yield` and `send`**: `yield` is an expression; on resume the injected `send` value becomes its result (`next()` injects `None`):
+
+```python
+def echo():
+    v = yield "start"
+    yield v
+
+g = echo()
+print(next(g))          # start
+print(g.send("hello"))  # hello (v is the send value)
+```
+
+**`yield from` delegation**: produces the sub-iterable's elements one by one; once exhausted, the expression evaluates to the sub-generator's `return` value (`send` / `throw` are not forwarded into the sub-generator, and the `x = yield from it` assignment form is not supported):
+
+```python
+def sub():
+    yield 1
+    return "done"
+def parent():
+    r = yield from sub()
+    yield "got:" + r
+list(parent())          # [1, 'got:done']
+```
+
+**`throw` / `close`**: inject an exception / `GeneratorExit` at the suspended position (`finally` still runs):
+
+```python
+def guarded():
+    try:
+        yield 1
+    except ValueError:
+        yield "handled"
+    finally:
+        print("cleanup")
+
+g = guarded()
+next(g)                 # 1
+print(g.throw(ValueError("e")))   # handled
+g.close()               # cleanup
+```
+
+**`return` value → `StopIteration.value`**: when a generator does `return value`, the `StopIteration` raised by an exhausted `next()` carries that value:
+
+```python
+def with_value():
+    yield 1
+    return 42
+g = with_value()
+next(g)
+try:
+    next(g)
+except StopIteration as e:
+    print(e.value)      # 42
+```
+
+> **⚠️ Breaking Change (v0.4.0)**: `yield` is now a reserved keyword and can no longer be used as an identifier.
+> **⚠️ Known Differences**: calling `sleep()` inside a generator body raises an error (generator functions do not yet coexist with the suspend system); `yield` resumption uses statement re-execution, so a side-effecting prefix before a yield re-evaluates on resume (e.g. `a()` runs twice in `f(a(), (yield 1))`); the `x = yield from it` assignment form is not supported.
+
 ### `slice` Object
 
 `slice(start, stop[, step])` builds a reusable slice object for `lst[slice(...)]` / `"str"[slice(...)]`:

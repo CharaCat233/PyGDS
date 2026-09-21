@@ -2,6 +2,39 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-09-22
+
+### 新增
+
+- **`yield` 生成器函数（Python 3.3+）**：新增 `YIELD` 令牌、`yield` 关键字与 `YieldExpr` AST 节点；`def` 内含 `yield` 的函数在**定义时**由解析器递归检测标记为生成器（跳过嵌套 `def` / lambda / 推导式作用域），调用时**不执行函数体**、立即返回惰性 `generator` 对象（`<class 'generator'>`）；局部变量跨 `yield` 保持，闭包变量正常可见，耗尽后再次迭代直接结束（一次性语义）
+- **语句级与表达式级 `yield`**：`yield` / `yield expr` 独立语句，以及 `x = yield v`、`return (yield 1)`、`f(1 + (yield 2))` 等任意表达式位置（恢复时注入 `send` 值参与后续求值，与 CPython 语义一致）；新增 `DSLFunctionGenerator`（持有闭包/参数绑定环境与挂起时保存的解释器执行栈）与 `DSLFunctionGeneratorIterator`（预取缓冲），通过「栈切换」机制让解释器的 `environment` / `_exec_stack` / `_call_stack` / `_current_class` / `_current_self` 在多份生成器挂起状态间切换，天然支持多生成器交替与嵌套
+- **`yield from iterable` 委托**：把子可迭代对象的元素逐个产出，耗尽后表达式的值为子生成器的 `return` 值；子迭代器状态按 `YieldExpr` 节点保存在生成器上，支持嵌套 `yield from`、`yield from` 无限生成器（配合 `itertools.islice`）；`send` / `throw` 不转发给子生成器（PEP 380 完整委托超出本期范围），`x = yield from it` 赋值形式暂不支持
+- **`send(value)` / `throw(type)` / `close()`**：`send` 把值注入为挂起 `yield` 表达式的结果（`send(None)` 可启动生成器，`send(非 None)` 到未启动生成器报 `TypeError`）；`throw` 在挂起位置抛出异常（未启动生成器在函数体开头注入抛出语句），可被生成器体内的 `try/except` 捕获；`close()` 注入 `GeneratorExit`（新增异常类，继承 `BaseException`、不被 `except Exception` 捕获），`finally` 正常执行，生成器捕获后继续产出时抛 `RuntimeError: generator ignored GeneratorExit`
+- **`StopIteration.value`**：生成器 `return value` 时，`next()` 超出抛出的 `StopIteration` 携带 `value`（`return` 无值时为 `None`），`try/except StopIteration as e` 中 `e.value` 可读取；新增 `raise_stop_iteration_value` 与 `raise_existing_exception` 辅助
+- **生成器方法 / lambda 生成器**：类内 `def` 含 `yield` 生成器方法（`self` 绑定可用），lambda 体内直接含 `yield` 生成 lambda 生成器（Python 3.12 语义，`lambda: (yield v)` 合法）
+- **消费链路贯通**：`next()` / `for` / `list` / `tuple` / `sum` / `sorted` / `min` / `max` / `any` / `all` / `enumerate` / `zip` / `itertools.islice` 等统一通过 `_dsl_iter()` 消费函数生成器（与生成器表达式共用协议）
+- **报错边界（对标 CPython 3.12）**：`yield` 在函数外报 `SyntaxError: 'yield' outside function`；在推导式内直接 `yield` 报 `SyntaxError: invalid syntax`（dict 推导式为 `'yield' inside dict comprehension`）；嵌套 lambda / 推导式内的 `yield` 属于其自身作用域，不计入外层函数
+
+### 破坏性变更 (Breaking Changes)
+
+- **`yield` 成为保留关键字**（v0.3.0 → v0.4.0）：此前 `yield` 不在 `Lexer.keywords` 表中、可当普通标识符使用；现为关键字，不能再作变量名/函数名/属性名等标识符，旧代码需改名
+
+### 修复
+
+- **for 循环体恢复语义**：`exec_block` 的帧查找按语句数组与环境的「值+身份」匹配；此前 `ForStmt` 恢复时丢弃残留的 body 帧并从 pc 0 重启，导致「for 体内 `sleep()` 之后同一迭代的语句被跳过」（如 `for i in range(3): print('a', i); sleep(0.1); print('b', i)` 丢失 `b` 行）。现改为恢复时**先不推进迭代器**（`resume_info` 记录 `body_resume`），从保存的 pc 继续被挂起的 body，完成后再推进下一迭代；`for` / `while` 循环体、`for-else` / `while-else`、`try/except/finally` 各分支的恢复统一按挂起阶段路由
+- **`TryStmt` 恢复路由**：此前 except / finally 体内挂起后恢复会重跑 try 体（对 `yield` 表现为重产出 try 体内元素）；现 `resume_info` 记录挂起发生在 try / except / finally 的哪个阶段，恢复时直接继续对应分支
+- **for-else / while-else 挂起传播**：此前 else 体 `exec_block` 的结果被丢弃，else 体内 `sleep()` / `yield` 挂起被忽略；现传播挂起结果并在恢复时按 `else_env` 继续
+- **`send(None)` 破坏 `is None` 身份语义**：生成器注入的 `send` 值此前用 `DSLNone.new()` 每次新建实例，导致 `received is not None` 误判为真（`send(None)` 与 `next()` 的注入值应复用解释器的 None 单例）；现统一经 `_none()` 取缓存单例，`x is None` / `x is not None` 判定恢复正确
+
+### 变更
+
+- 兼容性矩阵更新（README.md / README_EN.md）：生成器/`yield` 行 ❌ 不支持 → ✅ 完整，并新增 `yield` 关键字破坏性变更与生成器已知差异说明
+- 文档（`docs/zh-CN` 与 `docs/en`）：`architecture.md` 补充 `YIELD` 令牌、`YieldExpr` 节点与生成器栈切换机制，`builtin_types.md` 补充生成器函数类型与 `send`/`throw`/`close` 方法，`usage.md` 补充生成器函数用法（含 `yield from`、表达式级 `yield`、`StopIteration.value` 与报错边界）
+
+### 测试
+
+- 新增 10 个行为一致性测试：`lang_yield` / `lang_yield_control`（send/yield from/throw/close）/ `lang_yield_consumers`（消费链路）/ `lang_yield_lambda`（生成器 lambda）/ `edge_yield_errprop` / `edge_yield_closure` / `edge_yield_controlflow` / `err_yield_outside` / `err_yield_listcomp` / `err_yield_dictcomp`（共 129 个用例全部通过），挂起测试 22 个用例通过
+
 ## [0.3.0] - 2026-09-21
 
 ### 新增

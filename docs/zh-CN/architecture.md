@@ -44,7 +44,7 @@ Token 类型枚举 `PyGDS.TokenType` 的枚举值如下
 | 比较（双字符） | `EQUAL_EQUAL`, `NOT_EQUAL`, `GREATER_EQUAL`, `LESS_EQUAL` |
 | 增强赋值 | `PLUS_EQ`, `MINUS_EQ`, `STAR_EQ`, `SLASH_EQ`, `DOUBLESLASH_EQ`, `STARSTAR_EQ`, `PERCENT_EQ` |
 | 赋值表达式 | `COLON_EQ`（`:=` walrus 运算符） |
-| 关键字 | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA` |
+| 关键字 | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA`, `YIELD` |
 | 字面量 | `IDENTIFIER`, `STRING`, `FSTRING`, `INTEGER`, `FLOAT` |
 | 特殊 | `INDENT`, `DEDENT`, `EOF`, `AT`, `NULL`, `IS_NOT` |
 
@@ -225,6 +225,7 @@ AST 分为 **`PyGDS.Stmt`**（语句）和 **`PyGDS.Expr`**（表达式）两大
 | `PyGDS.SetComp` | `elt_expr`, `clauses: Array[CompClause]` | 集合推导式 |
 | `PyGDS.DictComp` | `key_expr`, `value_expr`, `clauses: Array[CompClause]` | 字典推导式 |
 | `PyGDS.GenComp` | `elt_expr`, `clauses: Array[CompClause]` | 生成器表达式（求值为惰性生成器） |
+| `PyGDS.YieldExpr` | `value: Expr`（可空）, `from_expr: Expr`（可空） | `yield` 表达式（含 `yield from` 委托） |
 | `PyGDS.ConditionalExpr` | `condition`, `true_expr`, `false_expr` | 三目条件表达式 |
 | `PyGDS.UnpackAssign` | `targets: Array`, `value: Expr` | 解包赋值 |
 | `PyGDS.StarredTarget` | `target: Variable` | 星号解包目标 |
@@ -297,6 +298,22 @@ interpret(statements)
 | `SetComp` | 同列表推导式，结果收集为 DSLSet（自动去重） |
 | `DictComp` | 同列表推导式，每个绑定组合求值键与值 → 收集为 DSLDict |
 | `GenComp` | 构造 DSLGenerator（惰性，帧栈保存各层子句迭代器） |
+| `YieldExpr` | 首次执行挂起（返回 null 触发上层空值传播），恢复时按 yield 位置注入 `send` 值；`yield from` 委托给子迭代器并保存其状态 |
+
+### 生成器函数与栈切换
+
+`def` 内含 `yield` 的函数在**定义时**由解析器递归遍历函数体标记为生成器（跳过嵌套 `def` / lambda / 推导式作用域）；调用时经 `call_user_function` 完成参数绑定后**不执行函数体**，直接构造 `PyGDS.DSLFunctionGenerator` 返回。每次 `next()` / `send()` / `for` 通过 `DSLFunctionGenerator._step()` 驱动一步：
+
+```txt
+_step():
+  1. 保存解释器当前状态 (environment / _exec_stack / _call_stack / _current_class / _current_self / _suspended)
+  2. 换上生成器自己的挂起状态
+  3. exec_block(生成器函数体) —— 帧查找按 (statements, env) 值+身份匹配, 从保存的 pc 恢复
+  4. 处理结果: 1=产出一个值, 2=正常结束(return 值存于 _result_value), 3=异常结束
+  5. 保存生成器状态, 换回调用方状态
+```
+
+`yield` 挂起时设置 `_suspend_reason = YIELD`（与 `sleep` / `waiting` 区分），返回 `null` 使表达式层空值传播，语句重执行时首个 `yield` 注入 `send` 值（或 `throw` 注入的异常）。生成器体内调用 `sleep()` 被明确拦截报错，与挂起系统暂不共存
 
 ### Binary 运算分发详情
 

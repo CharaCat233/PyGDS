@@ -17,7 +17,8 @@ enum TokenType {
 	AT, NULL,
 	TRY, EXCEPT, FINALLY, RAISE, AS,
 	PLUS_EQ, MINUS_EQ, STAR_EQ, SLASH_EQ, DOUBLESLASH_EQ, STARSTAR_EQ, PERCENT_EQ,
-	PIPE_EQ, IS, IS_NOT, NOT_IN, COLON_EQ
+	PIPE_EQ, IS, IS_NOT, NOT_IN, COLON_EQ,
+	YIELD
 }
 
 ## Token
@@ -83,7 +84,8 @@ class Lexer:
 		"try": TokenType.TRY, "except": TokenType.EXCEPT, "finally": TokenType.FINALLY,
 		"raise": TokenType.RAISE, "as": TokenType.AS,
 		"lambda": TokenType.LAMBDA,
-		"is": TokenType.IS
+		"is": TokenType.IS,
+		"yield": TokenType.YIELD
 	}
 	
 	## 构造词法分析器 [br]
@@ -1106,6 +1108,22 @@ class WalrusExpr extends Expr:
 		name = n
 		value = v
 
+## yield 表达式, 例如 yield v / yield / yield from iterable [br]
+## 仅出现在生成器函数体内; 挂起时产出 [member value] (或 from 子迭代器的元素) [br]
+## [param value] 产出值表达式, 可为 null (裸 yield 产出 None) [br]
+## [param from_expr] yield from 的子可迭代对象表达式, 非 null 时为委托形式
+class YieldExpr extends Expr:
+	## 产出值表达式, 可为 null
+	var value: Expr
+	## yield from 的子可迭代对象表达式, 可为 null
+	var from_expr: Expr = null
+	## 构造 yield 表达式 [br]
+	## [param v] 产出值表达式, 可为 null [br]
+	## [param f] yield from 的子表达式, 默认为 null
+	func _init(v: Expr, f: Expr = null):
+		value = v
+		from_expr = f
+
 ## 表达式语句, 将表达式包装为语句 [br]
 ## 用于将任意表达式 (如赋值, 调用) 作为独立语句执行
 class ExpressionStmt extends Stmt:
@@ -1141,6 +1159,8 @@ class LambdaExpr extends Expr:
 	var params: Array
 	## 函数体 (单个表达式, 运行时包装为 return)
 	var body: Expr
+	## 是否为生成器 lambda (函数体直接含 yield, Python 3.12+ 允许)
+	var is_generator: bool = false
 	## 构造 lambda 表达式 [br]
 	## [param p] 参数列表 (实际类型 Array[Param]) [br]
 	## [param b] 函数体表达式
@@ -1240,6 +1260,8 @@ class FunctionStmt extends Stmt:
 	var body: Array
 	## 方法类型: 0=普通方法, 1=类方法(@classmethod), 2=静态方法(@staticmethod), 3=属性(@property), 4=属性设置器(@name.setter), 5=属性删除器(@name.deleter)
 	var method_type: int = 0
+	## 是否为生成器函数 (函数体含 yield, 定义时由解析器检测)
+	var is_generator: bool = false
 	## 构造函数定义 [br]
 	## [param n] 函数名 [br]
 	## [param p] 参数列表 [br]
@@ -6649,6 +6671,379 @@ class DSLGeneratorIterator extends DSLIterator:
 			return element
 		return null
 
+## 生成器函数迭代器: 每次 next() 驱动生成器函数体推进一个 yield [br]
+## 预取缓冲保证 has_next() 准确; 一次性迭代语义 (与 Python 生成器一致) [br]
+## 与 DSLGeneratorIterator 不同: 其推进逻辑委托给 DSLFunctionGenerator._step 的栈切换机制
+class DSLFunctionGeneratorIterator extends DSLIterator:
+	## 所属生成器
+	var gen: DSLFunctionGenerator = null
+	## 是否已耗尽
+	var done: bool = false
+	## 预取的下一值 (使 has_next() 准确)
+	var _buffered: DSLObject = null
+	## 是否有预取值
+	var _has_buffer: bool = false
+
+	## 构造生成器迭代器 [br]
+	## [param g] 所属生成器
+	func _init(g: DSLFunctionGenerator):
+		gen = g
+
+	func has_next() -> bool:
+		if _has_buffer:
+			return true
+		if done:
+			return false
+		var res = gen._step()
+		if res == 1:
+			_buffered = gen._yielded_value
+			_has_buffer = true
+			return true
+		done = true
+		return false
+
+	func next() -> DSLObject:
+		if _has_buffer:
+			var r = _buffered
+			_buffered = null
+			_has_buffer = false
+			return r
+		if done:
+			return null
+		var res = gen._step()
+		if res == 1:
+			return gen._yielded_value
+		done = true
+		return null
+
+	## 使预取缓冲失效 (send/throw/close 直接驱动生成器后调用)
+	func _invalidate() -> void:
+		_buffered = null
+		_has_buffer = false
+
+## 生成器函数对象, 对应 def 中含 yield 的函数调用结果 (Python generator) [br]
+## 调用时不执行函数体, 立即返回本对象; 持有函数声明/闭包与参数绑定后的局部环境, [br]
+## 以及挂起时保存的解释器执行状态 (栈切换机制见 _step) [br]
+## 对外表现与 DSLGenerator (生成器表达式) 一致: _type_name 为 "generator", 一次性迭代
+class DSLFunctionGenerator extends DSLObject:
+	## 生成器函数对象 (持有声明与闭包)
+	var function: DSLFunction = null
+	## 参数绑定后的局部环境 (跨 yield 保持)
+	var local_env: DSLEnvironment = null
+	## 实际执行的函数体语句 (首次启动带注入抛出语句时不同于 func.declaration.body)
+	var body: Array = []
+	## 挂起时保存的解释器执行栈 (_exec_stack 的副本引用)
+	var exec_stack: Array = []
+	## 挂起时保存的解释器函数调用栈
+	var call_stack: Array = []
+	## 挂起时保存的方法上下文 (super() 定位)
+	var cur_class = null
+	## 挂起时保存的 self/cls 上下文
+	var cur_self = null
+	## 是否已启动 (首次 step 后为 true)
+	var _started: bool = false
+	## 是否已结束 (耗尽/return/异常后为 true)
+	var _finished: bool = false
+	## 是否挂起在 yield 上
+	var _suspended: bool = false
+	## 当前语句重执行时的 yield 位置计数 (每条语句开始时重置为 0)
+	var _yield_pos: int = 0
+	## 挂起的 yield 位置 (1-based, 0 表示无待注入)
+	var _pending_yield_index: int = 0
+	## 待注入的 send 值 (next() 注入 None)
+	var _send_value: DSLObject = null
+	## 待注入的抛出异常标记 (throw/close)
+	var _throw_pending: bool = false
+	## 待注入的异常对象
+	var _throw_value = null
+	## yield from 的子迭代器状态列表, 每项 {"expr": YieldExpr, "iter": DSLIterator, "val": DSLObject}
+	var _yield_from_states: Array = []
+	## 最近一次 yield 产出的值
+	var _yielded_value: DSLObject = null
+	## return 值 (StopIteration.value)
+	var _result_value: DSLObject = null
+	## 共享迭代器 (一次性语义)
+	var _iterator: DSLFunctionGeneratorIterator = null
+	## 生成器名称 (repr 用)
+	var _name: String = "<genexpr>"
+
+	## 构造生成器对象 [br]
+	## [param p_interp] 解释器引用 [br]
+	## [param p_func] 生成器函数对象 [br]
+	## [param p_env] 参数绑定后的局部环境
+	func _init(p_interp: Interpreter, p_func: DSLFunction, p_env: DSLEnvironment):
+		super._init()
+		interp = p_interp
+		function = p_func
+		local_env = p_env
+		body = p_func.declaration.body
+		_name = p_func.declaration.name
+		_result_value = _none()
+
+	func _type_name() -> String:
+		return "generator"
+
+	func _dsl_str() -> String:
+		return "<generator object %s>" % _name
+
+	func _dsl_bool() -> bool:
+		return true
+
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new("<generator object %s>" % _name)
+
+	## 返回共享迭代器, 使生成器保持一次性语义
+	func _dsl_iter() -> DSLIterator:
+		if _iterator == null:
+			_iterator = DSLFunctionGeneratorIterator.new(self)
+		return _iterator
+
+	## 生成器协议方法 (send/throw/close/__next__) 的属性访问 [br]
+	## [param name] 属性名 [br]
+	## [returns] DSLBuiltinFunction 包装或委托给基类
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "send":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_send"))
+		if name == "throw":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_throw"))
+		if name == "close":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_close"))
+		if name == "__next__":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_next"))
+		return super._dsl_getattribute(name)
+
+	## 使预取缓冲失效 (send/throw/close 绕过迭代器直接驱动后调用)
+	func _invalidate_iter() -> void:
+		if _iterator != null:
+			_iterator._invalidate()
+
+	## 驱动生成器执行一步 [br]
+	## 通过栈切换: 保存解释器的 environment/_exec_stack/_call_stack/_current_class/_current_self, [br]
+	## 换上本生成器的挂起状态, 恢复执行函数体, 再换回调用方状态 [br]
+	## [returns] 1=产出一个值 (存于 _yielded_value), 2=正常结束 (return 值存于 _result_value), 3=异常结束
+	func _step() -> int:
+		if _finished:
+			return 2
+		var ip = interp
+		var pcs = []
+		for fr in exec_stack:
+			pcs.append(fr.get("pc", -1))
+		# 保存解释器当前状态 (调用方)
+		var caller_env = ip.environment
+		var caller_exec = ip._exec_stack
+		var caller_call = ip._call_stack
+		var caller_class = ip._current_class
+		var caller_self = ip._current_self
+		var caller_suspended = ip._suspended
+		var caller_waiting = ip._is_waiting
+		var caller_reason = ip._suspend_reason
+		var caller_expr_eval = ip._expr_evaluated
+		var caller_gen = ip._current_generator
+		# 首次启动且带注入异常 (throw 到未启动生成器): 在函数体开头注入抛出语句
+		if not _started and _throw_pending:
+			_started = true
+			var injected: Array = [RaiseStmt.new(Literal.new(_throw_value))]
+			injected.append_array(function.declaration.body)
+			body = injected
+			_throw_pending = false
+			_throw_value = null
+		# 换上生成器状态
+		ip.environment = local_env
+		ip._exec_stack = exec_stack
+		ip._call_stack = call_stack
+		ip._current_class = cur_class
+		ip._current_self = cur_self
+		ip._suspended = false
+		ip._is_waiting = false
+		ip._suspend_reason = Interpreter.SuspendReason.NONE
+		ip._expr_evaluated = false
+		ip._current_generator = self
+		# 恢复执行函数体 (帧查找按 statements/env 身份匹配)
+		var res = ip.exec_block(body, local_env)
+		# 处理执行结果
+		var step_result = 1
+		if res == Interpreter.ExecResult.NORMAL:
+			_finished = true
+			_result_value = _none()
+			step_result = 2
+		elif res == Interpreter.ExecResult.RETURN:
+			_finished = true
+			_result_value = ip.return_value if ip.return_value != null else _none()
+			step_result = 2
+		elif res == Interpreter.ExecResult.RAISE or res == Interpreter.ExecResult.ERROR:
+			_finished = true
+			step_result = 3
+		elif res == Interpreter.ExecResult.SUSPENDED:
+			if ip._suspend_reason != Interpreter.SuspendReason.YIELD:
+				# 生成器体内调用 sleep/挂起 → v0.4.0 明确报错
+				_finished = true
+				ip.raise_exception("RuntimeError", "generator body cannot suspend: sleep() is not supported inside a generator")
+				step_result = 3
+			else:
+				_suspended = true
+				step_result = 1
+		# 保存生成器状态
+		exec_stack = ip._exec_stack
+		call_stack = ip._call_stack
+		cur_class = ip._current_class
+		cur_self = ip._current_self
+		_suspended = ip._suspended
+		_started = true
+		# 换回调用方状态
+		ip.environment = caller_env
+		ip._exec_stack = caller_exec
+		ip._call_stack = caller_call
+		ip._current_class = caller_class
+		ip._current_self = caller_self
+		ip._suspended = caller_suspended
+		ip._is_waiting = caller_waiting
+		ip._suspend_reason = caller_reason
+		ip._expr_evaluated = caller_expr_eval
+		ip._current_generator = caller_gen
+		return step_result
+
+	## 取缓存的 None 单例 (保证 `is None` 身份语义) [br]
+	## 直接 DSLNone.new() 会创建新实例, 使 `x is None` 误判为假 [br]
+	## [returns] DSLNone 单例
+	func _none() -> DSLObject:
+		if interp == null:
+			return DSLNone.new()
+		return interp.get_none()
+
+	## 取走待注入的 send 值 (未设置时为 None) [br]
+	## [returns] 注入值
+	func _take_send_value() -> DSLObject:
+		var sv = _send_value
+		_send_value = null
+		if sv == null:
+			sv = _none()
+		return sv
+
+	## 生成器方法: send(value) [br]
+	## 恢复执行并把 value 注入为挂起 yield 表达式的结果 (next() 注入 None) [br]
+	## [param args] [value] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] 产出的值, 结束/出错时返回 null (异常由解释器记录)
+	func _dsl_send(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			interp.raise_exception("TypeError", "send() takes exactly one argument (%d given)" % args.size())
+			return null
+		var value = args[0]
+		if not _started and not (value is DSLNone):
+			interp.raise_exception("TypeError", "can't send non-None value to a just-started generator")
+			return null
+		if _finished:
+			interp.raise_stop_iteration_value(_result_value)
+			return null
+		_invalidate_iter()
+		_send_value = value
+		var res = _step()
+		if res == 1:
+			return _yielded_value
+		if res == 3:
+			return null
+		interp.raise_stop_iteration_value(_result_value)
+		return null
+
+	## 生成器方法: throw(type[, value]) [br]
+	## 在挂起位置抛出异常; 未启动生成器在函数体开头抛出 [br]
+	## [param args] [type, value?] 或 [实例] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] 产出的值, 结束/出错时返回 null
+	func _dsl_throw(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if _finished:
+			interp.raise_stop_iteration_value(_result_value)
+			return null
+		var exc = _throw_arg_to_exception(args)
+		if exc == null:
+			return null
+		_invalidate_iter()
+		_throw_pending = true
+		_throw_value = exc
+		var res = _step()
+		if res == 1:
+			return _yielded_value
+		if res == 3:
+			return null
+		interp.raise_stop_iteration_value(_result_value)
+		return null
+
+	## 生成器方法: close() [br]
+	## 在挂起位置注入 GeneratorExit; 生成器捕获并继续产出时抛 RuntimeError [br]
+	## [param args] 无 [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLNone
+	func _dsl_close(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if _finished:
+			return _none()
+		if not _started:
+			_finished = true
+			return _none()
+		var exc_class = interp.globals.get_val_safe("GeneratorExit")
+		var exc = null
+		if exc_class is DSLClass:
+			exc = exc_class.magic_call([], {})
+		else:
+			exc = DSLException.new("", "GeneratorExit")
+		_invalidate_iter()
+		_throw_pending = true
+		_throw_value = exc
+		var res = _step()
+		if res == 1:
+			# 生成器捕获了 GeneratorExit 并继续产出
+			_finished = true
+			interp.raise_exception("RuntimeError", "generator ignored GeneratorExit")
+			return null
+		# 结束或异常: GeneratorExit 静默 (close 成功), 其他异常原样传播
+		if interp.last_exception != null and interp.last_exception._type_name() == "GeneratorExit":
+			interp.report.clear_error()
+			interp.last_exception = null
+		return _none()
+
+	## 生成器方法: __next__() [br]
+	## 与 next(g) 等价, 直接驱动一步 [br]
+	## [param args] 无 [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] 产出的值
+	func _dsl_next(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if _finished:
+			interp.raise_stop_iteration_value(_result_value)
+			return null
+		_invalidate_iter()
+		var res = _step()
+		if res == 1:
+			return _yielded_value
+		if res == 3:
+			return null
+		interp.raise_stop_iteration_value(_result_value)
+		return null
+
+	## 将 throw 参数转换为异常实例 [br]
+	## 支持 throw(类型), throw(类型, 值), throw(实例) [br]
+	## [param args] 方法参数 [br]
+	## [returns] 异常实例, 出错时返回 null
+	func _throw_arg_to_exception(args: Array[DSLObject]):
+		if args.size() == 0:
+			interp.raise_exception("TypeError", "throw() takes at least 1 argument (0 given)")
+			return null
+		var first = args[0]
+		if first is DSLClass:
+			var ctor_args: Array[DSLObject] = []
+			if args.size() >= 2:
+				ctor_args.append(args[1])
+			var inst = first.magic_call(ctor_args, {})
+			if inst == null or interp.report.has_error:
+				return null
+			return inst
+		if first is DSLException:
+			return first
+		if first.fields != null:
+			var exc_type = interp.globals.get_val_safe("Exception")
+			if exc_type is DSLClass and first._is_subclass_of_klass(exc_type):
+				return first
+		interp.raise_exception("TypeError", "thrown value is not an exception")
+		return null
+
 ## 变量作用域环境, 管理变量的定义, 读写和作用域链 [br]
 ## 支持 global/nonlocal 声明, 通过 enclosing 链实现嵌套作用域
 class DSLEnvironment:
@@ -6798,6 +7193,8 @@ class Parser:
 			var stmt = declaration()
 			if stmt != null:
 				statements.append(stmt)
+		if not report.has_error:
+			_walk_yield_stmt(statements, 0)
 		return statements
 		
 	## 检查是否已到达 Token 流末尾 [br]
@@ -7604,6 +8001,8 @@ class Parser:
 			return finish_call_or_index(Variable.new(name))
 		if match_types([TokenType.LAMBDA]):
 			return lambda_expression()
+		if match_types([TokenType.YIELD]):
+			return yield_expression()
 		if match_types([TokenType.LPAREN]):
 			return finish_call_or_index(parse_group_or_generator())
 		if match_types([TokenType.LBRACKET]):
@@ -7677,6 +8076,253 @@ class Parser:
 		if body == null or report.has_error:
 			return null
 		return LambdaExpr.new(params, body)
+
+	## 解析 yield 表达式: yield [from] [expr] [br]
+	## yield 可作独立语句或任意表达式位置 (Python 3 语义), 值表达式吸收完整元组 [br]
+	## [returns] YieldExpr 节点, 出错时返回 null
+	func yield_expression() -> Expr:
+		var y = YieldExpr.new(null)
+		if match_types([TokenType.FROM]):
+			var from_val = tuple_expression()
+			if report.has_error or from_val == null:
+				return null
+			y.from_expr = from_val
+			return y
+		if _starts_expression():
+			var val = tuple_expression()
+			if report.has_error or val == null:
+				return null
+			y.value = val
+		return y
+
+	## 判断当前 Token 是否可作表达式开头 [br]
+	## 用于区分裸 yield 与 yield expr [br]
+	## [returns] 当前 Token 可开始表达式时返回 true
+	func _starts_expression() -> bool:
+		if is_at_end():
+			return false
+		var starters = [TokenType.INTEGER, TokenType.FLOAT, TokenType.STRING, TokenType.FSTRING,
+			TokenType.TRUE, TokenType.FALSE, TokenType.NULL,
+			TokenType.IDENTIFIER, TokenType.LAMBDA, TokenType.YIELD,
+			TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE,
+			TokenType.MINUS, TokenType.BANG, TokenType.TILDE, TokenType.NOT]
+		return starters.has(peek().type)
+
+	## 编译期检测 yield 用法 (在解析完成后遍历整棵 AST) [br]
+	## 规则: 函数外 yield 报 SyntaxError; 推导式内直接 yield 报 SyntaxError; [br]
+	## 函数体含 yield 时标记 FunctionStmt.is_generator; lambda 体直接含 yield 时标记为生成器 lambda [br]
+	## [param stmts] 语句数组 [br]
+	## [param scope] 0=模块/类体(非函数), 1=函数体, 2=lambda 体 [br]
+	## [returns] 本作用域内是否含直接 yield
+	func _walk_yield_stmt(stmts: Array, scope: int) -> bool:
+		var found = false
+		for stmt in stmts:
+			if stmt is FunctionStmt:
+				stmt.is_generator = _walk_yield_stmt(stmt.body, 1)
+				for p in stmt.params:
+					if p.default_value != null:
+						_walk_yield_expr(p.default_value, scope, "")
+			elif stmt is ClassStmt:
+				_walk_yield_stmt(stmt.body, 0)
+			elif stmt is ExpressionStmt:
+				if _walk_yield_expr(stmt.expression, scope, ""):
+					found = true
+			elif stmt is IfStmt:
+				_walk_yield_expr(stmt.condition, scope, "")
+				if _walk_yield_stmt(stmt.then_branch, scope):
+					found = true
+				for branch in stmt.elif_branches:
+					_walk_yield_expr(branch[0], scope, "")
+					if _walk_yield_stmt(branch[1], scope):
+						found = true
+				if _walk_yield_stmt(stmt.else_branch, scope):
+					found = true
+			elif stmt is WhileStmt:
+				_walk_yield_expr(stmt.condition, scope, "")
+				if _walk_yield_stmt(stmt.body, scope):
+					found = true
+			elif stmt is ForStmt:
+				_walk_yield_expr(stmt.iterable, scope, "")
+				if _walk_yield_stmt(stmt.body, scope):
+					found = true
+			elif stmt is ReturnStmt:
+				if stmt.value != null and _walk_yield_expr(stmt.value, scope, ""):
+					found = true
+			elif stmt is TryStmt:
+				if _walk_yield_stmt(stmt.try_body, scope):
+					found = true
+				for clause in stmt.except_clauses:
+					if clause.exception_type != null:
+						_walk_yield_expr(clause.exception_type, scope, "")
+					if _walk_yield_stmt(clause.body, scope):
+						found = true
+				if _walk_yield_stmt(stmt.finally_body, scope):
+					found = true
+			elif stmt is RaiseStmt:
+				if stmt.expression != null and _walk_yield_expr(stmt.expression, scope, ""):
+					found = true
+			elif stmt is AssertStmt:
+				_walk_yield_expr(stmt.test, scope, "")
+				if stmt.message != null:
+					_walk_yield_expr(stmt.message, scope, "")
+			elif stmt is DelStmt:
+				for t in stmt.targets:
+					_walk_yield_expr(t, scope, "")
+		return found
+
+	## 递归遍历表达式, 检测 yield 用法 [br]
+	## [param expr] 表达式节点 [br]
+	## [param scope] 0=模块/类体, 1=函数体, 2=lambda 体, -1=推导式内部 [br]
+	## [param comp_err] 非空时表示处于推导式内, 遇到 yield 报该错误 [br]
+	## [returns] 本作用域内是否含直接 yield (嵌套函数/lambda/推导式的 yield 不计)
+	func _walk_yield_expr(expr, scope: int, comp_err: String) -> bool:
+		if expr == null:
+			return false
+		if expr is YieldExpr:
+			if comp_err != "":
+				report.error(comp_err)
+				return false
+			if scope == 0:
+				report.error("SyntaxError: 'yield' outside function")
+				return false
+			if expr.value != null:
+				_walk_yield_expr(expr.value, scope, comp_err)
+			if expr.from_expr != null:
+				_walk_yield_expr(expr.from_expr, scope, comp_err)
+			return true
+		if expr is LambdaExpr:
+			if expr.body != null and _walk_yield_expr(expr.body, 2, ""):
+				expr.is_generator = true
+			for p in expr.params:
+				if p.default_value != null:
+					_walk_yield_expr(p.default_value, scope, comp_err)
+			return false
+		if expr is ListComp or expr is SetComp or expr is GenComp:
+			_walk_comp_yield(expr, "SyntaxError: invalid syntax")
+			return false
+		if expr is DictComp:
+			_walk_comp_yield(expr, "SyntaxError: 'yield' inside dict comprehension")
+			return false
+		if expr is Assign:
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is WalrusExpr:
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is AugAssign:
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is AugAssignAttr:
+			if _walk_yield_expr(expr.object, scope, comp_err):
+				return true
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is AugAssignItem:
+			if _walk_yield_expr(expr.object, scope, comp_err):
+				return true
+			if _walk_yield_expr(expr.index, scope, comp_err):
+				return true
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is GetItem:
+			if _walk_yield_expr(expr.object, scope, comp_err):
+				return true
+			return _walk_yield_expr(expr.index, scope, comp_err)
+		if expr is SetItem:
+			if _walk_yield_expr(expr.object, scope, comp_err):
+				return true
+			if _walk_yield_expr(expr.index, scope, comp_err):
+				return true
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is SliceExpr:
+			if expr.start != null and _walk_yield_expr(expr.start, scope, comp_err):
+				return true
+			if expr.stop != null and _walk_yield_expr(expr.stop, scope, comp_err):
+				return true
+			if expr.step != null and _walk_yield_expr(expr.step, scope, comp_err):
+				return true
+			return false
+		if expr is CompareChainExpr:
+			if _walk_yield_expr(expr.left, scope, comp_err):
+				return true
+			for cmp in expr.comparators:
+				if _walk_yield_expr(cmp, scope, comp_err):
+					return true
+			return false
+		if expr is Binary:
+			if _walk_yield_expr(expr.left, scope, comp_err):
+				return true
+			return _walk_yield_expr(expr.right, scope, comp_err)
+		if expr is Unary:
+			return _walk_yield_expr(expr.right, scope, comp_err)
+		if expr is GetAttr:
+			return _walk_yield_expr(expr.object, scope, comp_err)
+		if expr is SetAttr:
+			if _walk_yield_expr(expr.object, scope, comp_err):
+				return true
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is Call:
+			if _walk_yield_expr(expr.callee_expr, scope, comp_err):
+				return true
+			for a in expr.arguments:
+				if _walk_yield_expr(a, scope, comp_err):
+					return true
+			for sa in expr.star_args:
+				if _walk_yield_expr(sa, scope, comp_err):
+					return true
+			for skw in expr.star_kwargs:
+				if _walk_yield_expr(skw, scope, comp_err):
+					return true
+			for kw in expr.keyword_args:
+				if _walk_yield_expr(kw.value, scope, comp_err):
+					return true
+			return false
+		if expr is ListLiteral or expr is TupleLiteral or expr is SetLiteral:
+			for e in expr.elements:
+				if _walk_yield_expr(e, scope, comp_err):
+					return true
+			return false
+		if expr is DictLiteral:
+			for k in expr.keys:
+				if _walk_yield_expr(k, scope, comp_err):
+					return true
+			for v in expr.values:
+				if _walk_yield_expr(v, scope, comp_err):
+					return true
+			return false
+		if expr is StarredExpr:
+			return _walk_yield_expr(expr.value, scope, comp_err)
+		if expr is UnpackAssign:
+			if _walk_yield_expr(expr.value, scope, comp_err):
+				return true
+			return false
+		if expr is ConditionalExpr:
+			if _walk_yield_expr(expr.condition, scope, comp_err):
+				return true
+			if _walk_yield_expr(expr.true_expr, scope, comp_err):
+				return true
+			return _walk_yield_expr(expr.false_expr, scope, comp_err)
+		if expr is FStringExpr:
+			for part in expr.parts:
+				if part.expr != null and _walk_yield_expr(part.expr, scope, comp_err):
+					return true
+			return false
+		if expr is SuperExpr:
+			for a in expr.arguments:
+				if _walk_yield_expr(a, scope, comp_err):
+					return true
+			return false
+		return false
+
+	## 遍历推导式的子表达式, 遇到直接 yield 时按 [param err_msg] 报错 [br]
+	## 嵌套 lambda 内的 yield 属于 lambda 自身, 不计入推导式 [br]
+	## [param expr] 推导式节点 [br]
+	## [param err_msg] 报错文案 (dict 推导式与其余推导式不同)
+	func _walk_comp_yield(expr, err_msg: String) -> void:
+		if expr is DictComp:
+			_walk_yield_expr(expr.key_expr, -1, err_msg)
+			_walk_yield_expr(expr.value_expr, -1, err_msg)
+		else:
+			_walk_yield_expr(expr.elt_expr, -1, err_msg)
+		for clause in expr.clauses:
+			_walk_yield_expr(clause.iterable, -1, err_msg)
+			for cond in clause.conditions:
+				_walk_yield_expr(cond, -1, err_msg)
 
 	## 解析 super(...) 调用 [br]
 	## 支持零参数 super() 与双参数 super(Class, obj) [br]
@@ -8518,6 +9164,17 @@ class Interpreter:
 	var _expr_evaluated: bool = false
 	## 挂起类型 (false = SLEEPING(自动恢复) / true = WAITING(手动恢复))
 	var _is_waiting: bool = false
+	## 挂起原因枚举: 用于区分程序挂起 (sleep/waiting) 与生成器 yield
+	enum SuspendReason {
+		NONE = 0,
+		SLEEPING = 1,
+		WAITING = 2,
+		YIELD = 3
+	}
+	## 当前挂起原因 (见 SuspendReason)
+	var _suspend_reason: int = SuspendReason.NONE
+	## 当前正在执行步骤的生成器 (生成器体内 yield 定位与 sleep 拦截用)
+	var _current_generator = null
 	## 当前执行语句的行号 (运行时错误定位)
 	var _current_line: int = 0
 	## 当前正在执行的方法所属的类 (super() 定位)
@@ -8541,6 +9198,14 @@ class Interpreter:
 		environment = globals
 		register_builtins()
 	
+	## 取 None 单例, 必要时初始化缓存 [br]
+	## 保证同一解释器内 None 的身份唯一 (`x is None` 依赖于此) [br]
+	## [returns] DSLNone 单例
+	func get_none() -> DSLNone:
+		if _cached_none == null:
+			_cached_none = DSLNone.new()
+		return _cached_none
+
 	## 抛出 DSL 异常, 设置 last_exception 并报告错误 [br]
 	## 若已知当前语句行号, 会在错误消息后附加 "(line N)"
 	func raise_exception(err_type: String, msg: String):
@@ -8554,7 +9219,65 @@ class Interpreter:
 		if _current_line > 0:
 			line_suffix = " (line %d)" % _current_line
 		report.error(err_type + ": " + msg + line_suffix)
-	
+
+	## 抛出携带 value 的 StopIteration (生成器 return 值) [br]
+	## 异常实例的 args 为空, value 字段存入 return 值 (与 CPython 一致) [br]
+	## [param value_obj] StopIteration.value 值
+	func raise_stop_iteration_value(value_obj: DSLObject):
+		var exc_class = globals.get_val("StopIteration")
+		if exc_class is DSLClass:
+			last_exception = exc_class.magic_call([], {})
+			last_exception.fields["value"] = value_obj
+			last_exception.fields["args"] = DSLTuple.new([])
+		else:
+			last_exception = DSLException.new("", "StopIteration")
+		var line_suffix = ""
+		if _current_line > 0:
+			line_suffix = " (line %d)" % _current_line
+		report.error("StopIteration: " + line_suffix)
+
+	## 抛出已构造的异常实例 (throw/close 注入用) [br]
+	## [param exc] 异常实例 (DSLException 或 DSLInstance wrapper)
+	func raise_existing_exception(exc):
+		var is_valid = false
+		var err_type = ""
+		var err_msg = ""
+		if exc is DSLException:
+			is_valid = true
+			err_type = exc.error_type
+			err_msg = exc.message
+		elif exc.fields != null:
+			var exc_type = globals.get_val_safe("Exception")
+			if exc_type is DSLClass and exc._is_subclass_of_klass(exc_type):
+				is_valid = true
+			elif _is_registered_exception_instance(exc):
+				is_valid = true
+			if is_valid:
+				err_type = exc._type_name()
+				if exc._wrapped != null and exc._wrapped is DSLException:
+					err_msg = exc._wrapped.message
+				elif exc.fields.has("args") and exc.fields["args"] is DSLTuple and exc.fields["args"].items.size() > 0:
+					err_msg = exc.fields["args"].items[0]._dsl_str()
+		if is_valid:
+			last_exception = exc
+			report.error(err_type + ": " + err_msg)
+		else:
+			raise_exception("TypeError", "exceptions must derive from Exception")
+
+	## 判断对象是否为已注册异常类的实例 [br]
+	## 覆盖不继承 Exception 的内置异常 (如 GeneratorExit, 继承自 BaseException) [br]
+	## [param exc] 对象 [br]
+	## [returns] 是已注册异常类的实例时返回 true
+	func _is_registered_exception_instance(exc) -> bool:
+		if exc.klass == null:
+			return false
+		var c = exc.klass
+		while c != null:
+			if exception_hierarchy.has(c.name):
+				return true
+			c = c.superclass
+		return false
+		
 	## 尝试调用实例类的 magic 方法, 失败时回退 fallback [br]
 	## [param obj] 目标对象 [br]
 	## [param method_name] magic 方法名称 [br]
@@ -8900,6 +9623,7 @@ class Interpreter:
 		_define_exception("ArithmeticError")
 		_define_exception("ZeroDivisionError", "ArithmeticError")
 		_define_exception("StopIteration")
+		_define_exception("GeneratorExit", "")
 		_define_exception("AssertionError")
 		_define_exception("EOFError")
 		_define_exception("ImportError")
@@ -10918,6 +11642,10 @@ class Interpreter:
 		if stmt is Stmt:
 			_current_line = stmt.line
 			
+		# 重置当前生成器的 yield 位置计数 (每条语句一个计数周期)
+		if _current_generator != null:
+			_current_generator._yield_pos = 0
+			
 		step_count += 1
 		if step_count > max_steps:
 			raise_exception("RuntimeError", "maximum step count exceeded")
@@ -10985,6 +11713,12 @@ class Interpreter:
 			# 检查 resume_info 是否跳过条件求值
 			var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
 			var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
+			if ri.get("type") == "while_else":
+				# 恢复被挂起的 else 体
+				var we_env = ri.get("else_env")
+				if we_env == null:
+					we_env = DSLEnvironment.new(environment.report, environment)
+				return exec_block(stmt.get_meta("_else_body"), we_env)
 			var skip_cond = ri.get("type") == "while"
 			
 			var did_break = false
@@ -11016,7 +11750,12 @@ class Interpreter:
 					return res
 			if not did_break and stmt.has_meta("_else_body"):
 				var else_body = stmt.get_meta("_else_body")
-				exec_block(else_body, DSLEnvironment.new(environment.report, environment))
+				var we_env = DSLEnvironment.new(environment.report, environment)
+				if _exec_stack.size() > 0:
+					_exec_stack.back().resume_info = {"type": "while_else", "else_env": we_env}
+				var else_res = exec_block(else_body, we_env)
+				if else_res != ExecResult.NORMAL:
+					return else_res
 			return ExecResult.NORMAL
 			
 		if stmt is ForStmt:
@@ -11025,10 +11764,19 @@ class Interpreter:
 			var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
 			var iterator = null
 			var did_break = false
+			var is_body_resume = false
+			
+			if ri.get("type") == "for_else":
+				# 恢复被挂起的 else 体
+				var fe_env = ri.get("else_env")
+				if fe_env == null:
+					fe_env = DSLEnvironment.new(environment.report, environment)
+				return exec_block(stmt.get_meta("_else_body"), fe_env)
 			
 			if ri.get("type") == "for":
 				# 从 resume_info 恢复迭代器
 				iterator = ri.get("iterator")
+				is_body_resume = ri.get("body_resume", false)
 				if iterator == null:
 					raise_exception("RuntimeError", "cannot resume for loop: iterator lost")
 					return ExecResult.RAISE
@@ -11045,35 +11793,37 @@ class Interpreter:
 					raise_exception_from_last_error(iterable.last_error if iterable.last_error else "TypeError: object is not iterable")
 					return ExecResult.RAISE
 			
-			while iterator.has_next():
-				var item = iterator.next()
-				if stmt.variables.size() == 1:
-					environment.set_val(stmt.variables[0], item)
+			var first_iter = true
+			while true:
+				# 恢复被挂起的 body 时不推进迭代器 (循环变量仍是挂起迭代的值)
+				if is_body_resume and first_iter:
+					is_body_resume = false
 				else:
-					var seq = item
-					if item is DSLList or item is DSLTuple:
-						seq = item.items
-					elif typeof(item) == TYPE_ARRAY:
-						seq = item
+					if not iterator.has_next():
+						break
+					var item = iterator.next()
+					if stmt.variables.size() == 1:
+						environment.set_val(stmt.variables[0], item)
 					else:
-						raise_exception("TypeError", "Cannot unpack non-sequence")
-						return ExecResult.RAISE
-					if seq.size() != stmt.variables.size():
-						raise_exception("ValueError", "Unpacking mismatch: expected %d, got %d" % [stmt.variables.size(), seq.size()])
-						return ExecResult.RAISE
-					for j in range(stmt.variables.size()):
-						environment.set_val(stmt.variables[j], seq[j] if seq[j] is DSLObject else _wrap(seq[j]))
+						var seq = item
+						if item is DSLList or item is DSLTuple:
+							seq = item.items
+						elif typeof(item) == TYPE_ARRAY:
+							seq = item
+						else:
+							raise_exception("TypeError", "Cannot unpack non-sequence")
+							return ExecResult.RAISE
+						if seq.size() != stmt.variables.size():
+							raise_exception("ValueError", "Unpacking mismatch: expected %d, got %d" % [stmt.variables.size(), seq.size()])
+							return ExecResult.RAISE
+						for j in range(stmt.variables.size()):
+							environment.set_val(stmt.variables[j], seq[j] if seq[j] is DSLObject else _wrap(seq[j]))
+				first_iter = false
 				
 				# 设置 resume_info
 				var f = _exec_stack.back() if _exec_stack.size() > 0 else null
 				if f != null and f is Dictionary:
-					f.resume_info = {"type": "for", "iterator": iterator}
-				
-				# 清除之前迭代残留的 body frame (防止跨迭代复用导致跳过执行)
-				for _j in range(_exec_stack.size() - 1, -1, -1):
-					if _exec_stack[_j].statements == stmt.body and _exec_stack[_j].env == environment:
-						_exec_stack.remove_at(_j)
-						break
+					f.resume_info = {"type": "for", "iterator": iterator, "body_resume": true}
 				
 				var res = exec_block(stmt.body, environment)
 				if res == ExecResult.BREAK:
@@ -11085,7 +11835,12 @@ class Interpreter:
 					return res
 			if not did_break and stmt.has_meta("_else_body"):
 				var else_body = stmt.get_meta("_else_body")
-				exec_block(else_body, DSLEnvironment.new(environment.report, environment))
+				var fe_env = DSLEnvironment.new(environment.report, environment)
+				if _exec_stack.size() > 0:
+					_exec_stack.back().resume_info = {"type": "for_else", "else_env": fe_env}
+				var else_res = exec_block(else_body, fe_env)
+				if else_res != ExecResult.NORMAL:
+					return else_res
 			return ExecResult.NORMAL
 			
 		if stmt is FunctionStmt:
@@ -11250,24 +12005,52 @@ class Interpreter:
 				return ExecResult.RAISE
 		
 		if stmt is TryStmt:
-			var res = exec_block(stmt.try_body, environment)
+			var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
+			var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
+			var stage = ri.get("try_stage", "")
+			var exc_idx = ri.get("except_idx", 0)
+			var res = ExecResult.NORMAL
 			
+			if stage == "except":
+				# 恢复被挂起的 except 体 (从保存的 pc 继续)
+				if exc_idx < stmt.except_clauses.size():
+					res = exec_block(stmt.except_clauses[exc_idx].body, environment)
+				if res == ExecResult.RAISE or res == ExecResult.SUSPENDED:
+					return res
+			elif stage == "finally":
+				# 恢复被挂起的 finally 体
+				return exec_block(stmt.finally_body, environment)
+			else:
+				# 首次执行或恢复 try 体
+				if stage != "try" and _exec_stack.size() > 0:
+					_exec_stack.back().resume_info = {"try_stage": "try"}
+				res = exec_block(stmt.try_body, environment)
+				if res == ExecResult.SUSPENDED:
+					return res
+			
+			# 处理 try 体结果 (异常分发, 首次执行与 try 体恢复后共用)
 			if res == ExecResult.RAISE:
 				var caught = false
-				for clause in stmt.except_clauses:
+				for i in range(stmt.except_clauses.size()):
+					var clause = stmt.except_clauses[i]
 					if _is_exception_match(last_exception, clause.exception_type):
 						report.clear_error()
 						if clause.as_name != "":
 							environment.define(clause.as_name, last_exception)
+						if _exec_stack.size() > 0:
+							_exec_stack.back().resume_info = {"try_stage": "except", "except_idx": i}
 						res = exec_block(clause.body, environment)
-						if res != ExecResult.RAISE:
-							last_exception = null
-							caught = true
+						if res == ExecResult.RAISE or res == ExecResult.SUSPENDED:
+							return res
+						last_exception = null
+						caught = true
 						break
 				if not caught:
 					res = ExecResult.RAISE
 			
 			if stmt.finally_body.size() > 0:
+				if _exec_stack.size() > 0:
+					_exec_stack.back().resume_info = {"try_stage": "finally"}
 				var saved_has_error = report.has_error
 				report.has_error = false
 				var fin_res = exec_block(stmt.finally_body, environment)
@@ -11307,7 +12090,9 @@ class Interpreter:
 			return ExecResult.NORMAL
 			
 		return ExecResult.NORMAL
-	
+
+	## 执行 yield from 语句 (语句级执行器) [br]
+	## 子迭代器状态保存在当前帧的 resume_info 中, 恢复时从挂起点继续 [br]
 	## 对二元表达式求值, 返回对应的 DSLObject [br]
 	## 通过 _call_magic_or_fallback 先查类方法, 再 fallback 到内置 magic_* 多态方法 [br]
 	## [param left] 左操作数 [br]
@@ -11377,6 +12162,8 @@ class Interpreter:
 	func evaluate(expr) -> DSLObject:
 		if _suspended:
 			return null
+		if expr is YieldExpr:
+			return _evaluate_yield(expr)
 		if expr is Literal:
 			return _wrap(expr.value)
 			
@@ -11622,6 +12409,9 @@ class Interpreter:
 		if expr is Call:
 			# 拦截 sleep 内置函数
 			if expr.callee_expr is Variable and expr.callee_expr.name == "sleep":
+				if _current_generator != null:
+					raise_exception("RuntimeError", "sleep() cannot be called inside a generator")
+					return null
 				if expr.arguments.size() != 1:
 					raise_exception("TypeError", "sleep() takes exactly 1 argument (%d given)" % expr.arguments.size())
 					return null
@@ -11643,6 +12433,7 @@ class Interpreter:
 					return null
 				_suspended = true
 				_is_waiting = false
+				_suspend_reason = SuspendReason.SLEEPING
 				if owner != null:
 					owner.request_suspend_sleeping(sleep_num)
 				return DSLNone.new()
@@ -11896,6 +12687,98 @@ class Interpreter:
 
 		return DSLNone.new()
 
+	## 求值 yield 表达式 [br]
+	## 首次执行: 求值产出值后挂起 (返回 null 触发上层空值传播), 并把挂起的 yield 位置记录到当前生成器 [br]
+	## 语句重执行: 按 yield 位置注入 send 值 (throw 时在挂起位置抛出异常) [br]
+	## yield from 委托给 _eval_yield_from (按节点保存子迭代器状态) [br]
+	## [param expr] YieldExpr 节点 [br]
+	## [returns] 注入值或挂起占位 null
+	func _evaluate_yield(expr: YieldExpr) -> DSLObject:
+		if expr.from_expr != null:
+			return _eval_yield_from(expr)
+		var gen = _current_generator
+		if gen == null:
+			raise_exception("SyntaxError", "'yield' outside function")
+			return null
+		gen._yield_pos += 1
+		# 注入抛出 (throw/close): 在挂起的 yield 位置抛出
+		if gen._throw_pending and gen._pending_yield_index > 0 and gen._yield_pos == gen._pending_yield_index:
+			gen._throw_pending = false
+			var exc = gen._throw_value
+			gen._throw_value = null
+			gen._pending_yield_index = 0
+			raise_existing_exception(exc)
+			return null
+		# 已产出过的 yield: 注入 send 值 (不挂起)
+		if gen._pending_yield_index > 0 and gen._yield_pos <= gen._pending_yield_index:
+			if gen._yield_pos == gen._pending_yield_index:
+				gen._pending_yield_index = 0
+			return gen._take_send_value()
+		# 首次执行: 求值产出值并挂起
+		var yielded: DSLObject = get_none()
+		if expr.value != null:
+			yielded = evaluate(expr.value)
+			if _suspended:
+				return null
+			if yielded == null:
+				return null
+		gen._yielded_value = yielded
+		gen._pending_yield_index = gen._yield_pos
+		gen._send_value = null
+		_suspended = true
+		_suspend_reason = SuspendReason.YIELD
+		return null
+
+	## 求值 yield from 表达式 [br]
+	## 委托给子可迭代对象: 逐个产出其元素, 耗尽后表达式的值为子生成器的 return 值 [br]
+	## 子迭代器状态按 YieldExpr 节点身份保存在当前生成器的 _yield_from_states 中, [br]
+	## 语句重执行时从挂起点继续 (无需位置计数, 与普通 yield 互不干扰) [br]
+	## [param expr] YieldExpr 节点 (from_expr 非空) [br]
+	## [returns] 产出的元素或子 return 值, 挂起/出错时返回 null
+	func _eval_yield_from(expr: YieldExpr) -> DSLObject:
+		var gen = _current_generator
+		if gen == null:
+			raise_exception("SyntaxError", "'yield' outside function")
+			return null
+		# 恢复时检查注入异常 (throw/close): 在 yield from 位置抛出
+		if gen._throw_pending:
+			gen._throw_pending = false
+			var exc = gen._throw_value
+			gen._throw_value = null
+			raise_existing_exception(exc)
+			return null
+		# 查找已保存的子迭代器状态 (语句重执行时恢复)
+		var state = null
+		for s in gen._yield_from_states:
+			if s.expr == expr:
+				state = s
+				break
+		if state == null:
+			var from_val = evaluate(expr.from_expr)
+			if _suspended:
+				return null
+			if from_val == null or report.has_error:
+				return null
+			var sub_iter = from_val._dsl_iter()
+			if sub_iter == null:
+				raise_exception_from_last_error(from_val.last_error if from_val.last_error != "" else "TypeError: object is not iterable")
+				return null
+			state = {"expr": expr, "iter": sub_iter, "val": from_val}
+			gen._yield_from_states.append(state)
+		var iter = state.iter
+		if iter.has_next():
+			var item = iter.next()
+			gen._yielded_value = item
+			_suspended = true
+			_suspend_reason = SuspendReason.YIELD
+			return null
+		# 子迭代器耗尽: 移除状态, 返回子生成器的 return 值
+		gen._yield_from_states.erase(state)
+		var from_val = state.val
+		if from_val is DSLFunctionGenerator and from_val._finished:
+			return from_val._result_value
+		return get_none()
+
 	## 求值字面量中的一个元素, 遇 * 解包时展开为多个元素 [br]
 	## [param e] 元素表达式 (可能为 StarredExpr) [br]
 	## [param target] 收集结果的数组 (实际类型 Array[DSLObject]) [br]
@@ -12006,6 +12889,7 @@ class Interpreter:
 	func _make_lambda_function(expr: LambdaExpr) -> DSLFunction:
 		var body: Array[Stmt] = [ReturnStmt.new(expr.body)]
 		var fstmt = FunctionStmt.new("<lambda>", expr.params, body)
+		fstmt.is_generator = expr.is_generator
 		var func_obj = DSLFunction.new(fstmt, environment)
 		func_obj._cls_interp = self
 		func_obj._defining_class = _current_class
@@ -12034,6 +12918,8 @@ class Interpreter:
 				continue
 			var val = evaluate(part.expr)
 			if val == null:
+				if _suspended:
+					return null
 				return DSLString.new(result)
 			# = 调试说明符: 输出 "表达式源码=值" (默认 repr, 显式 !s/!r/!a 覆盖, 有格式说明符时按格式)
 			if part.get("debug", false):
@@ -12556,6 +13442,14 @@ class Interpreter:
 			if p.is_kwargs and not local.values.has(p.name):
 				local.define(p.name, DSLDict.new())
 				
+		# 生成器函数: 参数绑定完成后不执行函数体, 立即返回生成器对象
+		if function.declaration.is_generator:
+			var gen = DSLFunctionGenerator.new(self, function, local)
+			gen.cur_class = function._defining_class
+			if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
+				gen.cur_self = args[0]
+			return gen
+			
 		# 检查 _call_stack 是否有恢复信息 (嵌套函数调用挂起恢复)
 		var saved_env = null
 		var saved_pc = 0
@@ -13947,6 +14841,11 @@ class Interpreter:
 				return iter.next()
 		if args.size() == 2:
 			return args[1]
+		if report.has_error:
+			return null
+		if it is DSLFunctionGenerator and it._finished:
+			raise_stop_iteration_value(it._result_value)
+			return null
 		raise_exception("StopIteration", "")
 		return null
 	
@@ -14672,8 +15571,12 @@ var state: State = State.IDLE
 func request_suspend_sleeping(value: float, on_resume: Callable = Callable()) -> void:
 	if state != State.RUNNING or interpreter == null:
 		return
+	if interpreter._current_generator != null:
+		interpreter.raise_exception("RuntimeError", "sleep() cannot be called inside a generator")
+		return
 	interpreter._suspended = true
 	interpreter._is_waiting = false
+	interpreter._suspend_reason = Interpreter.SuspendReason.SLEEPING
 	state = State.SUSPENDED_SLEEPING
 	if on_resume.is_valid():
 		_sleeping_resume_callback = on_resume
@@ -14690,8 +15593,12 @@ func request_suspend_sleeping(value: float, on_resume: Callable = Callable()) ->
 func request_suspend_waiting(on_resume: Callable = Callable()) -> void:
 	if state != State.RUNNING or interpreter == null:
 		return
+	if interpreter._current_generator != null:
+		interpreter.raise_exception("RuntimeError", "request_suspend_waiting() cannot be called inside a generator")
+		return
 	interpreter._suspended = true
 	interpreter._is_waiting = true
+	interpreter._suspend_reason = Interpreter.SuspendReason.WAITING
 	state = State.SUSPENDED_WAITING
 	_waiting_resume_callback = on_resume
 

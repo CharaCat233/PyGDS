@@ -21,6 +21,7 @@ PyGDS 实现了与 Python 高度一致的内置类型系统
 | `DSLSet` | `set` | 可变 | 否 |
 | `DSLFrozenSet` | `frozenset` | 不可变 | 是 |
 | `DSLGenerator` | `generator` | 可变 | 否 |
+| `DSLFunctionGenerator` | `generator` | 可变 | 否 |
 | `DSLSlice` | `slice` | 不可变 | 是 |
 | `DSLItemGetter` | `operator.itemgetter` | 不可变 | 否 |
 | `DSLAttrGetter` | `operator.attrgetter` | 不可变 | 否 |
@@ -267,6 +268,60 @@ list(x * y for x in [1, 2] for y in [10, 20])   # [10, 20, 20, 40] (多 for 子�
 > **注意**：生成器为**一次性迭代器**，多次迭代不会从头开始；`next()` 超出时抛 `StopIteration`
 > （可传默认值 `next(g, default)`）。`list`/`tuple`/`sum`/`sorted`/`any`/`all`/`enumerate`/`zip`/
 > `min`/`max` 等消费函数均通过 `_dsl_iter()` 接受生成器，`itertools.islice` 可惰性消费无限生成器
+
+### DSLFunctionGenerator — 生成器函数类型
+
+对应 Python 生成器函数（`generator`），由 `def` 内含 `yield` 的函数调用创建
+
+调用时**不执行函数体**、立即返回惰性生成器对象；持有函数声明/闭包、参数绑定后的局部环境，以及挂起时保存的解释器执行栈（栈切换机制见 `architecture.md` 的「生成器函数与栈切换」节）
+
+```gdscript
+class DSLFunctionGenerator extends DSLObject:
+    # 持有 function / local_env / body 与挂起时保存的 exec_stack / call_stack / cur_class / cur_self
+    # _step() 通过栈切换驱动函数体推进一个 yield, 共享的 DSLFunctionGeneratorIterator 实现一次性迭代
+```
+
+```python
+def gen():
+    yield 1
+    yield 2
+type(gen())             # <class 'generator'>
+list(gen())             # [1, 2]
+next(gen())             # 1 (逐次推进)
+
+# 表达式级 yield: x = yield v 恢复时注入 send 值
+def gexpr():
+    x = yield 10
+    yield x
+g = gexpr()
+next(g)                 # 10
+g.send("hi")            # 'hi' (x 为 send 值)
+
+# yield from 委托子可迭代对象
+def gsub():
+    yield from [1, 2, 3]
+list(gsub())            # [1, 2, 3]
+
+# send / throw / close
+g.send(value)           # 注入值恢复 (send(None) 可启动)
+g.throw(ValueError("e"))  # 在挂起位置抛出异常
+g.close()               # 注入 GeneratorExit, finally 执行
+
+# return value → StopIteration.value
+def gret():
+    yield 1
+    return 42
+it = gret()
+next(it)
+try:
+    next(it)
+except StopIteration as e:
+    e.value            # 42
+```
+
+> **注意**：生成器函数同样是**一次性迭代器**；耗尽后再 `next()` 抛 `StopIteration`（携带 `return` 值），`next(g, default)` 返回默认值，`for` / `list()` 耗尽时正常结束
+> 生成器体内调用 `sleep()` 会明确报错，与挂起系统暂不共存
+> lambda 体内直接含 `yield`（Python 3.12+）也会生成 lambda 生成器
 
 #### 循环子句 (CompClause)
 

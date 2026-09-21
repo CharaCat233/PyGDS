@@ -21,6 +21,7 @@ All DSL types inherit from the `DSLObject` base class, simulating Python's magic
 | `DSLSet` | `set` | Mutable | No |
 | `DSLFrozenSet` | `frozenset` | Immutable | Yes |
 | `DSLGenerator` | `generator` | Mutable | No |
+| `DSLFunctionGenerator` | `generator` | Mutable | No |
 | `DSLSlice` | `slice` | Immutable | Yes |
 | `DSLItemGetter` | `operator.itemgetter` | Immutable | No |
 | `DSLAttrGetter` | `operator.attrgetter` | Immutable | No |
@@ -265,6 +266,56 @@ list(x * y for x in [1, 2] for y in [10, 20])   # [10, 20, 20, 40] (multiple for
 
 > **Note**: Generators are **one-shot iterators**; iterating again does not restart. `next()` past the end raises `StopIteration` (a default can be given: `next(g, default)`). The consumers `list`/`tuple`/`sum`/`sorted`/`any`/`all`/`enumerate`/`zip`/`min`/`max` all accept generators via `_dsl_iter()`, and `itertools.islice` can lazily consume infinite generators.
 
+### DSLFunctionGenerator — Generator Function Type
+
+Corresponds to a Python generator function (`generator`), created by calling a `def` whose body contains `yield`. Calling it **does not execute the body** and immediately returns a lazy generator object; it holds the function declaration/closure, the parameter-bound local environment, and the interpreter execution stacks saved while suspended (see "Generator Functions and Stack Switching" in `architecture.md`).
+
+```gdscript
+class DSLFunctionGenerator extends DSLObject:
+    # holds function / local_env / body, plus exec_stack / call_stack / cur_class / cur_self saved while suspended
+    # _step() drives the body forward one yield via stack switching; a shared DSLFunctionGeneratorIterator implements one-shot iteration
+```
+
+```python
+def gen():
+    yield 1
+    yield 2
+type(gen())             # <class 'generator'>
+list(gen())             # [1, 2]
+next(gen())             # 1 (advance one step)
+
+# expression-level yield: x = yield v injects the send value on resume
+def gexpr():
+    x = yield 10
+    yield x
+g = gexpr()
+next(g)                 # 10
+g.send("hi")            # 'hi' (x is the send value)
+
+# yield from delegates to a sub-iterable
+def gsub():
+    yield from [1, 2, 3]
+list(gsub())            # [1, 2, 3]
+
+# send / throw / close
+g.send(value)           # resume, injecting value (send(None) starts the generator)
+g.throw(ValueError("e"))  # raise at the suspended yield position
+g.close()               # inject GeneratorExit; finally still runs
+
+# return value → StopIteration.value
+def gret():
+    yield 1
+    return 42
+it = gret()
+next(it)
+try:
+    next(it)
+except StopIteration as e:
+    e.value            # 42
+```
+
+> **Note**: Generator functions are also **one-shot iterators**; `next()` past the end raises `StopIteration` (carrying the `return` value), `next(g, default)` returns the default, and `for` / `list()` finish normally when exhausted. Calling `sleep()` inside a generator body raises a clear error — generator functions do not yet coexist with the suspend system. A lambda whose body directly contains `yield` (Python 3.12+) also produces a generator lambda.
+
 #### Loop Clauses (CompClause)
 
 Generator expressions and every kind of comprehension share `CompClause` to describe their loops: each clause carries an array of target variable names, the iterable expression, and an array of `if` conditions. Several clauses nest in the order written (inner clauses may reference outer loop variables).
@@ -292,6 +343,7 @@ lst[slice(0, 6, 2)]         # equivalent to lst[0:6:2]
 lst[slice(4, 0, -1)]        # negative step reverses
 
 ```
+
 ## Iterator System
 
 PyGDS provides specialized iterator implementations for different collection types.

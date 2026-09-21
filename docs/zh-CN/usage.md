@@ -641,6 +641,92 @@ list(islice((x * x for x in count()), 5))   # [0, 1, 4, 9, 16] (配合无限序�
 > 旧代码若直接对结果下标/`len()`/调用列表方法会报错，需先用 `list(g)` / `tuple(g)` 转换
 > 生成器为**一次性迭代器**，重复迭代不会从头开始
 
+### 生成器函数 (`yield`)
+
+`def` 函数体内含 `yield` 即为生成器函数：**调用时不执行函数体**，返回惰性生成器对象，每次 `next()` / `send()` / `for` 从上次 `yield` 之后继续执行。局部变量跨 `yield` 保持，闭包正常可见：
+
+```python
+def counter(n):
+    i = 0
+    while i < n:
+        yield i
+        i += 1
+
+type(counter(3))        # <class 'generator'>
+list(counter(3))        # [0, 1, 2]
+next(counter(3))        # 0 (逐次推进, 一次性迭代器)
+
+g = counter(2)
+print(next(g), next(g)) # 0 1
+print(list(g))          # [] (已耗尽)
+print(list(g))          # [] (重复迭代不从头开始)
+
+# for / 消费函数均可用
+total = 0
+for x in counter(4):
+    total += x
+print(total)            # 6
+print(sum(counter(5)))  # 10
+```
+
+**表达式级 `yield` 与 `send`**：`yield` 是表达式，恢复时注入 `send` 值（`next()` 注入 `None`）：
+
+```python
+def echo():
+    v = yield "start"
+    yield v
+
+g = echo()
+print(next(g))          # start
+print(g.send("hello"))  # hello (v 为 send 值)
+```
+
+**`yield from` 委托**：把子可迭代对象的元素逐个产出，耗尽后表达式的值为子生成器的 `return` 值（`send` / `throw` 不转发给子生成器，`x = yield from it` 赋值形式暂不支持）：
+
+```python
+def sub():
+    yield 1
+    return "done"
+def parent():
+    r = yield from sub()
+    yield "got:" + r
+list(parent())          # [1, 'got:done']
+```
+
+**`throw` / `close`**：在挂起位置注入异常 / `GeneratorExit`（`finally` 正常执行）：
+
+```python
+def guarded():
+    try:
+        yield 1
+    except ValueError:
+        yield "handled"
+    finally:
+        print("cleanup")
+
+g = guarded()
+next(g)                 # 1
+print(g.throw(ValueError("e")))   # handled
+g.close()               # cleanup
+```
+
+**`return` 值 → `StopIteration.value`**：生成器 `return value` 时，`next()` 超出的 `StopIteration` 携带该值：
+
+```python
+def with_value():
+    yield 1
+    return 42
+g = with_value()
+next(g)
+try:
+    next(g)
+except StopIteration as e:
+    print(e.value)      # 42
+```
+
+> **⚠️ 破坏性变更（v0.4.0）**：`yield` 现为保留关键字，不能再用作变量名等标识符
+> **⚠️ 已知差异**：生成器体内调用 `sleep()` 会报错（与挂起系统暂不共存）；`yield` 恢复采用语句重执行，含副作用的前缀表达式会在恢复时重复求值（如 `f(a(), (yield 1))` 中 `a()` 执行两次）；`x = yield from it` 赋值形式不支持
+
 ### `slice` 对象
 
 `slice(start, stop[, step])` 构造切片对象，可保存复用，用于 `lst[slice(...)]` / `"str"[slice(...)]`：
