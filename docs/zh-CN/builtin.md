@@ -506,6 +506,173 @@ list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
 
 ---
 
+## 内置模块 (import)
+
+PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math` 与 `random` 两个纯逻辑模块（引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
+
+### import 语法
+
+```python
+import math                       # 导入整个模块
+import math as m                  # 别名
+from math import sqrt             # 导入单个成员
+from math import sqrt as s, pi    # 别名与多个成员
+from math import *                # 导入所有公开成员 (非下划线开头)
+```
+
+### `math` 模块
+
+| 类别 | 成员 |
+| :--- | :--- |
+| 常量 | `pi` `e` `tau` |
+| 基础 | `sqrt` `isqrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` |
+| 指数/对数 | `exp` `log` `log2` `log10` |
+| 三角函数 | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
+| 角度 | `degrees` `radians` |
+| 整数 | `factorial` `gcd` `comb` `perm` `prod` `lcm` |
+| 符号 | `copysign` |
+| 判定 | `isnan` `isinf` `isfinite` |
+
+```python
+import math
+math.sqrt(16)        # 4.0
+math.floor(3.7)      # 3
+math.gcd(12, 18)     # 6
+math.factorial(5)    # 120
+math.comb(5, 2)      # 10   (组合数)
+math.perm(5, 2)      # 20   (排列数)
+math.prod([2, 3, 4]) # 24   (连乘, start 为关键字参数)
+math.lcm(4, 6)       # 12   (最小公倍数)
+```
+
+### `random` 模块
+
+| 函数 | 说明 |
+| :--- | :--- |
+| `seed(n)` | 设置随机种子（可复现序列） |
+| `random()` | 返回 `[0, 1)` 的浮点数 |
+| `uniform(a, b)` | 返回 `[a, b]` 的浮点数 |
+| `randint(a, b)` | 返回 `[a, b]` 的整数（含端点） |
+| `randrange(start, stop, step)` | 返回范围内的随机整数 |
+| `choice(seq)` | 从序列中随机选一个元素 |
+| `shuffle(seq)` | 原地打乱列表 |
+| `sample(population, k)` | 返回 k 个不重复的随机元素 |
+
+```python
+import random
+random.seed(42)
+random.random()        # [0, 1) 内
+random.randint(1, 6)   # 1..6 内
+```
+
+> **注意**：PyGDS 使用内置 xorshift32 PRNG，数值序列与 CPython 的 Mersenne Twister **不同**；但 `seed()` 可保证在 PyGDS 内部复现相同序列
+
+### `statistics` 模块
+
+| 函数 | 说明 |
+| :--- | :--- |
+| `mean(data)` | 算术平均值 |
+| `median(data)` | 中位数（偶数个取中间两数平均） |
+| `mode(data)` | 众数（出现次数最多的元素，适用于任意可哈希类型） |
+| `stdev(data)` | 样本标准差（除以 n-1） |
+| `pstdev(data)` | 总体标准差（除以 n） |
+| `variance(data)` | 样本方差（除以 n-1） |
+| `pvariance(data)` | 总体方差（除以 n） |
+
+```python
+import statistics
+statistics.mean([1, 2, 3, 4])        # 2.5
+statistics.median([1, 2, 3, 4])      # 2.5
+statistics.mode([1, 2, 2, 3])        # 2
+round(statistics.stdev([1, 2, 3]), 6)  # 1.0
+```
+
+### `functools` 模块
+
+| 函数 | 说明 |
+| :--- | :--- |
+| `reduce(func, iterable[, initial])` | 从左到右累积归约 |
+| `partial(func, *args, **kwargs)` | 偏函数（预绑定部分参数） |
+
+```python
+from functools import reduce, partial
+reduce(lambda a, b: a + b, [1, 2, 3, 4])   # 10
+add5 = partial(lambda a, b: a + b, 5)
+add5(3)                                    # 8
+```
+
+### `itertools` 模块（常用子集）
+
+| 函数 | 说明 |
+| :--- | :--- |
+| `chain(*iterables)` | 拼接多个可迭代对象 |
+| `product(*iterables)` | 笛卡尔积，返回元组流 |
+| `combinations(iterable, r)` | 长度为 r 的组合 |
+| `permutations(iterable[, r])` | 长度为 r 的排列 |
+| `islice(iterable, start, stop[, step])` | 惰性切片（等价于 `iterable[start:stop:step]`） |
+| `repeat(obj[, times])` | 重复对象；指定 times 返回列表，否则返回无限对象 |
+| `cycle(iterable)` | 无限循环序列（返回无限对象） |
+| `count(start=0, step=1)` | 无限递增计数（返回无限对象） |
+| `zip_longest(*iterables, fillvalue=None)` | 以最长可迭代对象为准并行配对，不足处用 fillvalue 填充 |
+| `takewhile(predicate, iterable)` | 取满足谓词的开头元素，遇首个不满足即止 |
+| `dropwhile(predicate, iterable)` | 丢弃满足谓词的开头元素，其余原样返回 |
+
+```python
+from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
+list(chain([1, 2], [3], [4, 5]))       # [1, 2, 3, 4, 5]
+list(product([1, 2], [3, 4]))          # [(1, 3), (1, 4), (2, 3), (2, 4)]
+list(combinations([1, 2, 3], 2))       # [(1, 2), (1, 3), (2, 3)]
+list(permutations([1, 2]))             # [(1, 2), (2, 1)]
+list(islice([1, 2, 3, 4, 5], 1, 4))    # [2, 3, 4]
+list(repeat(5, 3))                     # [5, 5, 5]
+list(islice(cycle([1, 2]), 4))         # [1, 2, 1, 2]
+list(islice(count(10, 5), 3))          # [10, 15, 20]
+list(zip_longest([1, 2], [3], fillvalue=0))  # [(1, 3), (2, 0)]
+list(takewhile(lambda x: x < 4, [1, 2, 5]))  # [1, 2]
+list(dropwhile(lambda x: x < 3, [1, 2, 3, 4]))  # [3, 4]
+```
+
+> **注意**：这些函数当前返回完整的 `list`（`list(chain(...))` 直接得到结果，不需要再包一层 `list()`）。无限对象（`repeat`/`cycle`/`count`）必须配合 `islice`/`takewhile` 等惰性消费，不能直接 `list()`
+
+### `collections` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `Counter(iterable)` | 元素计数，缺失键返回 0（底层为 defaultdict(int)） |
+| `Counter.most_common(n=None)` | 按出现次数降序返回 `[(元素, 次数)]` 列表，同次数按插入顺序 |
+| `defaultdict(default_factory[, init_dict])` | 缺失键自动调用工厂创建默认值 |
+
+```python
+from collections import Counter, defaultdict
+Counter("abca")              # Counter({'a': 2, 'b': 1, 'c': 1})
+c = Counter("abc"); c["z"]   # 0
+c.most_common()              # [('a', 1), ('b', 1), ('c', 1)]
+c.most_common(1)             # [('a', 1)]
+dd = defaultdict(list); dd["a"].append(1)   # dd["a"] → [1]
+```
+
+### `string` 模块（字符串常量）
+
+| 常量 | 值 |
+| :--- | :--- |
+| `ascii_lowercase` | `'abcdefghijklmnopqrstuvwxyz'` |
+| `ascii_uppercase` | `'ABCDEFGHIJKLMNOPQRSTUVWXYZ'` |
+| `ascii_letters` | `ascii_lowercase + ascii_uppercase` |
+| `digits` | `'0123456789'` |
+| `hexdigits` | `'0123456789abcdefABCDEF'` |
+| `octdigits` | `'01234567'` |
+| `punctuation` | ASCII 标点符号（32 个） |
+| `whitespace` | `' \t\n\r\v\f'` |
+| `printable` | `digits + ascii_letters + punctuation + whitespace` |
+
+```python
+import string
+string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+string.digits          # '0123456789'
+```
+
+---
+
 ## 内置类型的方法
 
 除了全局内置函数，每个内置类型（`str`、`list`、`tuple`、`dict`）还提供了对标 Python 的方法

@@ -18,10 +18,12 @@ All DSL types inherit from the `DSLObject` base class, simulating Python's magic
 | `DSLList` | `list` | Mutable | No |
 | `DSLTuple` | `tuple` | Immutable | Yes |
 | `DSLDict` | `dict` | Mutable | No |
+| `DSLSet` | `set` | Mutable | No |
+| `DSLFrozenSet` | `frozenset` | Immutable | Yes |
 
 ---
 
-## DSLInteger — Integer Type
+### DSLInteger — Integer Type
 
 ```gdscript
 class DSLInteger extends DSLObject:
@@ -33,7 +35,7 @@ Has a **type promotion mechanism**.
 
 When `DSLInteger` is operated on with `DSLFloat`, the integer is automatically promoted to float. See the `PyGDS.DSLInteger._promote` method for details.
 
-## DSLFloat — Float Type
+### DSLFloat — Float Type
 
 ```gdscript
 class DSLFloat extends DSLObject:
@@ -45,7 +47,7 @@ Has a **type promotion mechanism**.
 
 When `DSLInteger` is operated on with `DSLFloat`, the integer is automatically promoted to float. See the `PyGDS.DSLFloat._promote` method for details.
 
-## DSLBool — Boolean Type
+### DSLBool — Boolean Type
 
 ```gdscript
 class DSLBool extends DSLObject:
@@ -65,7 +67,7 @@ static var _cached_false: DSLBool  # Singleton of DSLBool.new(false)
 
 When the interpreter encounters the literal `True` or `False`, it does not create a new `DSLBool` instance, but instead returns the cached singleton.
 
-## DSLNone — None Type
+### DSLNone — None Type
 
 ```gdscript
 class DSLNone extends DSLObject:
@@ -83,7 +85,7 @@ static var _cached_none: DSLNone   # Singleton of DSLNone.new()
 
 When the interpreter encounters the literal `None`, it does not create a new `DSLNone` instance, but instead returns the cached singleton.
 
-## DSLString — String Type
+### DSLString — String Type
 
 ```gdscript
 class DSLString extends DSLObject:
@@ -91,7 +93,7 @@ class DSLString extends DSLObject:
     var value: String
 ```
 
-## DSLList — List Type
+### DSLList — List Type
 
 ```gdscript
 class DSLList extends DSLObject:
@@ -110,7 +112,7 @@ static func _unwrap_dsl(obj: DSLObject) -> DSLObject:
     return obj
 ```
 
-## DSLTuple — Tuple Type
+### DSLTuple — Tuple Type
 
 ```gdscript
 class DSLTuple extends DSLObject:
@@ -118,7 +120,7 @@ class DSLTuple extends DSLObject:
     var items: Array[DSLObject]
 ```
 
-## DSLDict — Dictionary Type
+### DSLDict — Dictionary Type
 
 ```gdscript
 class DSLDict extends DSLObject:
@@ -138,6 +140,102 @@ Has a special **key type restriction mechanism**.
 | `DSLBool` | `bool` |
 
 The `PyGDS.DSLDict._key_to_variant` method is responsible for this conversion. If the key type is not in the above list, it returns `null` and sets a `TypeError: unhashable type`.
+
+### DSLSet — Set Type
+
+Corresponds to Python `set`. Elements must be hashable objects (`int`/`float`/`str`/`bool`/`None`/`tuple`), deduplicated by value
+
+```gdscript
+class DSLSet extends DSLObject:
+    # canonical key -> DSLObject mapping (keys like "i:5" / "s:abc")
+    var items: Dictionary
+```
+
+#### Literal and Construction
+
+```python
+{1, 2, 3}          # set literal (elements without colons)
+set()              # empty set
+set([1, 1, 2])     # construct from an iterable → {1, 2}
+set("abca")        # per character → {'a', 'b', 'c'}
+```
+
+> **Note**: `{}` is an empty dict; use `set()` for an empty set.
+
+#### Set Operations
+
+| Operator | Method | Description |
+| :--- | :--- | :--- |
+| `a \| b` | `a.union(b)` | Union |
+| `a & b` | `a.intersection(b)` | Intersection |
+| `a - b` | `a.difference(b)` | Difference |
+| `a ^ b` | `a.symmetric_difference(b)` | Symmetric difference |
+| `a == b` | — | Content equality (order-independent) |
+| `a < b` / `a <= b` | `a.issubset(b)` | Proper subset / subset |
+| `a > b` / `a >= b` | `a.issuperset(b)` | Proper superset / superset |
+| `a.isdisjoint(b)` | — | Whether disjoint |
+
+```python
+s = {1, 2, 3}
+len(s)              # 3
+2 in s              # True
+sorted(s)           # [1, 2, 3] (sets are unordered; sort for output)
+{1, 2} | {2, 3}     # {1, 2, 3}
+isinstance(s, set)  # True
+```
+
+#### Hashability Rules
+
+- Hashable: `int`/`float`/`str`/`bool`/`None`/`tuple` (including nested), `frozenset`
+- Unhashable: `list`/`dict`/`set` → raising `TypeError: unhashable type` when added
+
+#### Set Comprehensions
+
+```python
+{x * x for x in [1, 2, 3, 2]}              # {1, 4, 9} (auto-deduplicated)
+{x for x in range(6) if x % 2 == 0}        # {0, 2, 4}
+{s.upper() for s in ["a", "b", "a"]}       # {'A', 'B'}
+```
+
+### DSLFrozenSet — Immutable Set Type
+
+Corresponds to Python `frozenset`: same content and operations as `set`, but **immutable** (no `add`/`remove`/`discard`/`pop`/`clear`), hence **hashable** — it can be nested in `set` / used as a `dict` key / be an element of another `frozenset`
+
+```gdscript
+class DSLFrozenSet extends DSLSet:
+    # immutable: inherits set storage, but removes mutating methods
+```
+
+#### Construction
+
+```python
+frozenset([1, 2, 2, 3])    # frozenset({1, 2, 3}) (auto-deduplicated)
+frozenset()                # empty frozenset
+frozenset({1, 2, 3})       # construct from a set
+frozenset("aabbc")         # frozenset({'a', 'b', 'c'})
+```
+
+#### Operations (all return a new frozenset)
+
+```python
+a = frozenset([1, 2, 3])
+b = frozenset([2, 3, 4])
+a | b                # frozenset({1, 2, 3, 4})  union
+a & b                # frozenset({2, 3})        intersection
+a - b                # frozenset({1})           difference
+a ^ b                # frozenset({1, 4})        symmetric difference
+```
+
+> **Note**: `frozenset` can be directly compared with `set` (`frozenset([1, 2]) == {1, 2}` is `True`), and can be mixed with `set` in operations; the result is always a `frozenset`.
+
+#### Hashability
+
+```python
+s = {frozenset([1, 2]), frozenset([2, 1]), frozenset([1, 2, 3])}
+len(s)               # 2 (the first two deduplicate by content)
+isinstance(frozenset([1]), frozenset)   # True
+isinstance({1}, frozenset)              # False
+```
 
 ## Iterator System
 
@@ -395,15 +493,28 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "a,b,c".rsplit(",", 1)    # ["a,b", "c"]
 ```
 
-#### `str.format(*args)` → `str`
+#### `str.format(*args, **kwargs)` → `str`
 
 ```python
-# Python: str.format(*args)
-"{} {}".format("a", 1)    # "a 1"
-"{0} {1}".format("a", 1)  # "a 1"
+# Python: str.format(*args, **kwargs)
+"{} {}".format("a", 1)          # "a 1"
+"{0} {1}".format("a", 1)        # "a 1"
+"{name}".format(name="Alice")   # "Alice"
 ```
 
-> **Note**: Only positional placeholders `{}` and `{0}` are supported. Keyword arguments and format specifiers are not supported.
+**Format specifiers**: supports positional/keyword arguments as well as alignment, fill, sign, zero-padding, width, thousands separator, precision and type (same specifier syntax as f-strings)
+
+```python
+"{:.2f}".format(3.14159)        # 3.14
+"{0:04d}".format(42)            # 0042
+"{:x}".format(255)              # ff
+"{:>8}".format("hi")            # "      hi"
+"{:*^6}".format("ab")           # **ab**
+"{:,}".format(12345)            # 12,345
+"{0!r:>10}".format("hi")        # "      'hi'"
+```
+
+**Conversion flags**: `!r` (repr), `!s` (str), `!a` (ascii); escaped braces `{{` / `}}`
 
 ---
 
@@ -587,3 +698,113 @@ d = {"a": 1, "b": 2}; d.items()     # [("a", 1), ("b", 2)]
 ```
 
 > **Note**: The `start`/`end` range parameters are not currently supported.
+
+### set Methods
+
+#### `set.add(x)` → `None`
+
+```python
+# Python: set.add(x)
+s = {1, 2}; s.add(3)          # {1, 2, 3}
+```
+
+#### `set.remove(x)` → `None`
+
+```python
+# Python: set.remove(x)
+s = {1, 2, 3}; s.remove(2)    # {1, 3}; raises KeyError if missing
+```
+
+#### `set.discard(x)` → `None`
+
+```python
+# Python: set.discard(x)
+s = {1, 2, 3}; s.discard(9)   # no error if missing
+```
+
+#### `set.pop()` → `object`
+
+```python
+# Python: set.pop()
+s = {1, 2, 3}; s.pop()        # pops an arbitrary element, raises KeyError on empty
+```
+
+#### `set.clear()` → `None`
+
+```python
+# Python: set.clear()
+s = {1, 2}; s.clear()         # set()
+```
+
+#### `set.copy()` → `set`
+
+```python
+# Python: set.copy()
+s = {1, 2}; s.copy()          # {1, 2} (shallow copy)
+```
+
+#### `set.union(other)` → `set`
+
+```python
+# Python: set.union(other)
+{1, 2}.union({2, 3})          # {1, 2, 3} (same as a | b)
+```
+
+#### `set.intersection(other)` → `set`
+
+```python
+# Python: set.intersection(other)
+{1, 2}.intersection({2, 3})   # {2} (same as a & b)
+```
+
+#### `set.difference(other)` → `set`
+
+```python
+# Python: set.difference(other)
+{1, 2, 3}.difference({2})     # {1, 3} (same as a - b)
+```
+
+#### `set.symmetric_difference(other)` → `set`
+
+```python
+# Python: set.symmetric_difference(other)
+{1, 2}.symmetric_difference({2, 3})   # {1, 3} (same as a ^ b)
+```
+
+#### `set.isdisjoint(other)` → `bool`
+
+```python
+# Python: set.isdisjoint(other)
+{1, 2}.isdisjoint({3, 4})     # True
+```
+
+#### `set.issubset(other)` → `bool`
+
+```python
+# Python: set.issubset(other)
+{1, 2}.issubset({1, 2, 3})    # True (same as a <= b)
+```
+
+#### `set.issuperset(other)` → `bool`
+
+```python
+# Python: set.issuperset(other)
+{1, 2, 3}.issuperset({1})     # True (same as a >= b)
+```
+
+### frozenset Methods
+
+`frozenset` is read-only; the operation methods all return a new `frozenset` and behave like the corresponding `set` methods (see above):
+
+| Method | Description |
+| :--- | :--- |
+| `copy()` | Shallow copy |
+| `union(other)` | Union (same as `a \| b`) |
+| `intersection(other)` | Intersection (same as `a & b`) |
+| `difference(other)` | Difference (same as `a - b`) |
+| `symmetric_difference(other)` | Symmetric difference (same as `a ^ b`) |
+| `isdisjoint(other)` | Whether disjoint |
+| `issubset(other)` | Subset (same as `a <= b`) |
+| `issuperset(other)` | Superset (same as `a >= b`) |
+
+---

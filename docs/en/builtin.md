@@ -506,6 +506,173 @@ list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
 
 ---
 
+## Built-in Modules (import)
+
+PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides two pure-logic modules, `math` and `random` (engine-related capabilities are better exposed through `register_api()` from the GDScript side).
+
+### import Syntax
+
+```python
+import math                       # import the whole module
+import math as m                  # alias
+from math import sqrt             # import a single member
+from math import sqrt as s, pi    # alias and multiple members
+from math import *                # import all public members (non-underscore)
+```
+
+### `math` Module
+
+| Category | Members |
+| :--- | :--- |
+| Constants | `pi` `e` `tau` |
+| Basics | `sqrt` `isqrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` |
+| Exponential/log | `exp` `log` `log2` `log10` |
+| Trigonometry | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
+| Angles | `degrees` `radians` |
+| Integer | `factorial` `gcd` `comb` `perm` `prod` `lcm` |
+| Sign | `copysign` |
+| Predicates | `isnan` `isinf` `isfinite` |
+
+```python
+import math
+math.sqrt(16)        # 4.0
+math.floor(3.7)      # 3
+math.gcd(12, 18)     # 6
+math.factorial(5)    # 120
+math.comb(5, 2)      # 10   (combinations)
+math.perm(5, 2)      # 20   (permutations)
+math.prod([2, 3, 4]) # 24   (product; start is a keyword argument)
+math.lcm(4, 6)       # 12   (least common multiple)
+```
+
+### `random` Module
+
+| Function | Description |
+| :--- | :--- |
+| `seed(n)` | Set the random seed (reproducible sequences) |
+| `random()` | Float in `[0, 1)` |
+| `uniform(a, b)` | Float in `[a, b]` |
+| `randint(a, b)` | Integer in `[a, b]` (inclusive) |
+| `randrange(start, stop, step)` | Random integer from the range |
+| `choice(seq)` | A random element from a sequence |
+| `shuffle(seq)` | Shuffle a list in place |
+| `sample(population, k)` | k distinct random elements |
+
+```python
+import random
+random.seed(42)
+random.random()        # in [0, 1)
+random.randint(1, 6)   # in 1..6
+```
+
+> **Note**: PyGDS uses a built-in xorshift32 PRNG, whose value sequence differs from CPython's Mersenne Twister; however `seed()` guarantees reproducible sequences within PyGDS.
+
+### `statistics` Module
+
+| Function | Description |
+| :--- | :--- |
+| `mean(data)` | Arithmetic mean |
+| `median(data)` | Median (average of the two middle values for even counts) |
+| `mode(data)` | Most frequent element (any hashable type) |
+| `stdev(data)` | Sample standard deviation (n-1) |
+| `pstdev(data)` | Population standard deviation (n) |
+| `variance(data)` | Sample variance (n-1) |
+| `pvariance(data)` | Population variance (n) |
+
+```python
+import statistics
+statistics.mean([1, 2, 3, 4])        # 2.5
+statistics.median([1, 2, 3, 4])      # 2.5
+statistics.mode([1, 2, 2, 3])        # 2
+round(statistics.stdev([1, 2, 3]), 6)  # 1.0
+```
+
+### `functools` Module
+
+| Function | Description |
+| :--- | :--- |
+| `reduce(func, iterable[, initial])` | Left-to-right accumulation |
+| `partial(func, *args, **kwargs)` | Partial function (pre-binds some arguments) |
+
+```python
+from functools import reduce, partial
+reduce(lambda a, b: a + b, [1, 2, 3, 4])   # 10
+add5 = partial(lambda a, b: a + b, 5)
+add5(3)                                    # 8
+```
+
+### `itertools` Module (Common Subset)
+
+| Function | Description |
+| :--- | :--- |
+| `chain(*iterables)` | Concatenate multiple iterables |
+| `product(*iterables)` | Cartesian product, yields tuples |
+| `combinations(iterable, r)` | r-length combinations |
+| `permutations(iterable[, r])` | r-length permutations |
+| `islice(iterable, start, stop[, step])` | Lazy slice (equivalent to `iterable[start:stop:step]`) |
+| `repeat(obj[, times])` | Repeat an object; with `times` returns a list, otherwise an infinite object |
+| `cycle(iterable)` | Infinite cycling over a sequence (returns an infinite object) |
+| `count(start=0, step=1)` | Infinite counter (returns an infinite object) |
+| `zip_longest(*iterables, fillvalue=None)` | Pair by the longest iterable, filling missing slots with `fillvalue` |
+| `takewhile(predicate, iterable)` | Take elements while the predicate holds, stop at the first failure |
+| `dropwhile(predicate, iterable)` | Drop elements while the predicate holds, then return the rest |
+
+```python
+from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
+list(chain([1, 2], [3], [4, 5]))       # [1, 2, 3, 4, 5]
+list(product([1, 2], [3, 4]))          # [(1, 3), (1, 4), (2, 3), (2, 4)]
+list(combinations([1, 2, 3], 2))       # [(1, 2), (1, 3), (2, 3)]
+list(permutations([1, 2]))             # [(1, 2), (2, 1)]
+list(islice([1, 2, 3, 4, 5], 1, 4))    # [2, 3, 4]
+list(repeat(5, 3))                     # [5, 5, 5]
+list(islice(cycle([1, 2]), 4))         # [1, 2, 1, 2]
+list(islice(count(10, 5), 3))          # [10, 15, 20]
+list(zip_longest([1, 2], [3], fillvalue=0))  # [(1, 3), (2, 0)]
+list(takewhile(lambda x: x < 4, [1, 2, 5]))  # [1, 2]
+list(dropwhile(lambda x: x < 3, [1, 2, 3, 4]))  # [3, 4]
+```
+
+> **Note**: These functions currently return a full `list` (`list(chain(...))` directly gives the result; no extra `list()` wrap is needed). The infinite objects (`repeat`/`cycle`/`count`) must be consumed lazily via `islice`/`takewhile`; do not call `list()` directly on them.
+
+### `collections` Module
+
+| Member | Description |
+| :--- | :--- |
+| `Counter(iterable)` | Element counting; missing keys return 0 (backed by defaultdict(int)) |
+| `Counter.most_common(n=None)` | Returns `[(element, count)]` sorted by count descending (ties by insertion order) |
+| `defaultdict(default_factory[, init_dict])` | Missing keys automatically call the factory to create a default value |
+
+```python
+from collections import Counter, defaultdict
+Counter("abca")              # Counter({'a': 2, 'b': 1, 'c': 1})
+c = Counter("abc"); c["z"]   # 0
+c.most_common()              # [('a', 1), ('b', 1), ('c', 1)]
+c.most_common(1)             # [('a', 1)]
+dd = defaultdict(list); dd["a"].append(1)   # dd["a"] → [1]
+```
+
+### `string` Module (String Constants)
+
+| Constant | Value |
+| :--- | :--- |
+| `ascii_lowercase` | `'abcdefghijklmnopqrstuvwxyz'` |
+| `ascii_uppercase` | `'ABCDEFGHIJKLMNOPQRSTUVWXYZ'` |
+| `ascii_letters` | `ascii_lowercase + ascii_uppercase` |
+| `digits` | `'0123456789'` |
+| `hexdigits` | `'0123456789abcdefABCDEF'` |
+| `octdigits` | `'01234567'` |
+| `punctuation` | ASCII punctuation (32 characters) |
+| `whitespace` | `' \t\n\r\v\f'` |
+| `printable` | `digits + ascii_letters + punctuation + whitespace` |
+
+```python
+import string
+string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+string.digits          # '0123456789'
+```
+
+---
+
 ## Built-in Type Methods
 
 In addition to global built-in functions, each built-in type (`str`, `list`, `tuple`, `dict`) also provides methods modeled after Python.

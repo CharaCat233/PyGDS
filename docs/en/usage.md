@@ -213,6 +213,62 @@ a, b, c = [1, 2, 3]
 first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
 ```
 
+### Variables and Assignment
+
+```python
+x = 42
+y = 3.14
+name = "Alice"
+flag = True
+nothing = None
+
+# Multiple unpacking
+a, b, c = [1, 2, 3]
+first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
+```
+
+### Number Literals
+
+Hexadecimal, octal, binary, underscore-separated and scientific notation are supported:
+
+```python
+0x1F          # 31
+0o17          # 15
+0b101         # 5
+1_000_000     # 1000000
+0xFF_FF       # 65535
+1_000.5       # 1000.5
+1e3           # 1000.0
+2.5e-2        # 0.025
+```
+
+**Base conversion**: `int(str, base)` parses a string in the given base; `base=0` auto-detects the `0x`/`0o`/`0b` prefix:
+
+```python
+int("ff", 16)       # 255
+int("101", 2)       # 5
+int("0x1f", 0)      # 31 (auto-detects the hex prefix)
+int("-ff", 16)      # -255 (signs are supported)
+```
+
+### Dictionary Merge and Unpacking (Python 3.9+)
+
+`dict` supports the `|` / `|=` merge operators and `{**a, **b}` literal unpacking; the right side overrides the left on duplicate keys:
+
+```python
+d1 = {"a": 1, "b": 2}
+d2 = {"b": 3, "c": 4}
+
+d1 | d2              # {'a': 1, 'b': 3, 'c': 4} (returns a new dict, does not modify the operands)
+d3 = {"a": 1}
+d3 |= d2             # in-place merge, d3 → {'a': 1, 'b': 3, 'c': 4}
+
+{**d1, **d2}         # {'a': 1, 'b': 3, 'c': 4}
+{**d1, "z": 9}       # {'a': 1, 'b': 2, 'z': 9} (an explicit key overrides the unpacked value)
+
+dict.fromkeys(["a", "b"], 0)    # {'a': 0, 'b': 0} (builds a dict from an iterable of keys)
+```
+
 ### Operators
 
 | Category | Operators |
@@ -222,6 +278,28 @@ first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
 | Logical | `and`, `or`, `not` |
 | Assignment | `=`, `+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `**=` |
 | Membership | `in`, `not in` |
+
+The `%` operator performs printf-style formatting on strings:
+
+```python
+"%s is %d years old" % ("Alice", 30)   # "Alice is 30 years old"
+"%5.2f" % 3.14159                      # " 3.14"
+"%x" % 255                             # "ff"
+"%05d" % 42                            # "00042"
+"%d%%" % 50                            # "50%"
+```
+
+Supported conversions: `%s` `%r` `%d` `%i` `%u` `%f` `%F` `%e` `%E` `%g` `%G` `%x` `%X` `%o` `%c` `%%`, plus flags (`-` `+` space `0`), width and precision.
+
+**`str.format`**: supports positional/keyword arguments and format specifiers (alignment, fill, sign, zero padding, width, thousands separator, precision, type)
+
+```python
+"{} and {}".format(1, 2)            # "1 and 2"
+"{name} = {value:.2f}".format(name="pi", value=3.14159)   # "pi = 3.14"
+"{:>8}".format("hi")                # "      hi"
+"{0:04d}".format(42)                # "0042"
+"{{{}}}".format(5)                  # "{5}"
+```
 
 ### String Interpolation (f-string)
 
@@ -262,6 +340,27 @@ d = {"k": "v"}
 print(f"d = {d['k']}")              # d = v
 lst = [10, 20, 30]
 print(f"lst[1] = {lst[1]}")         # lst[1] = 20
+```
+
+**`=` debug specifier** (Python 3.8+): prints `expression-source=value`, handy for debugging; defaults to `repr`, and can be combined with conversion flags and format specifiers
+
+```python
+x = 42
+s = "hi"
+print(f"{x=}")              # x=42
+print(f"{s=}")              # s='hi'
+print(f"{x=:05d}")          # x=00042
+print(f"{x + y=}")          # x + y=47
+```
+
+**Nested format width/precision**: width and precision can be decided at runtime (`f"{x:{w}d}"`)
+
+```python
+w = 8
+print(f"{123:0{w}d}")       # 00000123
+print(f"{'abc':>{w}}")      #      abc
+p = 2
+print(f"{3.14159:.{p}f}")   # 3.14
 ```
 
 ### Conditional Statements
@@ -384,6 +483,42 @@ base = 100
 add_base = lambda x: x + base
 print(add_base(1))                  # 101
 ```
+
+### Call-site `*`/`**` Unpacking
+
+When calling a function, `*iterable` unpacks an iterable into positional arguments, and `**mapping` unpacks a dict into keyword arguments:
+
+```python
+def add(a, b, c=0):
+    return a + b + c
+
+add(*[1, 2])                # 3        (*list unpacking)
+add(*[1, 2, 3])             # 6
+add(1, *[2])                # 3        (mixed positional and *)
+add(1, **{"b": 2, "c": 3})  # 6        (**dict unpacking)
+add(*[1], **{"b": 2})       # 3        (* and ** together)
+print(*[1, 2, 3], sep="-")  # 1-2-3    (with built-ins)
+```
+
+### import and Built-in Modules
+
+Supports `import` / `from-import` of built-in modules (`math` / `random`):
+
+```python
+import math
+math.sqrt(16)                 # 4.0
+
+import math as m
+m.floor(3.7)                  # 3
+
+from math import sqrt, pi as p
+sqrt(9)                       # 3.0
+
+from math import *
+gcd(12, 18)                   # 6
+```
+
+> **Note**: only built-in modules (math/random) are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
 
 ### global / nonlocal
 

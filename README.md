@@ -123,6 +123,7 @@ dsl.run()
 | 列表推导式 | ✅ 完整 | `[x for x in iterable [if cond]]` |
 | 生成器表达式 | ⚠️ 部分 | `(x for x in iterable [if cond])` |
 | 字典推导式 | ✅ 完整 | `{k: v for k, v in ... [if cond]}` |
+| 集合推导式 | ✅ 完整 | `{x*x for x in iterable [if cond]}` |
 | 增强赋值 | ✅ 完整 | `+=`, `-=`, `*=`, `/=` 等 |
 | 下标访问 | ✅ 完整 | `obj[key]` 含 `getitem`/`setitem` |
 | 属性访问 | ✅ 完整 | `obj.attr` 含 `getattr`/`setattr` |
@@ -130,19 +131,26 @@ dsl.run()
 | Descriptor 协议 | ✅ 完整 | `__get__` 实现类级/实例级绑定 |
 | 魔法方法 | ✅ 完整 | `__add__`/`__str__`/`__init__` 等类级注册 |
 | 运算符 | ✅ 完整 | 二元/一元/比较/增强赋值全部支持 |
-| f-string | ✅ 完整 | `f"value: {x:.2f}"`，含格式说明符与转换标志 |
+| f-string | ✅ 完整 | `f"value: {x:.2f}"`，含格式说明符、转换标志、`=` 调试符与嵌套格式宽度 |
 | lambda | ✅ 完整 | 匿名函数，支持默认参数与闭包 |
 | `super()` | ✅ 完整 | 单继承下调用父类方法/构造函数 |
 | `getattr`/`setattr`/`delattr` | ✅ 完整 | 内置反射函数 |
 | `map()`/`filter()` | ✅ 完整 | 内置函数式工具 |
 | 运行时错误行号 | ✅ 完整 | 未捕获异常附带 `(line N)` |
+| 数字字面量 | ✅ 完整 | `0x1F` / `0o17` / `0b101` / `1_000_000` / `1e5`；`int("ff", 16)` 按进制解析 |
+| 调用处 `*`/`**` 解包 | ✅ 完整 | `f(*args)` / `f(**kwargs)` |
+| 字典合并 | ✅ 完整 | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}`（Python 3.9+） |
+| `str` `%` 格式化 | ✅ 完整 | `"%s: %d" % (x, y)`（printf 风格） |
+| `str.format` | ✅ 完整 | `"{:.2f} {:>8}".format(x, s)`，含位置/关键字参数与格式说明符 |
+| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string；math 含 comb/perm/prod/lcm，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile） |
+| `set` | ✅ 完整 | 字面量 `{1, 2}`、构造、集合运算与方法 |
+| `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
 | `async`/`await` | ❌ 不支持 | — |
 | 生成器/`yield` | ❌ 不支持 | — |
 | 装饰器 | ⚠️ 部分 | `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter） |
 | `with` 语句 | ❌ 不支持 | — |
-| 模块/`import` | ❌ 不支持 | — |
-| 集合 (`set`) | ❌ 不支持 | — |
+| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string） |
 
 ---
 

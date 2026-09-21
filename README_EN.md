@@ -123,6 +123,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | List Comprehensions | ✅ Full | `[x for x in iterable [if cond]]` |
 | Generator Expressions | ⚠️ Partial | `(x for x in iterable [if cond])` |
 | Dict Comprehensions | ✅ Full | `{k: v for k, v in ... [if cond]}` |
+| Set Comprehensions | ✅ Full | `{x*x for x in iterable [if cond]}` |
 | Augmented Assignment | ✅ Full | `+=`, `-=`, `*=`, `/=`, etc. |
 | Subscript Access | ✅ Full | `obj[key]` with `getitem`/`setitem` |
 | Attribute Access | ✅ Full | `obj.attr` with `getattr`/`setattr` |
@@ -130,19 +131,26 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Descriptor Protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
 | Magic Methods | ✅ Full | `__add__`/`__str__`/`__init__`, etc., registered at class level |
 | Operators | ✅ Full | Binary/unary/comparison/augmented all supported |
-| f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers and conversion flags |
+| f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers, conversion flags, `=` debug specifier and nested format widths |
 | lambda | ✅ Full | Anonymous functions with default arguments and closures |
 | `super()` | ✅ Full | Call parent methods/constructors under single inheritance |
 | `getattr`/`setattr`/`delattr` | ✅ Full | Built-in reflection functions |
 | `map()`/`filter()` | ✅ Full | Built-in functional tools |
 | Runtime error line numbers | ✅ Full | Uncaught exceptions include `(line N)` |
+| Number literals | ✅ Full | `0x1F` / `0o17` / `0b101` / `1_000_000` / `1e5`; `int("ff", 16)` parses in a base |
+| Call-site `*`/`**` unpacking | ✅ Full | `f(*args)` / `f(**kwargs)` |
+| Dict merge | ✅ Full | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}` (Python 3.9+) |
+| `str` `%` formatting | ✅ Full | `"%s: %d" % (x, y)` (printf style) |
+| `str.format` | ✅ Full | `"{:.2f} {:>8}".format(x, s)`, with positional/keyword arguments and format specifiers |
+| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string; math has comb/perm/prod/lcm, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile) |
+| `set` | ✅ Full | Literal `{1, 2}`, constructor, set operations and methods |
+| `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |
 | `async`/`await` | ❌ Not Supported | — |
 | Generators/`yield` | ❌ Not Supported | — |
 | Decorators | ⚠️ Partial | `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) |
 | `with` Statement | ❌ Not Supported | — |
-| Module/`import` | ❌ Not Supported | — |
-| Set (`set`) | ❌ Not Supported | — |
+| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string) |
 
 ---
 
