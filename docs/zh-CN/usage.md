@@ -231,6 +231,59 @@ d3 |= d2             # 原地合并, d3 → {'a': 1, 'b': 3, 'c': 4}
 dict.fromkeys(["a", "b"], 0)    # {'a': 0, 'b': 0} (以可迭代对象为键构造字典)
 ```
 
+### 字面量 `*` 解包（Python 3.5+）
+
+列表、元组、集合字面量内可用 `*iterable` 展开元素，等价于把该可迭代对象的元素逐个写出：
+
+```python
+a = [1, 2, 3]
+b = [4, 5]
+
+[*a, 6]              # [1, 2, 3, 6]
+[0, *a, *b]          # [0, 1, 2, 3, 4, 5]
+[*"ab", "c"]         # ['a', 'b', 'c'] (任意可迭代对象)
+[*range(3)]          # [0, 1, 2]
+[*{"x": 1}]          # ['x'] (字典迭代键)
+
+(*a,)                # (1, 2, 3) (元组字面量需保留逗号)
+(0, *a, 6)           # (0, 1, 2, 3, 6)
+sorted({*a, 10})     # [1, 2, 3, 10] (集合字面量; 集合本身无序, 用 sorted 观察元素)
+```
+
+> 单元素元组必须写逗号：`(*a,)` 合法，`(*a)` 报 `SyntaxError`（与 Python 一致）
+> 推导式元素不支持 `*`（`[*x for x in it]` 报错）；`*` 后必须是可迭代对象，否则抛 `TypeError`
+
+### 赋值表达式 walrus（Python 3.8+）
+
+`x := 1` 是**表达式**：先给变量赋值，再以该值参与运算，常用于在条件里同时完成赋值与判断：
+
+```python
+if (n := 10) > 5:
+    print(n)                     # 10
+if m := 20:                      # 条件位置无需括号
+    print(m)                     # 20
+
+while (cur := data[i]) != 0:     # 边读边判断
+    i += 1
+
+print(x := 7)                    # 7 (作为实参)
+print([(k := 2), k * 3])         # [2, 6]
+print({(q := 1): q + 1})         # {1: 2}
+print((a := (b := 3)) + a + b)   # 9 (嵌套需加括号)
+```
+
+推导式内的赋值表达式绑定到**外层作用域**（与 Python 一致）：
+
+```python
+vals = [y := v * 2 for v in range(4)]
+print(vals)                      # [0, 2, 4, 6]
+print(y)                         # 6 (泄漏到外层, 与 Python 相同)
+print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
+```
+
+> 目标必须是简单变量名：`(obj.attr := 1)` / `(lst[0] := 1)` 分别报 `cannot use assignment expressions with attribute` / `with subscript`
+> 裸写 `x := 1` 作为语句报 `SyntaxError`（需写成 `(x := 1)`），`del (x := 1)` 报 `cannot delete named expression`——以上均与 Python 一致
+
 ### 数字字面量
 
 支持十六进制、八进制、二进制、下划线分隔与科学计数法：
@@ -263,6 +316,7 @@ int("-ff", 16)      # -255 (支持符号)
 | 比较 | `==`, `!=`, `<`, `>`, `<=`, `>=` |
 | 逻辑 | `and`, `or`, `not` |
 | 赋值 | `=`, `+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `**=` |
+| 赋值表达式 | `:=`（walrus） |
 | 成员检查 | `in`, `not in` |
 
 `%` 运算符在字符串上执行 printf 风格格式化：
@@ -488,7 +542,7 @@ print(*[1, 2, 3], sep="-")  # 1-2-3    (与内置函数配合)
 
 ### import 与内置模块
 
-支持 `import` / `from-import` 导入内置模块（`math` / `random`）：
+支持 `import` / `from-import` 导入内置模块（`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator`）：
 
 ```python
 import math
@@ -502,9 +556,12 @@ sqrt(9)                       # 3.0
 
 from math import *
 gcd(12, 18)                   # 6
+
+import operator
+sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
 
-> **注意**：目前仅支持内置模块（math/random），不支持导入用户编写的 `.py` 文件，模块详情见 [内置模块文档](./builtin.md)
+> **注意**：目前仅支持内置模块，不支持导入用户编写的 `.py` 文件，模块详情见 [内置模块文档](./builtin.md)
 
 ### global / nonlocal
 
@@ -530,6 +587,72 @@ outer()             # 3
 print(x)            # 1
 change_global()
 print(x)            # 100
+```
+
+### 推导式与生成器表达式
+
+**列表 / 字典 / 集合推导式**：
+
+```python
+[x * x for x in range(5) if x % 2 == 0]       # [0, 4, 16]
+{k: v for k, v in [("a", 1), ("b", 2)]}       # {'a': 1, 'b': 2}
+{x * x for x in [1, 2, 2, 3]}                 # {1, 4, 9} (自动去重)
+```
+
+**多 `for` 子句**：推导式可写多个 `for`（按书写顺序嵌套，内层可引用外层循环变量），
+每个 `for` 都可带多个 `if`；列表/字典/集合推导式与生成器表达式全部支持：
+
+```python
+[x * y for x in [1, 2] for y in [10, 20]]     # [10, 20, 20, 40]
+[x + y for x in range(3) for y in range(x)]   # [1, 2, 3] (内层依赖外层)
+
+[x for x in range(10) if x % 2 == 0 if x > 4] # [6, 8] (同一 for 多个 if)
+[x * y for x in range(5) if x % 2 == 1 for y in range(3) if y != 1]
+
+{k: v for k, v in [("a", 1), ("b", 2)] if v > 1}   # {'b': 2}
+sorted({x * y for x in [1, 2] for y in [2, 3]})    # [2, 3, 4, 6]
+
+list(x * y for x in [1, 2] for y in [10, 20])      # [10, 20, 20, 40] (生成器)
+```
+
+**元组目标**：循环变量可写成 `k, v` 形式，按序列顺序解包每个元素：
+
+```python
+[k for k, v in [("a", 1), ("b", 2)]]          # ['a', 'b']
+{v * 10 for k, v in [("a", 1), ("b", 2)]}     # {10, 20}
+```
+
+**生成器表达式**：`(expr for var in iterable [if cond])` 求值为惰性生成器对象，每次 `next()` 或迭代时逐一产出，适合大序列与无限序列；可作函数位置参数（裸写法）：
+
+```python
+g = (x * x for x in range(5))
+type(g)                 # <class 'generator'>
+list(g)                 # [0, 1, 4, 9, 16]
+
+next(g2)                # 逐次推进 (一次性迭代器, 耗尽后停止)
+sum(x * x for x in range(4))     # 14 (裸写法)
+list(x for x in range(6) if x % 2 == 0)    # [0, 2, 4]
+
+from itertools import islice
+list(islice((x * x for x in count()), 5))   # [0, 1, 4, 9, 16] (配合无限序列)
+```
+
+> **⚠️ 破坏性变更（v0.3.0）**：此前 `(x for x in it)` 被当作列表推导式**急切求值为列表**，现在改为**惰性生成器对象**
+> 旧代码若直接对结果下标/`len()`/调用列表方法会报错，需先用 `list(g)` / `tuple(g)` 转换
+> 生成器为**一次性迭代器**，重复迭代不会从头开始
+
+### `slice` 对象
+
+`slice(start, stop[, step])` 构造切片对象，可保存复用，用于 `lst[slice(...)]` / `"str"[slice(...)]`：
+
+```python
+s = slice(1, 4)
+s.start / s.stop / s.step   # 1 / 4 / None (未指定为 None)
+lst[slice(1, 4)]            # 等价于 lst[1:4]
+lst[slice(0, 6, 2)]         # 等价于 lst[0:6:2]
+lst[slice(4, 0, -1)]        # 负步长反向
+"abcdef"[slice(1, 4)]       # "bcd"
+isinstance(s, slice)        # True
 ```
 
 ### 列表 / 元组 / 字典操作

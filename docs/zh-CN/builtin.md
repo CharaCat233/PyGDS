@@ -508,7 +508,7 @@ list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
 
 ## 内置模块 (import)
 
-PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math` 与 `random` 两个纯逻辑模块（引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
+PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator` 等纯逻辑模块（引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
 
 ### import 语法
 
@@ -525,7 +525,7 @@ from math import *                # 导入所有公开成员 (非下划线开头
 | 类别 | 成员 |
 | :--- | :--- |
 | 常量 | `pi` `e` `tau` |
-| 基础 | `sqrt` `isqrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` |
+| 基础 | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
 | 指数/对数 | `exp` `log` `log2` `log10` |
 | 三角函数 | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
 | 角度 | `degrees` `radians` |
@@ -543,7 +543,12 @@ math.comb(5, 2)      # 10   (组合数)
 math.perm(5, 2)      # 20   (排列数)
 math.prod([2, 3, 4]) # 24   (连乘, start 为关键字参数)
 math.lcm(4, 6)       # 12   (最小公倍数)
+math.cbrt(-8)        # -2.0 (立方根, 支持负数)
+math.remainder(7, 3) # 1.0  (IEEE 754 余数, 商取最近偶数)
+math.remainder(1.5, 1)  # -0.5
 ```
+
+> `math.remainder(x, y)` 返回 `x - n*y`，其中 `n` 为 `x/y` 四舍五入到最近偶数，除数为零或 `x` 为无穷时抛 `ValueError`
 
 ### `random` 模块
 
@@ -555,13 +560,17 @@ math.lcm(4, 6)       # 12   (最小公倍数)
 | `randint(a, b)` | 返回 `[a, b]` 的整数（含端点） |
 | `randrange(start, stop, step)` | 返回范围内的随机整数 |
 | `choice(seq)` | 从序列中随机选一个元素 |
+| `choices(population, weights=None, k=1)` | 有放回抽样，可按 `weights` 加权，返回长度为 k 的列表 |
 | `shuffle(seq)` | 原地打乱列表 |
 | `sample(population, k)` | 返回 k 个不重复的随机元素 |
+| `gauss(mu=0.0, sigma=1.0)` | 正态分布采样（Box-Muller 变换） |
 
 ```python
 import random
 random.seed(42)
 random.random()        # [0, 1) 内
+random.choices(["a", "b"], weights=[1, 0], k=3)   # ['a', 'a', 'a'] (权重为 0 不会被抽中)
+random.gauss(0, 1)     # 服从 N(0, 1) 的浮点数
 random.randint(1, 6)   # 1..6 内
 ```
 
@@ -578,6 +587,7 @@ random.randint(1, 6)   # 1..6 内
 | `pstdev(data)` | 总体标准差（除以 n） |
 | `variance(data)` | 样本方差（除以 n-1） |
 | `pvariance(data)` | 总体方差（除以 n） |
+| `quantiles(data, n=4)` | 分位切点（exclusive 方法，返回 n-1 个值，数据点少于 2 个时抛 `StatisticsError`） |
 
 ```python
 import statistics
@@ -585,7 +595,11 @@ statistics.mean([1, 2, 3, 4])        # 2.5
 statistics.median([1, 2, 3, 4])      # 2.5
 statistics.mode([1, 2, 2, 3])        # 2
 round(statistics.stdev([1, 2, 3]), 6)  # 1.0
+statistics.quantiles([1, 2, 3, 4])   # [1.25, 2.5, 3.75] (四分位)
+statistics.quantiles([1, 2, 3, 4], n=2)  # [2.5] (中位数切点)
 ```
+
+> `statistics.StatisticsError` 继承自 `ValueError`（与 CPython 一致），既可用 `except statistics.StatisticsError` 捕获，也可用 `except ValueError` 捕获
 
 ### `functools` 模块
 
@@ -593,13 +607,18 @@ round(statistics.stdev([1, 2, 3]), 6)  # 1.0
 | :--- | :--- |
 | `reduce(func, iterable[, initial])` | 从左到右累积归约 |
 | `partial(func, *args, **kwargs)` | 偏函数（预绑定部分参数） |
+| `cmp_to_key(func)` | 把旧式 `cmp(a, b)` 函数转成可用于 `key=` 的 key 工厂 |
 
 ```python
-from functools import reduce, partial
+from functools import reduce, partial, cmp_to_key
 reduce(lambda a, b: a + b, [1, 2, 3, 4])   # 10
 add5 = partial(lambda a, b: a + b, 5)
 add5(3)                                    # 8
+sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 ```
+
+> `cmp_to_key(func)` 返回一个 key 工厂，调用它包装元素后，`sorted(key=...)` / `list.sort(key=...)`
+> 按 `func(a, b)` 返回值的符号决定顺序（负数在前，零相等，正数在后）
 
 ### `itertools` 模块（常用子集）
 
@@ -616,9 +635,14 @@ add5(3)                                    # 8
 | `zip_longest(*iterables, fillvalue=None)` | 以最长可迭代对象为准并行配对，不足处用 fillvalue 填充 |
 | `takewhile(predicate, iterable)` | 取满足谓词的开头元素，遇首个不满足即止 |
 | `dropwhile(predicate, iterable)` | 丢弃满足谓词的开头元素，其余原样返回 |
+| `accumulate(iterable[, func][, initial])` | 前缀累积（默认加法，可传 `func` 与 `initial`） |
+| `pairwise(iterable)` | 相邻元素配对，返回长度为 n-1 的元组列表 |
+| `groupby(iterable, key=None)` | 相邻分组，返回 `[(key, [元素...]), ...]` |
+| `starmap(func, iterable)` | 用每组参数解包调用 `func`，返回结果列表 |
 
 ```python
 from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
+from itertools import accumulate, pairwise, groupby, starmap
 list(chain([1, 2], [3], [4, 5]))       # [1, 2, 3, 4, 5]
 list(product([1, 2], [3, 4]))          # [(1, 3), (1, 4), (2, 3), (2, 4)]
 list(combinations([1, 2, 3], 2))       # [(1, 2), (1, 3), (2, 3)]
@@ -630,9 +654,15 @@ list(islice(count(10, 5), 3))          # [10, 15, 20]
 list(zip_longest([1, 2], [3], fillvalue=0))  # [(1, 3), (2, 0)]
 list(takewhile(lambda x: x < 4, [1, 2, 5]))  # [1, 2]
 list(dropwhile(lambda x: x < 3, [1, 2, 3, 4]))  # [3, 4]
+list(accumulate([1, 2, 3, 4]))         # [1, 3, 6, 10]
+list(accumulate([1, 2, 3], initial=10))  # [10, 11, 13, 16]
+list(pairwise([1, 2, 3]))              # [(1, 2), (2, 3)]
+[(k, list(g)) for k, g in groupby([1, 1, 2, 3, 3])]  # [(1, [1, 1]), (2, [2]), (3, [3, 3])]
+list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 ```
 
 > **注意**：这些函数当前返回完整的 `list`（`list(chain(...))` 直接得到结果，不需要再包一层 `list()`）。无限对象（`repeat`/`cycle`/`count`）必须配合 `islice`/`takewhile` 等惰性消费，不能直接 `list()`
+> `groupby` 保持相邻分组语义（相同键不相邻时会分成多组），且组本身已是 `list`，无需再转换
 
 ### `collections` 模块
 
@@ -650,6 +680,37 @@ c.most_common()              # [('a', 1), ('b', 1), ('c', 1)]
 c.most_common(1)             # [('a', 1)]
 dd = defaultdict(list); dd["a"].append(1)   # dd["a"] → [1]
 ```
+
+### `operator` 模块
+
+把内置运算符暴露为普通函数，便于与 `sorted(key=)`、`map` 等函数式工具配合。所有二元/一元函数都走与运算符相同的分派路径，因此自定义类的 `__add__` 等魔法方法同样生效。
+
+| 类别 | 成员 |
+| :--- | :--- |
+| 算术 | `add` `sub` `mul` `truediv` `floordiv` `mod` `pow` `neg` `pos` `abs` |
+| 位运算 | `and_` `or_` `xor` `invert` `lshift` `rshift` |
+| 比较 | `eq` `ne` `lt` `le` `gt` `ge` `is_` `is_not` |
+| 逻辑 | `not_` `truth` |
+| 序列 | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
+| 取值器 | `itemgetter` `attrgetter` |
+
+```python
+import operator
+operator.add(1, 2)                  # 3
+operator.floordiv(7, 2)             # 3
+operator.invert(5)                  # -6
+operator.contains([1, 2, 3], 2)     # True (注意参数顺序: 容器在前)
+operator.getitem([10, 20], 1)       # 20
+operator.itemgetter(1)(["a", "b"])  # 'b'
+operator.attrgetter("x")(obj)       # obj.x
+
+# 与 sorted 配合
+pairs = [(2, "b"), (1, "a")]
+sorted(pairs, key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
+```
+
+> `itemgetter(k1, k2, ...)` / `attrgetter("a", "b")` 返回可调用对象：单参数返回单个值，多参数返回由各值组成的元组；`attrgetter` 的属性名支持 `a.b` 点号路径
+> `length_hint(obj)` 在对象无长度信息时返回 0（不抛异常）
 
 ### `string` 模块（字符串常量）
 

@@ -1,7 +1,41 @@
 # Changelog
 
-本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，
-版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
+
+## [0.3.0] - 2026-09-21
+
+### 新增
+
+- **惰性生成器表达式**：`(x*x for x in iterable [if cond])` 现在求值为真正的惰性生成器对象（`<class 'generator'>`），而非急切求值的列表；支持 `next()` 逐次推进、一次性迭代语义，以及裸写法 `sum(x*x for x in ...)` / `list(x for x in ...)` 作为函数位置参数
+- **生成器与迭代器体系贯通**：新增 `DSLGenerator` / `DSLGeneratorIterator`（预取缓冲保证 `has_next()` 准确）；`list`/`tuple`/`sum`/`sorted`/`any`/`all`/`enumerate`/`zip`/`min`/`max`/`next` 等消费函数统一通过 `_dsl_iter()` 接受任意可迭代对象（含生成器与 `itertools` 无限对象）
+- **`slice` 对象与构造函数**：`slice(stop)` / `slice(start, stop)` / `slice(start, stop, step)`，支持 `start`/`stop`/`step` 属性、`isinstance(s, slice)`、负步长，以及 `lst[slice(...)]` / `"str"[slice(...)]` 索引复用
+- **字面量 `*` 解包**（Python 3.5+）：`[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}`；新增 `StarredExpr` AST 节点，列表/元组/集合字面量求值时展开任意可迭代对象；`(*a)` 缺少逗号时报 `SyntaxError`（与 Python 一致）
+- **多 `for` 推导式**：推导式 AST 从单 `for` 子句扩展为 `CompClause` 子句数组，支持 `[x*y for x in a for y in b]`、每个 `for` 带多个 `if`、`k, v` 元组目标，列表/字典/集合推导式与生成器表达式全部覆盖；生成器迭代器改用帧栈保存每层子句的迭代器与绑定快照，保持惰性
+- **`itertools` 补全**：`accumulate`（前缀累积，含 `initial`）、`pairwise`（相邻对，Python 3.10+）、`groupby`（相邻分组，返回 `[(key, [元素...])]`）、`starmap`（解包调用）
+- **`functools.cmp_to_key`**：把旧式 `cmp(a, b)` 函数包装为可用于 `key=` 的 key 工厂；新增 `DSLCmpKey` 包装对象并实现比较魔法方法，`sorted` / `list.sort` 均可使用
+- **`operator` 模块**：新增模块，提供 `add`/`sub`/`mul`/`truediv`/`floordiv`/`mod`/`pow`/`neg`/`pos`/`abs`、位运算、比较与逻辑函数、`getitem`/`setitem`/`delitem`/`contains`/`concat`/`countOf`/`indexOf`/`length_hint`，以及 `itemgetter`/`attrgetter` 取值器（新增 `DSLItemGetter` / `DSLAttrGetter` 可调用对象）；二元/一元函数复用表达式求值的 dunder 分派路径，自定义类的 `__add__` 等同样生效
+- **`random.choices` / `random.gauss`**：`choices(population, weights=None, k=1)` 有放回加权抽样（基于现有 xorshift32 PRNG）、`gauss(mu=0.0, sigma=1.0)` 正态分布采样（Box-Muller 变换）
+- **`math` / `statistics` 补全**：`math.remainder(x, y)`（IEEE 754 余数，商取最近偶数）、`math.cbrt(x)`（立方根，支持负数）、`statistics.quantiles(data, n=4)`（exclusive 分位数切点）；新增内置异常类 `StatisticsError`（继承 `ValueError`，与 CPython 一致），并作为 `statistics.StatisticsError` 暴露给模块成员
+- **可调用对象判定统一**：新增 `DSLObject._dsl_is_callable()`，`callable()` 与 `sorted(key=)` / `list.sort(key=)` 共用同一判定，使 `itemgetter` / `attrgetter` 等取值器可直接作为 key 传入
+- **赋值表达式 `:=`（walrus，Python 3.8+）**：新增 `COLON_EQ` 令牌与 `WalrusExpr` AST 节点，`x := 1` 先赋值再以该值参与运算；支持 `if (n := len(a)) > 5:`、`while chunk := read():`、实参/容器字面量/三元表达式/默认参数/`assert`/生成器表达式等表达式位置；推导式内绑定到外层作用域（与 Python 一致）；目标必须是简单变量名，`(obj.attr := 1)` / `(lst[0] := 1)` / 裸写 `x := 1` / `del (x := 1)` 均按 CPython 的报错信息拒绝
+
+### 破坏性变更 (Breaking Changes)
+
+- **生成器表达式语义变更**（v0.2.0 → v0.3.0）：此前 `(x for x in iterable)` 被当作列表推导式急切求值为 `list`；现改为真正的惰性生成器对象。依赖旧行为的代码（如对生成器表达式结果直接下标 `g[0]`、`len(g)`、调用 `list` 方法）会报错，需改为 `list(g)` / `tuple(g)` 后使用；生成器为**一次性迭代器**，重复迭代不会从头开始
+
+### 修复
+
+- **连续 `if` 语句跳过条件求值**：`exec_block` 中语句的 `resume_info` 在语句正常结束后未清空，导致「真值 `if` 之后的 `if`」直接执行其 then 分支而不求值条件（中间隔着其他语句时同样触发）。现在每条语句正常结束后清空当前帧的 `resume_info`，它只在语句被挂起后重新进入时保留；新增 `edge_consecutive_if` 回归测试覆盖该场景
+
+### 变更
+
+- 兼容性矩阵更新（README.md / README_EN.md）：生成器表达式 ⚠️ 部分 → ✅ 完整，新增 `slice`、多 `for` 推导式、字面量 `*` 解包、赋值表达式 `:=` 行；内置模块行补齐新增函数与 `operator` 模块
+- 文档（`docs/zh-CN` 与 `docs/en`）：`architecture.md` 修正推导式 AST 字段并补齐 `GenComp`/`SetComp`/`WalrusExpr`/`StarredExpr`/`CompClause` 与 `COLON_EQ` 令牌，`builtin_types.md` 新增生成器与 `slice` 类型（含类型总览表），`usage.md` 补充生成器表达式（含破坏性变更说明）、`slice` 用法、字面量 `*` 解包、多 `for` 推导式与赋值表达式 `:=`，`builtin.md` 补齐各模块新增函数与 `operator` 模块
+- 代码规范（全部 `.gd` 文件）：文档注释的 `[br]` 统一为「下一行仍为文档注释时才使用」，`pygds.gd` 删除 68 处多余 `[br]`、补齐 3 处缺失，`demo/demo.gd` 与 `demo/test_suspend_all.gd` 的头部注释块补齐 7 处与 1 处，`addons/pygds/plugin.gd` 补齐 1 处；另删除 `_collect_nums` 处重复的文档注释块
+
+### 测试
+
+- 新增 15 个行为一致性测试：`lang_generator` / `lang_slice` / `lang_unpack_star` / `lang_comp_multi` / `lang_itertools3` / `lang_functools2` / `lang_operator` / `lang_random2` / `lang_math3` / `lang_walrus` / `edge_consecutive_if` / `err_walrus_bare` / `err_walrus_attr` / `err_walrus_subscript` / `err_walrus_del`（共 119 个用例全部通过），挂起测试 22 个用例通过
 
 ## [0.2.0] - 2026-09-21
 
@@ -40,12 +74,8 @@
 
 ### 修复
 
-- 修复 `demo/test_suspend_all.gd` 与 `demo/demo.gd` 对全局类名 `PyGDS` 的依赖：
-  改用 `const PYGDS_SCRIPT = preload("res://pygds.gd")` 引用解释器脚本，
-  使类型注解与 `State` 枚举访问不依赖编辑器生成的全局类缓存
-  （`.godot/global_script_class_cache.cfg`）
-- 修复全新 clone（无全局类缓存）下 `--script` 运行挂起测试报
-  `Could not find type "PyGDS"` 的问题，CI 挂起测试步骤现可正常通过
+- 修复 `demo/test_suspend_all.gd` 与 `demo/demo.gd` 对全局类名 `PyGDS` 的依赖：改用 `const PYGDS_SCRIPT = preload("res://pygds.gd")` 引用解释器脚本，使类型注解与 `State` 枚举访问不依赖编辑器生成的全局类缓存（`.godot/global_script_class_cache.cfg`）
+- 修复全新 clone（无全局类缓存）下 `--script` 运行挂起测试报 `Could not find type "PyGDS"` 的问题，CI 挂起测试步骤现可正常通过
 
 ## [0.1.0] - 2026-09-20
 

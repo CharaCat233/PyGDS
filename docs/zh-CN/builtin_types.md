@@ -20,6 +20,11 @@ PyGDS 实现了与 Python 高度一致的内置类型系统
 | `DSLDict` | `dict` | 可变 | 否 |
 | `DSLSet` | `set` | 可变 | 否 |
 | `DSLFrozenSet` | `frozenset` | 不可变 | 是 |
+| `DSLGenerator` | `generator` | 可变 | 否 |
+| `DSLSlice` | `slice` | 不可变 | 是 |
+| `DSLItemGetter` | `operator.itemgetter` | 不可变 | 否 |
+| `DSLAttrGetter` | `operator.attrgetter` | 不可变 | 否 |
+| `DSLCmpKey` | `functools.KeyWrapper` | 不可变 | 否 |
 
 ---
 
@@ -237,6 +242,59 @@ isinstance(frozenset([1]), frozenset)   # True
 isinstance({1}, frozenset)              # False
 ```
 
+### DSLGenerator — 生成器类型
+
+对应 Python 生成器（`generator`），由生成器表达式 `(expr for var in iterable [if cond])` 创建，
+**惰性求值**：仅在 `next()` 或迭代时逐一产出元素，适合大序列与无限序列
+
+```gdscript
+class DSLGenerator extends DSLObject:
+    # 持有元素表达式、循环子句数组 (Array[CompClause]) 与闭包环境
+    # 共享的 DSLGeneratorIterator 实现一次性迭代语义
+```
+
+```python
+g = (x * x for x in range(5))
+type(g)                 # <class 'generator'>
+next(g)                 # 0 (逐次推进)
+list(g)                 # [1, 4, 9, 16] (一次性: 已消费 0, 剩余继续)
+list(g)                 # [] (已耗尽)
+sum(x * x for x in range(4))     # 14 (裸写法)
+
+list(x * y for x in [1, 2] for y in [10, 20])   # [10, 20, 20, 40] (多 for 子句)
+```
+
+> **注意**：生成器为**一次性迭代器**，多次迭代不会从头开始；`next()` 超出时抛 `StopIteration`
+> （可传默认值 `next(g, default)`）。`list`/`tuple`/`sum`/`sorted`/`any`/`all`/`enumerate`/`zip`/
+> `min`/`max` 等消费函数均通过 `_dsl_iter()` 接受生成器，`itertools.islice` 可惰性消费无限生成器
+
+#### 循环子句 (CompClause)
+
+生成器表达式与各类推导式共用 `CompClause` 描述循环：每个子句包含目标变量名数组、迭代对象表达式与 `if` 条件数组，多个子句按书写顺序嵌套（内层可引用外层循环变量）
+
+```gdscript
+class CompClause:
+    var targets: Array      # 循环目标变量名 (元组目标 for k, v in ... 为多个)
+    var iterable: Expr      # 迭代对象表达式
+    var conditions: Array   # 过滤条件表达式数组 (可零个或多个)
+```
+
+- **急切求值**（`ListComp` / `SetComp` / `DictComp`）：`_eval_comp_clauses` 递归展开子句，在每个完整绑定组合上求值元素表达式
+- **惰性求值**（`DSLGenerator`）：`DSLGeneratorIterator` 用帧栈保存每层子句的迭代器与绑定快照，每次 `next()` 只推进到下一个满足条件的元素
+
+### DSLSlice — 切片类型
+
+对应 Python `slice`，描述切片区间 `start:stop:step`，可保存复用，用于 `lst[slice(...)]` / `"str"[slice(...)]`
+
+```python
+s = slice(1, 4)             # slice(1, 4, None)
+s.start / s.stop / s.step   # 1 / 4 / None (未指定为 None)
+isinstance(s, slice)        # True
+lst[slice(1, 4)]            # 等价于 lst[1:4]
+lst[slice(0, 6, 2)]         # 等价于 lst[0:6:2]
+lst[slice(4, 0, -1)]        # 负步长反向
+```
+
 ## 迭代器体系
 
 PyGDS 为不同集合类型提供了专门的迭代器实现
@@ -273,6 +331,14 @@ class DSLDictKeyIterator extends DSLIterator:
 ### DSLStringIterator
 
 逐字符迭代字符串
+
+### DSLGeneratorIterator
+
+生成器表达式迭代器：每次 `next()` 惰性推进一次推导式循环（求值迭代源 → 绑定循环变量 → 判定条件 → 产出元素），采用**预取缓冲**保证 `has_next()` 准确；状态保存在迭代器字段中
+
+### DSLInfiniteIterator
+
+无限迭代器，`itertools` 的 `repeat`/`cycle`/`count` 返回无限对象，其 `_dsl_iter()` 产出无限迭代器（`DSLRepeatIterator`/`DSLCycleIterator`/`DSLCountIterator`），`has_next()` 恒为 `true`，需配合 `islice`/`takewhile` 等惰性消费
 
 ## 内置类型方法
 

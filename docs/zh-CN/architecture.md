@@ -43,6 +43,7 @@ Token 类型枚举 `PyGDS.TokenType` 的枚举值如下
 | 分隔符 | `LPAREN`, `RPAREN`, `LBRACKET`, `RBRACKET`, `LBRACE`, `RBRACE`, `COMMA`, `COLON`, `NEWLINE` |
 | 比较（双字符） | `EQUAL_EQUAL`, `NOT_EQUAL`, `GREATER_EQUAL`, `LESS_EQUAL` |
 | 增强赋值 | `PLUS_EQ`, `MINUS_EQ`, `STAR_EQ`, `SLASH_EQ`, `DOUBLESLASH_EQ`, `STARSTAR_EQ`, `PERCENT_EQ` |
+| 赋值表达式 | `COLON_EQ`（`:=` walrus 运算符） |
 | 关键字 | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA` |
 | 字面量 | `IDENTIFIER`, `STRING`, `FSTRING`, `INTEGER`, `FLOAT` |
 | 特殊 | `INDENT`, `DEDENT`, `EOF`, `AT`, `NULL`, `IS_NOT` |
@@ -218,8 +219,12 @@ AST 分为 **`PyGDS.Stmt`**（语句）和 **`PyGDS.Expr`**（表达式）两大
 | `PyGDS.ListLiteral` | `elements: Array[Expr]` | 列表字面量 |
 | `PyGDS.TupleLiteral` | `elements: Array[Expr]` | 元组字面量 |
 | `PyGDS.DictLiteral` | `keys: Array[Expr]`, `values: Array[Expr]` | 字典字面量 |
-| `PyGDS.ListComp` | `elt_expr`, `var_name`, `iterable`, `condition` | 列表推导式 |
-| `PyGDS.DictComp` | `key_expr`, `value_expr`, `k_var`, `v_var`, `iterable`, `condition` | 字典推导式 |
+| `PyGDS.WalrusExpr` | `name: String`, `value: Expr` | 赋值表达式（`x := 1`） |
+| `PyGDS.StarredExpr` | `value: Expr` | 字面量 `*` 解包条目（`[*a, 1]`） |
+| `PyGDS.ListComp` | `elt_expr`, `clauses: Array[CompClause]` | 列表推导式（支持多 `for` / 多 `if`） |
+| `PyGDS.SetComp` | `elt_expr`, `clauses: Array[CompClause]` | 集合推导式 |
+| `PyGDS.DictComp` | `key_expr`, `value_expr`, `clauses: Array[CompClause]` | 字典推导式 |
+| `PyGDS.GenComp` | `elt_expr`, `clauses: Array[CompClause]` | 生成器表达式（求值为惰性生成器） |
 | `PyGDS.ConditionalExpr` | `condition`, `true_expr`, `false_expr` | 三目条件表达式 |
 | `PyGDS.UnpackAssign` | `targets: Array`, `value: Expr` | 解包赋值 |
 | `PyGDS.StarredTarget` | `target: Variable` | 星号解包目标 |
@@ -232,6 +237,7 @@ AST 分为 **`PyGDS.Stmt`**（语句）和 **`PyGDS.Expr`**（表达式）两大
 | `PyGDS.Param` | `name`, `default_value`, `is_args`, `is_kwargs`, `is_positional_only`, `is_keyword_only` | 函数参数 |
 | `PyGDS.KeywordArg` | `name: String`, `value: Expr` | 关键字实参 |
 | `PyGDS.ExceptClause` | `exception_type: Expr`, `as_name: String`, `body: Array` | except 子句 |
+| `PyGDS.CompClause` | `targets: Array`, `iterable: Expr`, `conditions: Array` | 推导式循环子句（一个 `for` 及其 `if`） |
 
 ---
 
@@ -286,8 +292,11 @@ interpret(statements)
 | `ListLiteral` | 逐元素求值 → 构建 DSLList |
 | `TupleLiteral` | 逐元素求值 → 构建 DSLTuple |
 | `DictLiteral` | 逐键值求值 → 构建 DSLDict |
-| `ListComp` | 迭代 → 设变量 → 求值条件 → 求值元素 → 收集 |
-| `DictComp` | 迭代 → 设键值变量 → 求值条件 → 求值键值 → 收集 |
+| `WalrusExpr` | 求值右侧 → `environment.set_val()` → 返回该值 |
+| `ListComp` | 逐层展开循环子句 → 满足条件则求值元素 → 收集为 DSLList |
+| `SetComp` | 同列表推导式，结果收集为 DSLSet（自动去重） |
+| `DictComp` | 同列表推导式，每个绑定组合求值键与值 → 收集为 DSLDict |
+| `GenComp` | 构造 DSLGenerator（惰性，帧栈保存各层子句迭代器） |
 
 ### Binary 运算分发详情
 
@@ -630,7 +639,7 @@ GDScript API: request_suspend_waiting(on_resume)
 
 解释器从挂起中恢复的关键在于 `_exec_stack` 和 `_call_stack`。当 `interpret()` 遇到 `SUSPENDED` 时，解释器的执行栈（包含 `exec_block` 的递归层级和恢复点）和调用栈（函数调用返回点）完整保留。下次调用 `run()` 时，`interpret()` 从栈中恢复状态，从挂起点继续执行
 
-`resume_info` 字典用于避免 `IfStmt`/`WhileStmt`/`ForStmt` 恢复时重新求值条件表达式
+`resume_info` 字典用于避免 `IfStmt`/`WhileStmt`/`ForStmt` 恢复时重新求值条件表达式（`ForStmt` 用它保存迭代器）。它只在语句被挂起后重新进入时有效，因此 `exec_block` 会在每条语句正常结束后清空当前帧的 `resume_info`，避免泄漏到后续语句
 
 ---
 

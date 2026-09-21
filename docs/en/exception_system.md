@@ -50,6 +50,7 @@ PyGDS defines exception types as **`DSLClass` instances**, not as separate const
 Exception                          # Base class
 ├── TypeError                      # Type error
 ├── ValueError                     # Value error
+│   └── StatisticsError            # Statistics error (raised by the statistics module)
 ├── RuntimeError                   # Runtime error
 ├── NameError                      # Name error
 ├── KeyError                       # Key error
@@ -58,7 +59,9 @@ Exception                          # Base class
 ├── ArithmeticError                # Arithmetic error
 │   └── ZeroDivisionError          # Division by zero error
 ├── StopIteration                  # Iteration stop
-└── AssertionError                 # Assertion error
+├── AssertionError                 # Assertion error
+├── EOFError                       # End of input
+└── ImportError                    # Import error
 ```
 
 ### Registration Mechanism — `_define_exception`

@@ -121,9 +121,13 @@ dsl.run()
 | `id()` | ✅ 完整 | 对象标识符 |
 | `global`/`nonlocal` | ✅ 完整 | 变量作用域声明 |
 | 列表推导式 | ✅ 完整 | `[x for x in iterable [if cond]]` |
-| 生成器表达式 | ⚠️ 部分 | `(x for x in iterable [if cond])` |
+| 生成器表达式 | ✅ 完整 | `(x for x in iterable [if cond])`，惰性生成器，支持 `next()` 与 `sum(x for x in ...)` 裸写法 |
 | 字典推导式 | ✅ 完整 | `{k: v for k, v in ... [if cond]}` |
 | 集合推导式 | ✅ 完整 | `{x*x for x in iterable [if cond]}` |
+| 多 `for` 推导式 | ✅ 完整 | `[x*y for x in a for y in b]`，每个 `for` 可带多个 `if`；列表/字典/集合推导式与生成器表达式均支持，循环变量可为 `k, v` 元组目标 |
+| 字面量 `*` 解包 | ✅ 完整 | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}`（Python 3.5+） |
+| 赋值表达式 (`:=`) | ✅ 完整 | `if (n := len(a)) > 5:`、`while chunk := read():`、推导式内绑定到外层作用域（Python 3.8+） |
+| `slice` | ✅ 完整 | `slice(start, stop[, step])` 对象，可复用索引 `lst[slice(...)]` |
 | 增强赋值 | ✅ 完整 | `+=`, `-=`, `*=`, `/=` 等 |
 | 下标访问 | ✅ 完整 | `obj[key]` 含 `getitem`/`setitem` |
 | 属性访问 | ✅ 完整 | `obj.attr` 含 `getattr`/`setattr` |
@@ -142,15 +146,19 @@ dsl.run()
 | 字典合并 | ✅ 完整 | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}`（Python 3.9+） |
 | `str` `%` 格式化 | ✅ 完整 | `"%s: %d" % (x, y)`（printf 风格） |
 | `str.format` | ✅ 完整 | `"{:.2f} {:>8}".format(x, s)`，含位置/关键字参数与格式说明符 |
-| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string；math 含 comb/perm/prod/lcm，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile） |
+| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter） |
 | `set` | ✅ 完整 | 字面量 `{1, 2}`、构造、集合运算与方法 |
 | `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
 | `async`/`await` | ❌ 不支持 | — |
-| 生成器/`yield` | ❌ 不支持 | — |
+| 生成器/`yield` | ❌ 不支持 | 生成器表达式已支持（惰性 `generator` 对象）；`yield` 生成器函数计划在 `v0.4.0` 版本实现 |
 | 装饰器 | ⚠️ 部分 | `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter） |
 | `with` 语句 | ❌ 不支持 | — |
-| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string） |
+| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator） |
+
+> **⚠️ 破坏性变更（v0.3.0）**：生成器表达式 `(x for x in iterable)` 的语义已从「急切求值为列表」改为「惰性生成器对象」
+> 旧代码若直接对生成器表达式结果做下标/`len()`/列表方法会报错，需先 `list(g)` / `tuple(g)` 转换
+> 生成器为一次性迭代器，重复迭代不会从头开始
 
 ---
 

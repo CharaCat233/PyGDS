@@ -37,7 +37,7 @@ func _on_run_script() -> void:
 	_dialog.popup_centered_ratio(0.5)
 
 
-## 选择文件后, 用 PyGDS 执行并输出结果
+## 选择文件后, 用 PyGDS 执行并输出结果 [br]
 ## [param path] 选中的 .py 文件路径
 func _on_file_selected(path: String) -> void:
 	if not FileAccess.file_exists(PYGDS_PATH):

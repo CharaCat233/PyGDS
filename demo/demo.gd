@@ -1,14 +1,14 @@
 extends Control
-## PyGDS 挂起系统 Demo: 回合制战斗模拟器
+## PyGDS 挂起系统 Demo: 回合制战斗模拟器 [br]
 ##
-## 演示三种挂起方式:
-##   1. sleep(n)             — SLEEPING 挂起 (Timer 延时后自动恢复)
-##   2. wait_for_confirm()   — WAITING 挂起 (等待用户点击按钮)
-##   3. play_animation(...)  — WAITING 挂起 + on_resume 回调
+## 演示三种挂起方式: [br]
+##   1. sleep(n)             — SLEEPING 挂起 (Timer 延时后自动恢复) [br]
+##   2. wait_for_confirm()   — WAITING 挂起 (等待用户点击按钮) [br]
+##   3. play_animation(...)  — WAITING 挂起 + on_resume 回调 [br]
 ##
-## 在 Godot 编辑器中打开 demo/demo.tscn 场景即可运行
+## 在 Godot 编辑器中打开 demo/demo.tscn 场景即可运行 [br]
 ##
-## 架构: 事件驱动, 不用 _process() 轮询, 而是通过 Timer 信号
+## 架构: 事件驱动, 不用 _process() 轮询, 而是通过 Timer 信号 [br]
 ## 和按钮点击驱动执行, 真实展示挂起系统的异步特性
 
 const PYGDS_PATH = "res://pygds.gd"

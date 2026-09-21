@@ -508,7 +508,7 @@ list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
 
 ## Built-in Modules (import)
 
-PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides two pure-logic modules, `math` and `random` (engine-related capabilities are better exposed through `register_api()` from the GDScript side).
+PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the pure-logic modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string` and `operator` (engine-related capabilities are better exposed through `register_api()` from the GDScript side).
 
 ### import Syntax
 
@@ -525,7 +525,7 @@ from math import *                # import all public members (non-underscore)
 | Category | Members |
 | :--- | :--- |
 | Constants | `pi` `e` `tau` |
-| Basics | `sqrt` `isqrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` |
+| Basics | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
 | Exponential/log | `exp` `log` `log2` `log10` |
 | Trigonometry | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
 | Angles | `degrees` `radians` |
@@ -543,7 +543,12 @@ math.comb(5, 2)      # 10   (combinations)
 math.perm(5, 2)      # 20   (permutations)
 math.prod([2, 3, 4]) # 24   (product; start is a keyword argument)
 math.lcm(4, 6)       # 12   (least common multiple)
+math.cbrt(-8)        # -2.0 (cube root, negative inputs supported)
+math.remainder(7, 3) # 1.0  (IEEE 754 remainder, quotient rounded to nearest even)
+math.remainder(1.5, 1)  # -0.5
 ```
+
+> `math.remainder(x, y)` returns `x - n*y` where `n` is `x/y` rounded to the nearest even integer. a zero divisor or an infinite `x` raises `ValueError`.
 
 ### `random` Module
 
@@ -555,14 +560,17 @@ math.lcm(4, 6)       # 12   (least common multiple)
 | `randint(a, b)` | Integer in `[a, b]` (inclusive) |
 | `randrange(start, stop, step)` | Random integer from the range |
 | `choice(seq)` | A random element from a sequence |
+| `choices(population, weights=None, k=1)` | Sampling with replacement, optionally weighted; returns a list of length k |
 | `shuffle(seq)` | Shuffle a list in place |
 | `sample(population, k)` | k distinct random elements |
+| `gauss(mu=0.0, sigma=1.0)` | Normal-distribution sample (Box-Muller transform) |
 
 ```python
 import random
 random.seed(42)
 random.random()        # in [0, 1)
-random.randint(1, 6)   # in 1..6
+random.choices(["a", "b"], weights=[1, 0], k=3)   # ['a', 'a', 'a'] (zero-weight entries are never drawn)
+random.gauss(0, 1)     # a float drawn from N(0, 1)
 ```
 
 > **Note**: PyGDS uses a built-in xorshift32 PRNG, whose value sequence differs from CPython's Mersenne Twister; however `seed()` guarantees reproducible sequences within PyGDS.
@@ -578,6 +586,7 @@ random.randint(1, 6)   # in 1..6
 | `pstdev(data)` | Population standard deviation (n) |
 | `variance(data)` | Sample variance (n-1) |
 | `pvariance(data)` | Population variance (n) |
+| `quantiles(data, n=4)` | Quantile cut points (exclusive method, returns n-1 values; fewer than 2 data points raises `StatisticsError`) |
 
 ```python
 import statistics
@@ -585,7 +594,11 @@ statistics.mean([1, 2, 3, 4])        # 2.5
 statistics.median([1, 2, 3, 4])      # 2.5
 statistics.mode([1, 2, 2, 3])        # 2
 round(statistics.stdev([1, 2, 3]), 6)  # 1.0
+statistics.quantiles([1, 2, 3, 4])   # [1.25, 2.5, 3.75] (quartiles)
+statistics.quantiles([1, 2, 3, 4], n=2)  # [2.5] (median cut point)
 ```
+
+> `statistics.StatisticsError` derives from `ValueError` (matching CPython), so it can be caught either as `except statistics.StatisticsError` or as `except ValueError`.
 
 ### `functools` Module
 
@@ -593,13 +606,19 @@ round(statistics.stdev([1, 2, 3]), 6)  # 1.0
 | :--- | :--- |
 | `reduce(func, iterable[, initial])` | Left-to-right accumulation |
 | `partial(func, *args, **kwargs)` | Partial function (pre-binds some arguments) |
+| `cmp_to_key(func)` | Turns an old-style `cmp(a, b)` function into a key factory usable with `key=` |
 
 ```python
-from functools import reduce, partial
+from functools import reduce, partial, cmp_to_key
 reduce(lambda a, b: a + b, [1, 2, 3, 4])   # 10
 add5 = partial(lambda a, b: a + b, 5)
 add5(3)                                    # 8
+sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 ```
+
+> `cmp_to_key(func)` returns a key factory; wrapping an element with it makes
+> `sorted(key=...)` / `list.sort(key=...)` order by the sign of `func(a, b)`
+> (negative sorts first, zero means equal, positive sorts last).
 
 ### `itertools` Module (Common Subset)
 
@@ -616,9 +635,14 @@ add5(3)                                    # 8
 | `zip_longest(*iterables, fillvalue=None)` | Pair by the longest iterable, filling missing slots with `fillvalue` |
 | `takewhile(predicate, iterable)` | Take elements while the predicate holds, stop at the first failure |
 | `dropwhile(predicate, iterable)` | Drop elements while the predicate holds, then return the rest |
+| `accumulate(iterable[, func][, initial])` | Prefix accumulation (addition by default; `func` and `initial` supported) |
+| `pairwise(iterable)` | Adjacent pairs; returns n-1 tuples |
+| `groupby(iterable, key=None)` | Adjacent grouping; returns `[(key, [elements...]), ...]` |
+| `starmap(func, iterable)` | Calls `func` with each row unpacked as arguments; returns a list of results |
 
 ```python
 from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
+from itertools import accumulate, pairwise, groupby, starmap
 list(chain([1, 2], [3], [4, 5]))       # [1, 2, 3, 4, 5]
 list(product([1, 2], [3, 4]))          # [(1, 3), (1, 4), (2, 3), (2, 4)]
 list(combinations([1, 2, 3], 2))       # [(1, 2), (1, 3), (2, 3)]
@@ -630,9 +654,15 @@ list(islice(count(10, 5), 3))          # [10, 15, 20]
 list(zip_longest([1, 2], [3], fillvalue=0))  # [(1, 3), (2, 0)]
 list(takewhile(lambda x: x < 4, [1, 2, 5]))  # [1, 2]
 list(dropwhile(lambda x: x < 3, [1, 2, 3, 4]))  # [3, 4]
+list(accumulate([1, 2, 3, 4]))         # [1, 3, 6, 10]
+list(accumulate([1, 2, 3], initial=10))  # [10, 11, 13, 16]
+list(pairwise([1, 2, 3]))              # [(1, 2), (2, 3)]
+[(k, list(g)) for k, g in groupby([1, 1, 2, 3, 3])]  # [(1, [1, 1]), (2, [2]), (3, [3, 3])]
+list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 ```
 
 > **Note**: These functions currently return a full `list` (`list(chain(...))` directly gives the result; no extra `list()` wrap is needed). The infinite objects (`repeat`/`cycle`/`count`) must be consumed lazily via `islice`/`takewhile`; do not call `list()` directly on them.
+> `groupby` keeps adjacent-grouping semantics (the same key split by other keys yields several groups), and each group is already a `list`, so no conversion is needed.
 
 ### `collections` Module
 
@@ -650,6 +680,37 @@ c.most_common()              # [('a', 1), ('b', 1), ('c', 1)]
 c.most_common(1)             # [('a', 1)]
 dd = defaultdict(list); dd["a"].append(1)   # dd["a"] → [1]
 ```
+
+### `operator` Module
+
+Exposes the built-in operators as ordinary functions, which pairs well with functional tools such as `sorted(key=)` and `map`. Every binary/unary function goes through the same dispatch path as the operator itself, so magic methods such as `__add__` on user classes still apply.
+
+| Category | Members |
+| :--- | :--- |
+| Arithmetic | `add` `sub` `mul` `truediv` `floordiv` `mod` `pow` `neg` `pos` `abs` |
+| Bitwise | `and_` `or_` `xor` `invert` `lshift` `rshift` |
+| Comparison | `eq` `ne` `lt` `le` `gt` `ge` `is_` `is_not` |
+| Logic | `not_` `truth` |
+| Sequence | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
+| Getters | `itemgetter` `attrgetter` |
+
+```python
+import operator
+operator.add(1, 2)                  # 3
+operator.floordiv(7, 2)             # 3
+operator.invert(5)                  # -6
+operator.contains([1, 2, 3], 2)     # True (note the order: container first)
+operator.getitem([10, 20], 1)       # 20
+operator.itemgetter(1)(["a", "b"])  # 'b'
+operator.attrgetter("x")(obj)       # obj.x
+
+# with sorted
+pairs = [(2, "b"), (1, "a")]
+sorted(pairs, key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
+```
+
+> `itemgetter(k1, k2, ...)` / `attrgetter("a", "b")` return callables: a single argument returns one value, several arguments return a tuple of values; `attrgetter` accepts dotted `a.b` paths.
+> `length_hint(obj)` returns 0 when the object has no length information (it never raises).
 
 ### `string` Module (String Constants)
 

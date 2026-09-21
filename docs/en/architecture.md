@@ -43,6 +43,7 @@ The `PyGDS.TokenType` enumeration values are as follows:
 | Delimiters | `LPAREN`, `RPAREN`, `LBRACKET`, `RBRACKET`, `LBRACE`, `RBRACE`, `COMMA`, `COLON`, `NEWLINE` |
 | Comparison (two-char) | `EQUAL_EQUAL`, `NOT_EQUAL`, `GREATER_EQUAL`, `LESS_EQUAL` |
 | Augmented Assignment | `PLUS_EQ`, `MINUS_EQ`, `STAR_EQ`, `SLASH_EQ`, `DOUBLESLASH_EQ`, `STARSTAR_EQ`, `PERCENT_EQ` |
+| Assignment expression | `COLON_EQ` (the `:=` walrus operator) |
 | Keywords | `IF`, `ELIF`, `ELSE`, `WHILE`, `FOR`, `IN`, `AND`, `OR`, `NOT`, `TRUE`, `FALSE`, `DEF`, `CLASS`, `RETURN`, `BREAK`, `CONTINUE`, `GLOBAL`, `NONLOCAL`, `TRY`, `EXCEPT`, `FINALLY`, `RAISE`, `AS`, `IS`, `LAMBDA` |
 | Literals | `IDENTIFIER`, `STRING`, `FSTRING`, `INTEGER`, `FLOAT` |
 | Special | `INDENT`, `DEDENT`, `EOF`, `AT`, `NULL`, `IS_NOT` |
@@ -218,8 +219,12 @@ The AST is divided into two base classes: **`PyGDS.Stmt`** (statements) and **`P
 | `PyGDS.ListLiteral` | `elements: Array[Expr]` | List literal |
 | `PyGDS.TupleLiteral` | `elements: Array[Expr]` | Tuple literal |
 | `PyGDS.DictLiteral` | `keys: Array[Expr]`, `values: Array[Expr]` | Dictionary literal |
-| `PyGDS.ListComp` | `elt_expr`, `var_name`, `iterable`, `condition` | List comprehension |
-| `PyGDS.DictComp` | `key_expr`, `value_expr`, `k_var`, `v_var`, `iterable`, `condition` | Dictionary comprehension |
+| `PyGDS.WalrusExpr` | `name: String`, `value: Expr` | Assignment expression (`x := 1`) |
+| `PyGDS.StarredExpr` | `value: Expr` | Literal `*` unpacking entry (`[*a, 1]`) |
+| `PyGDS.ListComp` | `elt_expr`, `clauses: Array[CompClause]` | List comprehension (multiple `for` / `if`) |
+| `PyGDS.SetComp` | `elt_expr`, `clauses: Array[CompClause]` | Set comprehension |
+| `PyGDS.DictComp` | `key_expr`, `value_expr`, `clauses: Array[CompClause]` | Dictionary comprehension |
+| `PyGDS.GenComp` | `elt_expr`, `clauses: Array[CompClause]` | Generator expression (evaluates to a lazy generator) |
 | `PyGDS.ConditionalExpr` | `condition`, `true_expr`, `false_expr` | Ternary conditional expression |
 | `PyGDS.UnpackAssign` | `targets: Array`, `value: Expr` | Unpacking assignment |
 | `PyGDS.StarredTarget` | `target: Variable` | Starred unpacking target |
@@ -232,6 +237,7 @@ The AST is divided into two base classes: **`PyGDS.Stmt`** (statements) and **`P
 | `PyGDS.Param` | `name`, `default_value`, `is_args`, `is_kwargs`, `is_positional_only`, `is_keyword_only` | Function parameter |
 | `PyGDS.KeywordArg` | `name: String`, `value: Expr` | Keyword argument |
 | `PyGDS.ExceptClause` | `exception_type: Expr`, `as_name: String`, `body: Array` | except clause |
+| `PyGDS.CompClause` | `targets: Array`, `iterable: Expr`, `conditions: Array` | Comprehension loop clause (one `for` plus its `if`s) |
 
 ---
 
@@ -286,8 +292,11 @@ The return status `PyGDS.Interpreter.ExecResult` that controls execution flow is
 | `ListLiteral` | Evaluates each element → builds DSLList |
 | `TupleLiteral` | Evaluates each element → builds DSLTuple |
 | `DictLiteral` | Evaluates each key-value pair → builds DSLDict |
-| `ListComp` | Iterates → sets variable → evaluates condition → evaluates element → collects |
-| `DictComp` | Iterates → sets key/value variables → evaluates condition → evaluates key/value → collects |
+| `WalrusExpr` | Evaluates the right side → `environment.set_val()` → returns that value |
+| `ListComp` | Walks the loop clauses → evaluates the element for each match → collects into a DSLList |
+| `SetComp` | Like a list comprehension, collecting into a DSLSet (auto-deduplicated) |
+| `DictComp` | Like a list comprehension, evaluating key and value per binding → DSLDict |
+| `GenComp` | Builds a DSLGenerator (lazy; a frame stack holds each clause's iterator) |
 
 ### Binary Operation Dispatch Details
 
@@ -631,7 +640,7 @@ GDScript API: request_suspend_waiting(on_resume)
 
 The key to the interpreter resuming from suspension lies in `_exec_stack` and `_call_stack`. When `interpret()` encounters `SUSPENDED`, the interpreter's execution stack (containing the recursion levels and resume points of `exec_block`) and call stack (function call return points) are fully preserved. The next time `run()` is called, `interpret()` restores state from the stack and resumes execution from the suspension point.
 
-The `resume_info` dictionary is used to avoid re-evaluating conditional expressions when `IfStmt`/`WhileStmt`/`ForStmt` resume.
+The `resume_info` dictionary is used to avoid re-evaluating conditional expressions when `IfStmt`/`WhileStmt`/`ForStmt` resume (`ForStmt` stores its iterator there). It is only meaningful while a statement is being re-entered after a suspension, so `exec_block` clears the current frame's `resume_info` once a statement finishes normally, keeping it from leaking into later statements.
 
 ---
 

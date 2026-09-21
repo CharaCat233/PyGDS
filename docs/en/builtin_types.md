@@ -20,6 +20,11 @@ All DSL types inherit from the `DSLObject` base class, simulating Python's magic
 | `DSLDict` | `dict` | Mutable | No |
 | `DSLSet` | `set` | Mutable | No |
 | `DSLFrozenSet` | `frozenset` | Immutable | Yes |
+| `DSLGenerator` | `generator` | Mutable | No |
+| `DSLSlice` | `slice` | Immutable | Yes |
+| `DSLItemGetter` | `operator.itemgetter` | Immutable | No |
+| `DSLAttrGetter` | `operator.attrgetter` | Immutable | No |
+| `DSLCmpKey` | `functools.KeyWrapper` | Immutable | No |
 
 ---
 
@@ -237,6 +242,56 @@ isinstance(frozenset([1]), frozenset)   # True
 isinstance({1}, frozenset)              # False
 ```
 
+### DSLGenerator — Generator Type
+
+Corresponds to a Python generator (`generator`), created by a generator expression `(expr for var in iterable [if cond])`. It is **lazily evaluated**: elements are produced one at a time on `next()` or iteration, ideal for large or infinite sequences.
+
+```gdscript
+class DSLGenerator extends DSLObject:
+    # holds the element expression, the loop clause array (Array[CompClause]) and the closure environment
+    # a shared DSLGeneratorIterator implements the one-shot iteration semantics
+```
+
+```python
+g = (x * x for x in range(5))
+type(g)                 # <class 'generator'>
+next(g)                 # 0 (advance one step)
+list(g)                 # [1, 4, 9, 16] (one-shot: 0 already consumed, rest continue)
+list(g)                 # [] (exhausted)
+sum(x * x for x in range(4))     # 14 (bare form)
+
+list(x * y for x in [1, 2] for y in [10, 20])   # [10, 20, 20, 40] (multiple for clauses)
+```
+
+> **Note**: Generators are **one-shot iterators**; iterating again does not restart. `next()` past the end raises `StopIteration` (a default can be given: `next(g, default)`). The consumers `list`/`tuple`/`sum`/`sorted`/`any`/`all`/`enumerate`/`zip`/`min`/`max` all accept generators via `_dsl_iter()`, and `itertools.islice` can lazily consume infinite generators.
+
+#### Loop Clauses (CompClause)
+
+Generator expressions and every kind of comprehension share `CompClause` to describe their loops: each clause carries an array of target variable names, the iterable expression, and an array of `if` conditions. Several clauses nest in the order written (inner clauses may reference outer loop variables).
+
+```gdscript
+class CompClause:
+    var targets: Array      # loop target names (several for a tuple target like for k, v in ...)
+    var iterable: Expr      # iterable expression
+    var conditions: Array   # filter condition expressions (zero or more)
+```
+
+- **Eager** (`ListComp` / `SetComp` / `DictComp`): `_eval_comp_clauses` walks the clauses recursively and evaluates the element expression for every complete binding combination
+- **Lazy** (`DSLGenerator`): `DSLGeneratorIterator` keeps a frame stack holding each clause's iterator and binding snapshot, so each `next()` advances only to the next matching element
+
+### DSLSlice — Slice Type
+
+Corresponds to Python `slice`, describing the interval `start:stop:step`. It can be saved and reused for `lst[slice(...)]` / `"str"[slice(...)]`.
+
+```python
+s = slice(1, 4)             # slice(1, 4, None)
+s.start / s.stop / s.step   # 1 / 4 / None (unset bounds are None)
+isinstance(s, slice)        # True
+lst[slice(1, 4)]            # equivalent to lst[1:4]
+lst[slice(0, 6, 2)]         # equivalent to lst[0:6:2]
+lst[slice(4, 0, -1)]        # negative step reverses
+
+```
 ## Iterator System
 
 PyGDS provides specialized iterator implementations for different collection types.
@@ -271,6 +326,14 @@ class DSLDictKeyIterator extends DSLIterator:
 ```
 
 ### DSLStringIterator
+
+### DSLGeneratorIterator
+
+Generator-expression iterator: each `next()` lazily advances the comprehension loop once (evaluate source → bind loop variable → test condition → yield an element). A **prefetch buffer** keeps `has_next()` accurate; loop state lives in the iterator fields.
+
+### DSLInfiniteIterator
+
+Infinite Iterators. The `itertools` `repeat`/`cycle`/`count` return infinite objects whose `_dsl_iter()` yields infinite iterators (`DSLRepeatIterator`/`DSLCycleIterator`/`DSLCountIterator`) with `has_next()` always `true`; consume them lazily with `islice`/`takewhile`.
 
 Iterates over a string character by character.
 

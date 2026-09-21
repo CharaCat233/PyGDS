@@ -1,6 +1,6 @@
 extends SceneTree
 
-## PyGDS 挂起系统综合测试
+## PyGDS 挂起系统综合测试 [br]
 ## 覆盖: SLEEPING/WAITING/嵌套函数/控制流/混合/预设代码/连续挂起/on_resume回调
 
 ## 通过 preload 引用解释器脚本, 避免依赖编辑器生成的全局类缓存 (CI 无缓存可解析)

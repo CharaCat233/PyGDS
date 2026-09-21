@@ -50,6 +50,7 @@ PyGDS 将异常类型定义为 **`DSLClass` 实例**，而非单独的构造函�
 Exception                          # 根基类
 ├── TypeError                      # 类型错误
 ├── ValueError                     # 值错误
+│   └── StatisticsError            # 统计错误 (statistics 模块抛出)
 ├── RuntimeError                   # 运行时错误
 ├── NameError                      # 名称错误
 ├── KeyError                       # 键错误
@@ -58,7 +59,9 @@ Exception                          # 根基类
 ├── ArithmeticError                # 算术错误
 │   └── ZeroDivisionError          # 除零错误
 ├── StopIteration                  # 迭代停止
-└── AssertionError                 # 断言错误
+├── AssertionError                 # 断言错误
+├── EOFError                       # 输入结束
+└── ImportError                    # 导入错误
 ```
 
 ### 注册机制 — `_define_exception`

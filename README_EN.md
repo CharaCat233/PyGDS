@@ -121,9 +121,13 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | `id()` | ✅ Full | Object identifiers |
 | `global`/`nonlocal` | ✅ Full | Variable scope declarations |
 | List Comprehensions | ✅ Full | `[x for x in iterable [if cond]]` |
-| Generator Expressions | ⚠️ Partial | `(x for x in iterable [if cond])` |
+| Generator Expressions | ✅ Full | `(x for x in iterable [if cond])`, lazy generator, supports `next()` and bare `sum(x for x in ...)` |
 | Dict Comprehensions | ✅ Full | `{k: v for k, v in ... [if cond]}` |
 | Set Comprehensions | ✅ Full | `{x*x for x in iterable [if cond]}` |
+| Multiple `for` clauses | ✅ Full | `[x*y for x in a for y in b]`, each `for` may carry several `if`; list/dict/set comprehensions and generator expressions all support it, loop variables may be `k, v` tuple targets |
+| Literal `*` unpacking | ✅ Full | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}` (Python 3.5+) |
+| Assignment expressions (`:=`) | ✅ Full | `if (n := len(a)) > 5:`, `while chunk := read():`, binds to the enclosing scope inside comprehensions (Python 3.8+) |
+| `slice` | ✅ Full | `slice(start, stop[, step])` object, reusable indexing `lst[slice(...)]` |
 | Augmented Assignment | ✅ Full | `+=`, `-=`, `*=`, `/=`, etc. |
 | Subscript Access | ✅ Full | `obj[key]` with `getitem`/`setitem` |
 | Attribute Access | ✅ Full | `obj.attr` with `getattr`/`setattr` |
@@ -142,15 +146,19 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Dict merge | ✅ Full | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}` (Python 3.9+) |
 | `str` `%` formatting | ✅ Full | `"%s: %d" % (x, y)` (printf style) |
 | `str.format` | ✅ Full | `"{:.2f} {:>8}".format(x, s)`, with positional/keyword arguments and format specifiers |
-| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string; math has comb/perm/prod/lcm, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile) |
+| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter) |
 | `set` | ✅ Full | Literal `{1, 2}`, constructor, set operations and methods |
 | `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |
 | `async`/`await` | ❌ Not Supported | — |
-| Generators/`yield` | ❌ Not Supported | — |
+| Generators/`yield` | ❌ Not Supported | Generator expressions are supported (lazy `generator` objects); `yield` generator functions are not |
 | Decorators | ⚠️ Partial | `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) |
 | `with` Statement | ❌ Not Supported | — |
-| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string) |
+| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator) |
+
+> **⚠️ Breaking Change (v0.3.0)**: Generator expressions `(x for x in iterable)` have changed from "eagerly evaluated to a list" to "lazy generator object".
+> Code that directly subscripts/`len()`s or calls list methods on a generator expression result will fail — convert with `list(g)` / `tuple(g)` first
+> generators are one-shot iterators (re-iterating does not restart).
 
 ---
 

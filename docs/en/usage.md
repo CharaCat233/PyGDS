@@ -213,20 +213,6 @@ a, b, c = [1, 2, 3]
 first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
 ```
 
-### Variables and Assignment
-
-```python
-x = 42
-y = 3.14
-name = "Alice"
-flag = True
-nothing = None
-
-# Multiple unpacking
-a, b, c = [1, 2, 3]
-first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
-```
-
 ### Number Literals
 
 Hexadecimal, octal, binary, underscore-separated and scientific notation are supported:
@@ -269,6 +255,60 @@ d3 |= d2             # in-place merge, d3 → {'a': 1, 'b': 3, 'c': 4}
 dict.fromkeys(["a", "b"], 0)    # {'a': 0, 'b': 0} (builds a dict from an iterable of keys)
 ```
 
+### Literal `*` Unpacking (Python 3.5+)
+
+Inside list, tuple and set literals, `*iterable` expands the elements of that iterable in place, exactly as if they had been written out one by one:
+
+```python
+a = [1, 2, 3]
+b = [4, 5]
+
+[*a, 6]              # [1, 2, 3, 6]
+[0, *a, *b]          # [0, 1, 2, 3, 4, 5]
+[*"ab", "c"]         # ['a', 'b', 'c'] (any iterable)
+[*range(3)]          # [0, 1, 2]
+[*{"x": 1}]          # ['x'] (dict iteration yields keys)
+
+(*a,)                # (1, 2, 3) (a tuple literal needs the trailing comma)
+(0, *a, 6)           # (0, 1, 2, 3, 6)
+sorted({*a, 10})     # [1, 2, 3, 10] (set literal; sets are unordered, so inspect with sorted)
+```
+
+> A one-element tuple must keep its comma: `(*a,)` is valid while `(*a)` raises `SyntaxError`
+> (matching Python); a comprehension element cannot be starred (`[*x for x in it]` fails);
+> whatever follows `*` must be iterable, otherwise a `TypeError` is raised.
+
+### Assignment Expressions (walrus, Python 3.8+)
+
+`x := 1` is an **expression**: it assigns to the variable and then yields that value, which makes it handy for assigning and testing in one step:
+
+```python
+if (n := 10) > 5:
+    print(n)                     # 10
+if m := 20:                      # no parentheses needed in a condition
+    print(m)                     # 20
+
+while (cur := data[i]) != 0:     # read and test at once
+    i += 1
+
+print(x := 7)                    # 7 (as a call argument)
+print([(k := 2), k * 3])         # [2, 6]
+print({(q := 1): q + 1})         # {1: 2}
+print((a := (b := 3)) + a + b)   # 9 (nesting needs parentheses)
+```
+
+Inside a comprehension the assignment binds to the **enclosing scope**, exactly as in Python:
+
+```python
+vals = [y := v * 2 for v in range(4)]
+print(vals)                      # [0, 2, 4, 6]
+print(y)                         # 6 (leaks to the enclosing scope, like Python)
+print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
+```
+
+> The target must be a plain variable name: `(obj.attr := 1)` and `(lst[0] := 1)` raise `cannot use assignment expressions with attribute` / `with subscript`; a bare `x := 1` statement
+> raises `SyntaxError` (write `(x := 1)` instead) and `del (x := 1)` raises `cannot delete named expression` — all matching Python.
+
 ### Operators
 
 | Category | Operators |
@@ -277,6 +317,7 @@ dict.fromkeys(["a", "b"], 0)    # {'a': 0, 'b': 0} (builds a dict from an iterab
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` |
 | Logical | `and`, `or`, `not` |
 | Assignment | `=`, `+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `**=` |
+| Assignment expression | `:=` (walrus) |
 | Membership | `in`, `not in` |
 
 The `%` operator performs printf-style formatting on strings:
@@ -502,7 +543,7 @@ print(*[1, 2, 3], sep="-")  # 1-2-3    (with built-ins)
 
 ### import and Built-in Modules
 
-Supports `import` / `from-import` of built-in modules (`math` / `random`):
+Supports `import` / `from-import` of built-in modules (`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator`):
 
 ```python
 import math
@@ -516,9 +557,12 @@ sqrt(9)                       # 3.0
 
 from math import *
 gcd(12, 18)                   # 6
+
+import operator
+sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
 
-> **Note**: only built-in modules (math/random) are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
+> **Note**: only built-in modules are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
 
 ### global / nonlocal
 
@@ -544,6 +588,72 @@ outer()             # 3
 print(x)            # 1
 change_global()
 print(x)            # 100
+```
+
+### Comprehensions and Generator Expressions
+
+**List / dict / set comprehensions**:
+
+```python
+[x * x for x in range(5) if x % 2 == 0]       # [0, 4, 16]
+{k: v for k, v in [("a", 1), ("b", 2)]}       # {'a': 1, 'b': 2}
+{x * x for x in [1, 2, 2, 3]}                 # {1, 4, 9} (auto-deduplicated)
+```
+
+**Multiple `for` clauses**: a comprehension may contain several `for` clauses (nested in the order
+written, inner clauses can reference outer loop variables), and each `for` may carry several `if` clauses; list / dict / set comprehensions and generator expressions all support this:
+
+```python
+[x * y for x in [1, 2] for y in [10, 20]]     # [10, 20, 20, 40]
+[x + y for x in range(3) for y in range(x)]   # [1, 2, 3] (inner depends on outer)
+
+[x for x in range(10) if x % 2 == 0 if x > 4] # [6, 8] (several ifs on one for)
+[x * y for x in range(5) if x % 2 == 1 for y in range(3) if y != 1]
+
+{k: v for k, v in [("a", 1), ("b", 2)] if v > 1}   # {'b': 2}
+sorted({x * y for x in [1, 2] for y in [2, 3]})    # [2, 3, 4, 6]
+
+list(x * y for x in [1, 2] for y in [10, 20])      # [10, 20, 20, 40] (generator)
+```
+
+**Tuple targets**: loop variables may be written as `k, v`, unpacking each element positionally:
+
+```python
+[k for k, v in [("a", 1), ("b", 2)]]          # ['a', 'b']
+{v * 10 for k, v in [("a", 1), ("b", 2)]}     # {10, 20}
+```
+
+**Generator expressions**: `(expr for var in iterable [if cond])` evaluates to a lazy generator object that yields one item per `next()` / iteration step — ideal for large or infinite sequences; it can also be passed as a function argument without extra parentheses:
+
+```python
+g = (x * x for x in range(5))
+type(g)                 # <class 'generator'>
+list(g)                 # [0, 1, 4, 9, 16]
+
+next(g2)                # advance one step (one-shot iterator; stops when exhausted)
+sum(x * x for x in range(4))     # 14 (bare form)
+list(x for x in range(6) if x % 2 == 0)    # [0, 2, 4]
+
+from itertools import islice
+list(islice((x * x for x in count()), 5))   # [0, 1, 4, 9, 16] (with infinite sequences)
+```
+
+> **⚠️ Breaking Change (v0.3.0)**: Previously `(x for x in it)` was treated as a list comprehension and **eagerly evaluated to a list**; it is now a **lazy generator object**.
+> Old code that directly subscripts / `len()`s / calls list methods on the result will fail — convert with `list(g)` / `tuple(g)` first
+> generators are **one-shot iterators** (re-iterating does not restart).
+
+### `slice` Object
+
+`slice(start, stop[, step])` builds a reusable slice object for `lst[slice(...)]` / `"str"[slice(...)]`:
+
+```python
+s = slice(1, 4)
+s.start / s.stop / s.step   # 1 / 4 / None (unset bounds are None)
+lst[slice(1, 4)]            # equivalent to lst[1:4]
+lst[slice(0, 6, 2)]         # equivalent to lst[0:6:2]
+lst[slice(4, 0, -1)]        # negative step reverses
+"abcdef"[slice(1, 4)]       # "bcd"
+isinstance(s, slice)        # True
 ```
 
 ### List / Tuple / Dictionary Operations
