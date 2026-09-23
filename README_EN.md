@@ -152,11 +152,10 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | `bytes` type | ✅ Full | `b"xy"` literals as a distinct `bytes` type; indexing/iteration yield integers, plus slicing, repetition and `in`, strictly distinct from `str` |
 | `range` type | ✅ Full | A distinct lazy `range` object supporting `len` / indexing / slicing / containment / iteration without materialising large ranges |
 | User-class iteration protocol | ✅ Full | A class defining `__iter__` / `__next__` can be iterated by `for` / `list()` and all consuming functions |
-| User-class `__eq__` / `__hash__` | ✅ Full | `__eq__` participates in `in` / `remove` / `index` / `count`; instances defining `__hash__` can be dict keys and set elements |
 | Multiple assignment targets | ✅ Full | `a[0], a[2] = a[2], a[0]`, `o.x, o.y = 1, 2`, including chained suffixes like `self.data[k] = v` |
 | `dict` views | ✅ Full | `keys()` / `values()` are iterable and support `len` and `in` |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |
-| `async`/`await` | ❌ Not Supported | — |
+| `async`/`await` | ❌ Not Supported | Recognised as reserved keywords only: `await` placement and misuse of `async for` / `async with` / `async` raise the corresponding CPython `SyntaxError` |
 | Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators (including `time.sleep()` inside nested generators), full `send` / `throw` delegation through `yield from` (PEP 380, sub-generator catches first), and closures persisting across `yield` |
 | Decorators | ⚠️ Partial | `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) |
 | `with` Statement | ❌ Not Supported | — |
@@ -169,6 +168,8 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 > **⚠️ Breaking Change (v0.4.0)**: `yield` is now a reserved keyword and can no longer be used as an identifier (variable/function name, etc.). Code that used `yield` as a name must rename it.
 >
 > **⚠️ Breaking Change (v0.5.0-alpha.1)**: `sleep()` has moved into the `time` module — use `import time` then `time.sleep(n)`. A bare `sleep()` no longer exists (matching CPython, which has no built-in bare `sleep` either).
+>
+> **⚠️ Breaking Change (v0.5.0-alpha.4)**: `async` / `await` are now reserved keywords and can no longer be used as identifiers (variable/function names, etc.). `return` / `break` / `continue` outside a function body or loop body now raise `SyntaxError` (previously ignored silently). Code using `async` / `await` as names must rename them.
 >
 > Known behavioural differences and missing features (`yield` resumption re-evaluating prefixes, `send` / `throw` not forwarded, multiple assignment targets, user-class iteration protocol, and so on) have moved to the **Known Issues & Limitations** section below
 
@@ -186,22 +187,22 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 ### P1 — Clear Errors or Missing Features
 
-Items P1-1 to P1-6, P1-11 and P1-14 were fixed in **v0.5.0-alpha.3** (see the `[0.5.0-alpha.3]` section of `CHANGELOG`); only the still-unsupported ones are listed here.
+Items P1-1 to P1-6, P1-11, P1-14, P1-16, P1-17 and P1-18 were fixed in **v0.5.0-alpha.3 / v0.5.0-alpha.4** (see the corresponding sections of `CHANGELOG`); only the still-unsupported ones are listed here.
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
 | P1-7 | `with` statement unsupported | Not implemented by design for now |
 | P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
-| P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`) |
+| P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`). As reserved words, misuse of `async` / `await` now raises `SyntaxError` matching CPython |
 | P1-10 | `match` / `case` structural pattern matching unsupported | Deferred to v0.6.0 |
-| P1-13 | `yield` resumption may re-evaluate prefix subexpressions | Common forms fixed in v0.5.0-alpha.3 (memoised by node + occurrence); complex `yield from` / alternating-generator combinations can still hit the iteration cap (pre-existing since alpha.2) |
+| P1-13 | `yield` resumption may re-evaluate prefix subexpressions | Common forms fixed in v0.5.0-alpha.3 (memoised by node + occurrence); the iteration-cap issue of the same family was fixed in v0.5.0-alpha.4 (nested calls resetting the `yield` position counter) |
 
 ### P2 — Edge Differences
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
 | P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
-| P2-2 | Some syntax-error messages differ | For example `async` raises `NameError` instead of `SyntaxError` |
+| P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` were aligned with CPython in **v0.5.0-alpha.4**; wording and line-number formatting of other parse-time errors may still differ |
 
 ---
 

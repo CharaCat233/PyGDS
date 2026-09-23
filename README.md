@@ -152,11 +152,10 @@ dsl.run()
 | `bytes` 类型 | ✅ 完整 | `b"xy"` 字面量，独立的 `bytes` 类型；索引/迭代产出整数、切片、重复、`in`，与 `str` 严格区分 |
 | `range` 类型 | ✅ 完整 | 独立的惰性 `range` 对象，支持 `len` / 索引 / 切片 / 成员判定 / 迭代，大范围不展开内存 |
 | 用户类迭代协议 | ✅ 完整 | 定义 `__iter__` / `__next__` 的类可被 `for` / `list()` / 各消费函数迭代 |
-| 用户类 `__eq__` / `__hash__` | ✅ 完整 | `__eq__` 参与 `in` / `remove` / `index` / `count`；定义 `__hash__` 的实例可作字典键与集合元素 |
 | 多重赋值目标 | ✅ 完整 | `a[0], a[2] = a[2], a[0]`、`o.x, o.y = 1, 2`，含链式后缀 `self.data[k] = v` |
 | `dict` 视图 | ✅ 完整 | `keys()` / `values()` 可迭代且有 `len` 与 `in` |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
-| `async`/`await` | ❌ 不支持 | — |
+| `async`/`await` | ❌ 不支持 | 仅作为保留关键字识别：`await` 的位置与 `async for` / `async with` / `async` 误用会按 CPython 报对应 `SyntaxError` |
 | 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套（含嵌套生成器内 `time.sleep()`）、`yield from` 的 `send` / `throw` 完整委托（PEP 380，子生成器优先捕获）、闭包跨 `yield` 保持 |
 | 装饰器 | ⚠️ 部分 | `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter） |
 | `with` 语句 | ❌ 不支持 | — |
@@ -169,6 +168,8 @@ dsl.run()
 > **⚠️ 破坏性变更（v0.4.0）**：`yield` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；若旧代码以 `yield` 命名变量，需改名
 >
 > **⚠️ 破坏性变更（v0.5.0-alpha.1）**：`sleep()` 已迁移到 `time` 模块，须 `import time` 后用 `time.sleep(n)` 调用；裸 `sleep()` 不再存在（与 CPython 一致，CPython 也没有内置的裸 `sleep`）
+>
+> **⚠️ 破坏性变更（v0.5.0-alpha.4）**：`async` / `await` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；同时 `return` / `break` / `continue` 出现在函数体外或循环体会报 `SyntaxError`（此前被静默忽略）；若旧代码以 `async` / `await` 命名变量，需改名
 >
 > 已知的行为差异与功能缺失（含 `yield` 恢复重复求值、`send` / `throw` 不转发、多重赋值目标、用户类迭代协议等）已移至下方「已知问题与限制」章节
 
@@ -186,22 +187,22 @@ dsl.run()
 
 ### P1 — 明确报错或功能缺失
 
-下列 P1-1 ~ P1-6、P1-11、P1-14 已在 **v0.5.0-alpha.3** 修复，详见 `CHANGELOG` 的 `[0.5.0-alpha.3]` 节；此处仅保留仍未支持项。
+下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16、P1-17、P1-18 已在 **v0.5.0-alpha.3 / v0.5.0-alpha.4** 修复，详见 `CHANGELOG` 的对应版本节；此处仅保留仍未支持项。
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
 | P1-7 | `with` 语句不支持 | 按既定范围当前不实现 |
 | P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
-| P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代 |
+| P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
 | P1-10 | `match` / `case` 结构化模式匹配不支持 | 延后至 v0.6.0 |
-| P1-13 | `yield` 恢复时前缀子表达式可能重复求值 | 已在 v0.5.0-alpha.3 修复常见形态（按节点 + 出现次序记忆）；`yield from` 与多生成器交替的复杂组合仍可能触达迭代上限（alpha.2 起既有） |
+| P1-13 | `yield` 恢复时前缀子表达式可能重复求值 | 已在 v0.5.0-alpha.3 修复常见形态（按节点 + 出现次序记忆）；同族的迭代上限问题已在 v0.5.0-alpha.4 修复（嵌套调用重置 `yield` 位置计数） |
 
 ### P2 — 边缘差异
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
-| P2-2 | 部分语法错误文案不同 | 例如 `async` 报 `NameError` 而非 `SyntaxError` |
+| P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案已在 **v0.5.0-alpha.4** 对齐 CPython；其余解析期错误的措辞与行号格式仍可能不同 |
 
 ---
 

@@ -733,7 +733,7 @@ print(next(g))          # start
 print(g.send("hello"))  # hello (v 为 send 值)
 ```
 
-**`yield from` 委托**：把子可迭代对象的元素逐个产出，耗尽后表达式的值为子生成器的 `return` 值（`send` / `throw` 不转发给子生成器，`x = yield from it` 赋值形式暂不支持）：
+**`yield from` 委托**：把子可迭代对象的元素逐个产出，耗尽后表达式的值为子生成器的 `return` 值；`send` / `throw` 会按 PEP 380 转发给子生成器（子生成器内可优先捕获），`x = yield from it` 赋值形式同样支持：
 
 ```python
 def sub():
@@ -777,7 +777,8 @@ except StopIteration as e:
 ```
 
 > **⚠️ 破坏性变更（v0.4.0）**：`yield` 现为保留关键字，不能再用作变量名等标识符
-> **⚠️ 已知差异**：生成器体内调用 `sleep()` 会报错（与挂起系统暂不共存）；`yield` 恢复采用语句重执行，含副作用的前缀表达式会在恢复时重复求值（如 `f(a(), (yield 1))` 中 `a()` 执行两次）；`x = yield from it` 赋值形式不支持
+> **⚠️ 已知差异**：`yield` 恢复采用语句重执行续延，`yield` 所在语句中位于挂起点之前的子表达式按「节点 + 出现次序」记忆（如 `f(a(), (yield 1))` 中的 `a()` 只执行一次），但该记忆不递归进嵌套语句块
+> **⚠️ 破坏性变更（v0.5.0-alpha.4）**：`async` / `await` 现为保留关键字，不能再用作变量名/函数名等标识符
 
 ### `slice` 对象
 

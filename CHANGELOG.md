@@ -6,6 +6,29 @@
 
 当前无待发布条目。其余已知问题与功能缺口见 README 的「已知问题与限制」章节，或在仓库 `tests/已知问题清单.md` 查看带复现脚本的完整清单
 
+## [0.5.0-alpha.4] - 2026-09-23
+
+本版修复 `[0.5.0-alpha.3]` 记录的 P1-16 / P1-17 / P1-18 与 P2-2 四项问题
+
+### 修复
+
+- **语句重放时实参被重新构造的调用会重复执行副作用（P1-18 连带）**：`f(C(1))`、`S(1) == S(1)` 这类在实参中构造新实例的调用，重放时会重新求值实参表达式产生新的实例，按对象身份比对的调用帧匹配必然失败，于是函数体被完整重跑一遍——副作用重复执行，返回值也取自新的那次执行。现在在重放轮追加一次按结构（列表/元组/字典逐元素、用户实例逐字段）的宽松匹配，使这类调用能恢复挂起中的那一帧，副作用只执行一次，与 CPython 一致。匹配不调用用户 `__eq__`，避免副作用与递归
+- **`range` / `dict` 视图的空实例真值错误（P1-17 同族）**：`bool(range(0))`、`bool({}.keys())`、`bool({}.values())` 此前均为 `True`（空实例应为假），现按 `len != 0` 判定，与 CPython 一致
+- **用户类 `__bool__` / `__len__` 不参与真值判断（P1-17）**：`DSLObject._dsl_bool()` 的基类实现此前无条件返回 `true`，定义 `__bool__`（或 `__len__`）的用户实例在 `bool()` / `if` / `while` / `not` / `and` / `or` / 三目 / `any` / `all` 等所有真值语境中恒为真。现在按 CPython 的判定优先级处理：先查用户 `__bool__`，无 `__bool__` 但定义了 `__len__` 时以 `len != 0` 为真，两者都无则保持默认真。相关 dunder 的挂起（内部含 `sleep`）同样会正确传播
+- **用户 `__eq__` 内含 `sleep` 时直接比较结果错误（P1-18）**：`S(1) == S(1)` 此前返回 `False`（`in` 路径反而正确）。根因两处并已一并修复 —— `_call_magic_or_fallback` 在用户魔术方法因挂起返回 `null` 后继续回退到基类的引用比较 `magic_eq`，使两个不同实例被判为不等；`Binary` 求值路径也未在结果为空时先判挂起，而是直接报 `RuntimeError: Unknown binary operation error`。现在用户魔术方法内的挂起一律向上传播，交由语句重放机制续跑
+- **`yield` 值表达式含嵌套调用时报迭代上限（P1-16）**：`yield s(1)`、`yield f(i) * (yield i)` 之类以用户函数调用作为 `yield` 值（或其子表达式）的生成器，此前会报 `RuntimeError: maximum step count exceeded`。根因是嵌套用户函数调用体内的语句会把当前生成器的 `_yield_pos` 归零，使外层 `yield` 记录到的挂起位置退化为 0（形同未记录）；该语句随即被反复当作「首次产出」重放直至耗尽步数上限。现在嵌套调用被视作相对当前生成器的原子求值，调用前后保存并还原 `_yield_pos`。同一根因也修掉了 `yield from` 与多个生成器交替使用时触达上限的组合（该现象自 alpha.2 起既有）
+- **`async` / `await` 误用报 `NameError` 而非 `SyntaxError`（P2-2）**：`await x`、`async for`、`async with`、`async def` 等此前因 `async` / `await` 被当作普通标识符而报 `NameError: name 'async' is not defined`。现在两者为保留关键字，按 CPython 给出对应文案：`'await' outside function`、`'await' outside async function`、`'async for' outside async function`、`'async with' outside async function`、`asynchronous comprehension outside of an asynchronous function`，其余误用报 `invalid syntax`（`async def` 作为既定不实现项，给出明确的 `'async def' is not supported` 降级报错）
+- **`return` / `break` / `continue` 出现在非法位置时被静默忽略（P2-2 同族）**：模块层 `return`、循环外 `break` / `continue` 此前不报错也不生效。现在按 CPython 报 `SyntaxError: 'return' outside function` / `'break' outside loop` / `'continue' not properly in loop`，且类体是独立作用域（外层循环不使其中的 `break` 合法）
+
+### 变更
+
+- **`async` / `await` 成为保留关键字**：两者不能再作变量名/函数名等标识符使用（此前可当普通标识符用）。与 v0.4.0 将 `yield` 设为保留关键字同理，若旧代码以 `async` / `await` 命名变量需改名
+
+### 测试
+
+- 新增 3 个行为一致性测试：`lang_object_truth`（`__bool__` / `__len__` 真值判定与内置类型回归护栏）/ `lang_sleep_dunder`（魔术方法内含 `sleep` 的比较与真值）/ `lang_yield_nested_call`（`yield` 值表达式含嵌套调用、`yield from` 与多生成器交替），并入 `expected.json`（共 153 个用例全部通过），挂起测试 22 个用例通过
+- 新增 8 个解析期语法错误测试：`err_await_outside` / `err_await_async_fn` / `err_async_for` / `err_async_with` / `err_async_name` / `err_return_outside` / `err_break_outside` / `err_continue_outside`，逐一与 CPython 的 `SyntaxError` 文案比对一致
+
 ## [0.5.0-alpha.3] - 2026-09-23
 
 本版实现 P1 系列问题（除 `with` / 用户文件 `import` / `async` 等既定范围外）的修复

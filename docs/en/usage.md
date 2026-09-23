@@ -734,7 +734,7 @@ print(next(g))          # start
 print(g.send("hello"))  # hello (v is the send value)
 ```
 
-**`yield from` delegation**: produces the sub-iterable's elements one by one; once exhausted, the expression evaluates to the sub-generator's `return` value (`send` / `throw` are not forwarded into the sub-generator, and the `x = yield from it` assignment form is not supported):
+**`yield from` delegation**: produces the sub-iterable's elements one by one; once exhausted, the expression evaluates to the sub-generator's `return` value. `send` / `throw` are forwarded to the sub-generator per PEP 380 (the sub-generator can catch them first), and the `x = yield from it` assignment form is supported:
 
 ```python
 def sub():
@@ -778,7 +778,8 @@ except StopIteration as e:
 ```
 
 > **⚠️ Breaking Change (v0.4.0)**: `yield` is now a reserved keyword and can no longer be used as an identifier.
-> **⚠️ Known Differences**: calling `sleep()` inside a generator body raises an error (generator functions do not yet coexist with the suspend system); `yield` resumption uses statement re-execution, so a side-effecting prefix before a yield re-evaluates on resume (e.g. `a()` runs twice in `f(a(), (yield 1))`); the `x = yield from it` assignment form is not supported.
+> **⚠️ Known Differences**: `yield` resumption uses statement re-execution; subexpressions before the suspension point in the same statement are memoised by node + occurrence (so `a()` in `f(a(), (yield 1))` runs only once), but that memo does not recurse into nested statement blocks.
+> **⚠️ Breaking Change (v0.5.0-alpha.4)**: `async` / `await` are now reserved keywords and can no longer be used as identifiers (variable/function names, etc.).
 
 ### `slice` Object
 

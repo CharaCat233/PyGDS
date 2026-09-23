@@ -491,7 +491,7 @@ DSLMethodWrapper(descriptor=..., bound_self=DSLObject(...))
 | `_dsl_ge(other)` | `__ge__` | 大于等于 |
 | `_dsl_eq(other)` | `__eq__` | 相等 |
 | `_dsl_ne(other)` | `__ne__` | 不等 |
-| `_dsl_bool()` | `__bool__` | 布尔值 |
+| `_dsl_bool()` | `__bool__` | 布尔值（基类实现会查找用户类的 `__bool__`，未定义时回退 `__len__` != 0，两者都无则默认为真） |
 | `_dsl_iter()` | `__iter__` | 迭代器 |
 | `_dsl_str()` | `__str__` | 字符串表示 |
 | `magic_call(args, kwargs)` | `__call__` | 可调用 |

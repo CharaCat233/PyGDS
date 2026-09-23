@@ -18,7 +18,8 @@ enum TokenType {
 	TRY, EXCEPT, FINALLY, RAISE, AS,
 	PLUS_EQ, MINUS_EQ, STAR_EQ, SLASH_EQ, DOUBLESLASH_EQ, STARSTAR_EQ, PERCENT_EQ,
 	PIPE_EQ, IS, IS_NOT, NOT_IN, COLON_EQ,
-	YIELD
+	YIELD,
+	ASYNC, AWAIT
 }
 
 ## Token
@@ -85,7 +86,8 @@ class Lexer:
 		"raise": TokenType.RAISE, "as": TokenType.AS,
 		"lambda": TokenType.LAMBDA,
 		"is": TokenType.IS,
-		"yield": TokenType.YIELD
+		"yield": TokenType.YIELD,
+		"async": TokenType.ASYNC, "await": TokenType.AWAIT
 	}
 	
 	## 构造词法分析器 [br]
@@ -1182,6 +1184,17 @@ class YieldExpr extends Expr:
 		value = v
 		from_expr = f
 
+## await 表达式, 例如 await coro() [br]
+## PyGDS 不支持 async/await (以挂起系统替代), 本节点仅用于在语法分析阶段 [br]
+## 给出与 CPython 一致的 SyntaxError 文案, 不会进入求值阶段
+class AwaitExpr extends Expr:
+	## 被等待的表达式
+	var value: Expr
+	## 构造 await 表达式 [br]
+	## [param v] 被等待的表达式
+	func _init(v: Expr):
+		value = v
+
 ## 表达式语句, 将表达式包装为语句 [br]
 ## 用于将任意表达式 (如赋值, 调用) 作为独立语句执行
 class ExpressionStmt extends Stmt:
@@ -1980,7 +1993,23 @@ class DSLObject:
 		# 对于普通对象返回 "<类型名 object at 0x地址>" 格式
 		return "<%s object at 0x%x>" % [_type_name(), _object_id]
 	
+	## 真值判定, 按 CPython 的优先级查用户类协议 [br]
+	## __bool__ 优先; 无 __bool__ 但定义了 __len__ 时以非 0 为真; 两者都无则恒为真 [br]
+	## 与 __len__ / __str__ / __contains__ / __eq__ 的既有桥接保持同一形状 [br]
+	## [returns] 对象的真值
 	func _dsl_bool() -> bool:
+		if klass != null:
+			var bool_method = klass._lookup_method("__bool__")
+			if bool_method != null:
+				var bool_res = klass._invoke_func(bool_method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if bool_res is DSLBool:
+					return bool_res.value
+				return true
+			var len_method = klass._lookup_method("__len__")
+			if len_method != null:
+				var len_res = klass._invoke_func(len_method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if len_res is DSLInteger:
+					return len_res.value != 0
 		return true
 		
 	func _dsl_iter() -> DSLIterator:
@@ -5179,7 +5208,11 @@ class DSLDictKeys extends DSLObject:
 	## 长度支持 (CPython: len(d.keys()) == len(d))
 	func _dsl_len_hint() -> int:
 		return keys_list.size()
-	
+
+	## 真值判定: 空视图为假 (与 CPython 的 __len__ 回退一致)
+	func _dsl_bool() -> bool:
+		return keys_list.size() != 0
+
 	## 成员判定 (CPython: k in d.keys())
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var target = args[1]
@@ -5267,7 +5300,11 @@ class DSLDictValues extends DSLObject:
 	## 长度支持 (CPython: len(d.values()) == len(d))
 	func _dsl_len_hint() -> int:
 		return values_list.size()
-	
+
+	## 真值判定: 空视图为假 (与 CPython 的 __len__ 回退一致)
+	func _dsl_bool() -> bool:
+		return values_list.size() != 0
+
 	## 成员判定 (CPython: v in d.values() 为线性扫描)
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var target = args[1]
@@ -6925,6 +6962,10 @@ class DSLRange extends DSLObject:
 	func _dsl_len_hint() -> int:
 		return _length()
 
+	## 真值判定: 空 range 为假 (与 CPython 的 __len__ 回退一致)
+	func _dsl_bool() -> bool:
+		return _length() != 0
+
 	## 取第 i 个元素 (i 已规范化为非负且在范围内)
 	func _at(i: int) -> DSLObject:
 		return DSLInteger.new(start + i * step)
@@ -8295,7 +8336,28 @@ class Parser:
 			return try_statement()
 		if match_types([TokenType.RAISE]):
 			return raise_statement()
+		if match_types([TokenType.ASYNC]):
+			return async_declaration()
 		return expression_statement()
+		
+	## 处理 async 开头的语句 [br]
+	## PyGDS 不支持 async/await (按既定范围以挂起系统替代) [br]
+	## 此处按 CPython 的语法规则给出 SyntaxError, 而非让 async 落入标识符解析后报 NameError [br]
+	## [returns] 始终返回 null (该位置必然报错)
+	func async_declaration():
+		if check(TokenType.DEF):
+			# CPython 中 async def 合法, PyGDS 明确不支持: 给出明确的降级报错
+			report.error("SyntaxError: 'async def' is not supported")
+			return null
+		if check(TokenType.FOR):
+			report.error("SyntaxError: 'async for' outside async function")
+			return null
+		if check(TokenType.IDENTIFIER) and peek().lexeme == "with":
+			report.error("SyntaxError: 'async with' outside async function")
+			return null
+		# async 用作变量名/类型标注等: CPython 报通用语法错误
+		report.error("SyntaxError: invalid syntax")
+		return null
 		
 	## 解析带装饰器的声明 (@classmethod / @staticmethod / @property / @name.setter) [br]
 	## 装饰器必须紧接在 def 之前, 用于标记方法的类型 [br]
@@ -8989,12 +9051,24 @@ class Parser:
 			return lambda_expression()
 		if match_types([TokenType.YIELD]):
 			return yield_expression()
+		if match_types([TokenType.AWAIT]):
+			# await 的运算对象是一个 primary 表达式 (CPython 的 await_primary 规则),
+			# 其作用域合法性由解析后的 AST 遍历统一判定 (见 _walk_yield_expr)
+			var awaited = primary()
+			if awaited == null:
+				return null
+			return AwaitExpr.new(awaited)
 		if match_types([TokenType.LPAREN]):
 			return finish_call_or_index(parse_group_or_generator())
 		if match_types([TokenType.LBRACKET]):
 			return finish_call_or_index(parse_list_or_listcomp())
 		if match_types([TokenType.LBRACE]):
 			return finish_call_or_index(parse_dict_or_dictcomp())
+		# async/await 是保留字, 出现在表达式位置按 CPython 报通用语法错误,
+		# 而不是让它们作为标识符进入求值阶段报 NameError
+		if check(TokenType.ASYNC) or check(TokenType.AWAIT):
+			report.error("SyntaxError: invalid syntax")
+			return null
 		report.error("Unexpected token '%s'" % peek().lexeme)
 		return null
 
@@ -9089,7 +9163,7 @@ class Parser:
 			return false
 		var starters = [TokenType.INTEGER, TokenType.FLOAT, TokenType.STRING, TokenType.FSTRING,
 			TokenType.TRUE, TokenType.FALSE, TokenType.NULL,
-			TokenType.IDENTIFIER, TokenType.LAMBDA, TokenType.YIELD,
+			TokenType.IDENTIFIER, TokenType.LAMBDA, TokenType.YIELD, TokenType.AWAIT,
 			TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE,
 			TokenType.MINUS, TokenType.BANG, TokenType.TILDE, TokenType.NOT]
 		return starters.has(peek().type)
@@ -9100,49 +9174,61 @@ class Parser:
 	## [param stmts] 语句数组 [br]
 	## [param scope] 0=模块/类体(非函数), 1=函数体, 2=lambda 体 [br]
 	## [returns] 本作用域内是否含直接 yield
-	func _walk_yield_stmt(stmts: Array, scope: int) -> bool:
+	func _walk_yield_stmt(stmts: Array, scope: int, loop_depth: int = 0) -> bool:
 		var found = false
 		for stmt in stmts:
+			# 首个语法错误即为最终结论 (与 CPython 一致), 避免后续遍历覆盖错误文案
+			if report.has_error:
+				return found
 			if stmt is FunctionStmt:
 				stmt.is_generator = _walk_yield_stmt(stmt.body, 1)
 				for p in stmt.params:
 					if p.default_value != null:
 						_walk_yield_expr(p.default_value, scope, "")
 			elif stmt is ClassStmt:
+				# 类体是独立作用域: 外层循环不使其中的 break/continue 合法
 				_walk_yield_stmt(stmt.body, 0)
 			elif stmt is ExpressionStmt:
 				if _walk_yield_expr(stmt.expression, scope, ""):
 					found = true
 			elif stmt is IfStmt:
 				_walk_yield_expr(stmt.condition, scope, "")
-				if _walk_yield_stmt(stmt.then_branch, scope):
+				if _walk_yield_stmt(stmt.then_branch, scope, loop_depth):
 					found = true
 				for branch in stmt.elif_branches:
 					_walk_yield_expr(branch[0], scope, "")
-					if _walk_yield_stmt(branch[1], scope):
+					if _walk_yield_stmt(branch[1], scope, loop_depth):
 						found = true
-				if _walk_yield_stmt(stmt.else_branch, scope):
+				if _walk_yield_stmt(stmt.else_branch, scope, loop_depth):
 					found = true
 			elif stmt is WhileStmt:
 				_walk_yield_expr(stmt.condition, scope, "")
-				if _walk_yield_stmt(stmt.body, scope):
+				if _walk_yield_stmt(stmt.body, scope, loop_depth + 1):
 					found = true
 			elif stmt is ForStmt:
 				_walk_yield_expr(stmt.iterable, scope, "")
-				if _walk_yield_stmt(stmt.body, scope):
+				if _walk_yield_stmt(stmt.body, scope, loop_depth + 1):
 					found = true
 			elif stmt is ReturnStmt:
+				if scope == 0:
+					report.error("SyntaxError: 'return' outside function")
 				if stmt.value != null and _walk_yield_expr(stmt.value, scope, ""):
 					found = true
+			elif stmt is BreakStmt:
+				if loop_depth == 0:
+					report.error("SyntaxError: 'break' outside loop")
+			elif stmt is ContinueStmt:
+				if loop_depth == 0:
+					report.error("SyntaxError: 'continue' not properly in loop")
 			elif stmt is TryStmt:
-				if _walk_yield_stmt(stmt.try_body, scope):
+				if _walk_yield_stmt(stmt.try_body, scope, loop_depth):
 					found = true
 				for clause in stmt.except_clauses:
 					if clause.exception_type != null:
 						_walk_yield_expr(clause.exception_type, scope, "")
-					if _walk_yield_stmt(clause.body, scope):
+					if _walk_yield_stmt(clause.body, scope, loop_depth):
 						found = true
-				if _walk_yield_stmt(stmt.finally_body, scope):
+				if _walk_yield_stmt(stmt.finally_body, scope, loop_depth):
 					found = true
 			elif stmt is RaiseStmt:
 				if stmt.expression != null and _walk_yield_expr(stmt.expression, scope, ""):
@@ -9164,6 +9250,9 @@ class Parser:
 	## [returns] 本作用域内是否含直接 yield (嵌套函数/lambda 的 yield 不计)
 	func _walk_yield_expr(expr, scope: int, comp_ctx: String) -> bool:
 		if expr == null:
+			return false
+		# 首个语法错误即为最终结论 (与 CPython 一致)
+		if report.has_error:
 			return false
 		if expr is YieldExpr:
 			if comp_ctx != "":
@@ -9187,6 +9276,18 @@ class Parser:
 			if expr.from_expr != null:
 				_walk_yield_expr(expr.from_expr, scope, comp_ctx)
 			return true
+		if expr is AwaitExpr:
+			# await 只在 async 函数内合法; PyGDS 不支持 async, 因此任何位置都报错 [br]
+			# 文案按 CPython 的三种语境区分 (推导式内另有专属文案)
+			if comp_ctx != "":
+				report.error("SyntaxError: asynchronous comprehension outside of an asynchronous function")
+			elif scope == 0:
+				report.error("SyntaxError: 'await' outside function")
+			else:
+				report.error("SyntaxError: 'await' outside async function")
+			if expr.value != null:
+				_walk_yield_expr(expr.value, scope, comp_ctx)
+			return false
 		if expr is LambdaExpr:
 			if expr.body != null and _walk_yield_expr(expr.body, 2, ""):
 				expr.is_generator = true
@@ -10622,6 +10723,75 @@ class Interpreter:
 				return false
 		return true
 
+	## 判断实参在语句重放前后是否「同一个值」 [br]
+	## 重放会重新求值实参表达式，因此像 f(C(1)) 里的 C(1) 会产生结构相同但身份不同的新实例； [br]
+	## 此处按值/结构逐层比较，使这类调用能匹配到已挂起的帧 [br]
+	## 不使用用户 __eq__: 它可能带副作用或侧效应, 不适合在内部匹配时调用 [br]
+	## [param x] 保存帧中的实参 [br]
+	## [param y] 当前调用的实参 [br]
+	## [param depth] 剩余递归层数 (防止循环引用) [br]
+	## [returns] 视为同一个值时返回 true
+	func _arg_value_eq_replay(x, y, depth: int = 4) -> bool:
+		if x == null or y == null:
+			return x == y
+		if _arg_value_eq(x, y):
+			return true
+		if depth <= 0:
+			return false
+		if x is DSLList and y is DSLList:
+			return _arg_seq_eq(x.items, y.items, depth - 1)
+		if x is DSLTuple and y is DSLTuple:
+			return _arg_seq_eq(x.items, y.items, depth - 1)
+		if x is DSLDict and y is DSLDict:
+			if x.dict.size() != y.dict.size():
+				return false
+			for k in x.dict:
+				if not y.dict.has(k):
+					return false
+				if not _arg_value_eq_replay(x.dict[k], y.dict[k], depth - 1):
+					return false
+			return true
+		# 用户实例: 同类且字段集合与取值逐对相等时视为同一个值 [br]
+		# 不调用用户 __eq__ (它可能带副作用或引起递归), 仅逐字段递归比较
+		if x.klass != null and x.klass == y.klass and x.fields != null and y.fields != null:
+			if x.fields.size() != y.fields.size():
+				return false
+			for f in x.fields:
+				if not y.fields.has(f):
+					return false
+				if not _arg_value_eq_replay(x.fields[f], y.fields[f], depth - 1):
+					return false
+			return true
+		return false
+
+	## 逐个比较两个实参序列 [br]
+	## [param a] 序列 A [br]
+	## [param b] 序列 B [br]
+	## [param depth] 剩余递归层数 [br]
+	## [returns] 长度与逐个元素都相等时返回 true
+	func _arg_seq_eq(a: Array, b: Array, depth: int) -> bool:
+		if a.size() != b.size():
+			return false
+		for i in range(a.size()):
+			if not _arg_value_eq_replay(a[i], b[i], depth):
+				return false
+		return true
+
+	## 按结构比较两个实参序列 (供语句重放时匹配已挂起的帧) [br]
+	## 仅用于重放轮: 实参可能是重新构造出的等值新实例 [br]
+	## [param a] 保存帧的实参数组 [br]
+	## [param b] 当前调用的实参数组 [br]
+	## [returns] 数量与逐个参数都等值时返回 true
+	func _args_match_structural(a, b) -> bool:
+		if not (a is Array) or not (b is Array):
+			return false
+		if a.size() != b.size():
+			return false
+		for i in range(a.size()):
+			if not _arg_value_eq_replay(a[i], b[i]):
+				return false
+		return true
+
 	## 判断两个实参是否表示同一次调用的同一参数 [br]
 	## 不可变字面量 (int/float/str/bool/None) 按值比较: 重放会重新求值字面量产生新对象 [br]
 	## 其余对象按身份比较: 避免把不同的可变对象误判为同一次调用 [br]
@@ -10724,6 +10894,8 @@ class Interpreter:
 		return false
 		
 	## 尝试调用实例类的 magic 方法, 失败时回退 fallback [br]
+	## 用户魔术方法内部挂起 (sleep) 时返回 null 并把挂起标志向上传播, [br]
+	## 此时不得回退到内置语义, 也不得让 fallback 覆盖掉真实结果 [br]
 	## [param obj] 目标对象 [br]
 	## [param method_name] magic 方法名称 [br]
 	## [param extra_args] 额外参数 [br]
@@ -10740,6 +10912,10 @@ class Interpreter:
 				var all_args: Array[DSLObject] = []
 				all_args.append_array(extra_args)
 				var result = obj.klass._invoke_func(method, all_args, {} as Dictionary[String, DSLObject])
+				# 用户方法内发起程序挂起: 结果尚未产生, 交由上层语句重放;
+				# 若继续回退, 基类的引用比较会静默给出错误答案
+				if _suspended:
+					return null
 				if result != null:
 					return result
 			var class_method = obj.klass._lookup_method(method_name)
@@ -10749,6 +10925,8 @@ class Interpreter:
 				var all_args: Array[DSLObject] = []
 				all_args.append_array(extra_args)
 				var result = obj.klass._invoke_func(class_method, all_args, {} as Dictionary[String, DSLObject])
+				if _suspended:
+					return null
 				if result != null:
 					return result
 		return fallback.call()
@@ -14236,6 +14414,10 @@ class Interpreter:
 					result = _call_magic_or_fallback(right, "__contains__", [left], func(): return right.magic_contains([right, left] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 					if result is DSLBool:
 						result = DSLBool.new(not result.value)
+			# 用户魔术方法 (__eq__ / __add__ 等) 内部发起程序挂起时返回 null:
+			# 这不是运算失败, 而是本次结果尚未产生, 交回上层语句重放
+			if _suspended:
+				return null
 			if left.last_error != "" or right.last_error != "":
 				raise_exception_from_last_error(left.last_error if left.last_error else right.last_error)
 				return null
@@ -15525,19 +15707,28 @@ class Interpreter:
 		# 检查 _call_stack 是否有恢复信息 (嵌套函数调用挂起恢复)
 		var saved_env = null
 		var saved_pc = 0
+		# 语句重放会重新求值实参表达式, 像 f(C(1)) 里的 C(1) 会产生结构相同但身份不同的新实例。
+		# 此时按身份的实参比对必然失败, 函数体会被完整重跑一遍，导致副作用重复执行;
+		# 故仅在重放轮 (_sleep_root_key 已置位) 追加一次「按结构」的宽松比对
+		var allow_structural = _sleep_root_key != 0
 		var saved_env_taken = {}
 		for j in range(_call_stack.size() - 1, -1, -1):
 			var cs = _call_stack[j]
-			if cs.get("function") == function and _args_match(cs.get("args", []), args):
-				# 同一函数同一实参可能有多个未完成帧 (递归): 只复用与本次调用「同层」的那个
-				var cand_env = cs.get("local_env")
-				if cand_env != null and saved_env_taken.has(cand_env):
+			if cs.get("function") != function:
+				continue
+			var cs_args: Array = cs.get("args", [])
+			if not _args_match(cs_args, args):
+				if not allow_structural or not _args_match_structural(cs_args, args):
 					continue
-				saved_env = cand_env
-				saved_pc = cs.get("return_pc", 0)
-				saved_env_taken[cand_env] = true
-				_call_stack.remove_at(j)
-				break
+			# 同一函数同一实参可能有多个未完成帧 (递归): 只复用与本次调用「同层」的那个
+			var cand_env = cs.get("local_env")
+			if cand_env != null and saved_env_taken.has(cand_env):
+				continue
+			saved_env = cand_env
+			saved_pc = cs.get("return_pc", 0)
+			saved_env_taken[cand_env] = true
+			_call_stack.remove_at(j)
+			break
 		
 		var prev_env = environment
 		var exec_env = saved_env if saved_env != null else local
@@ -15558,7 +15749,15 @@ class Interpreter:
 		else:
 			_current_self = null
 		environment = exec_env
+		# 嵌套调用相对当前生成器是原子求值: 其体内语句会把 _yield_pos 归零,
+		# 若不还原, 外层 yield 记录到的挂起位置会变成 0 (形同未记录),
+		# 重执行该语句时被当作「首次产出」而反复重放, 直至耗尽步数上限
+		var saved_yield_pos = 0
+		if _current_generator != null:
+			saved_yield_pos = _current_generator._yield_pos
 		var res = exec_block(decl.body, environment)
+		if _current_generator != null:
+			_current_generator._yield_pos = saved_yield_pos
 		environment = prev_env
 		_current_class = saved_class
 		_current_self = saved_self

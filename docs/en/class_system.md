@@ -491,7 +491,7 @@ The public base class `DSLObject` for all DSL classes defines the following over
 | `_dsl_ge(other)` | `__ge__` | Greater than or equal |
 | `_dsl_eq(other)` | `__eq__` | Equality |
 | `_dsl_ne(other)` | `__ne__` | Inequality |
-| `_dsl_bool()` | `__bool__` | Boolean value |
+| `_dsl_bool()` | `__bool__` | Boolean value (the base implementation looks up the user class's `__bool__`, falling back to `__len__ != 0`, and defaults to true when neither exists) |
 | `_dsl_iter()` | `__iter__` | Iterator |
 | `_dsl_str()` | `__str__` | String representation |
 | `magic_call(args, kwargs)` | `__call__` | Callable |
