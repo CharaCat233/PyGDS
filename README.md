@@ -181,13 +181,11 @@ dsl.run()
 
 ### P0 — 静默错值
 
-| 编号 | 问题 | 说明 |
-| :--- | :--- | :--- |
-| P0-2 | eager 推导式的元素表达式含副作用时会重复执行 | 列表/集合/字典推导式的**元素表达式本身**含副作用、且迭代源是含 `sleep` 的生成器时，元素表达式会在语句重放时被重新求值：`seen=[]; print([seen.append(v) or v for v in a()])` 得到 `seen: [0, 0, 1]` 而非 `[0, 1]`。行内输出取值正确，生成器表达式、`for` 语句与无副作用的元素表达式均不受影响。详情见 `tests/已知问题清单.md` 的 P0-2 |
+当前无已知的 P0 级问题，详见 `CHANGELOG` 对应版本节
 
 ### P1 — 明确报错或功能缺失
 
-下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16、P1-17、P1-18 已在 **v0.5.0-alpha.3 / v0.5.0-alpha.4** 修复，详见 `CHANGELOG` 的对应版本节；此处仅保留仍未支持项。
+下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 **v0.5.0-alpha.3 ~ v0.5.0-alpha.5** 修复，详见 `CHANGELOG` 的对应版本节；此处仅保留仍未支持项
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
@@ -195,14 +193,14 @@ dsl.run()
 | P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
 | P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
 | P1-10 | `match` / `case` 结构化模式匹配不支持 | 延后至 v0.6.0 |
-| P1-13 | `yield` 恢复时前缀子表达式可能重复求值 | 已在 v0.5.0-alpha.3 修复常见形态（按节点 + 出现次序记忆）；同族的迭代上限问题已在 v0.5.0-alpha.4 修复（嵌套调用重置 `yield` 位置计数） |
+| P1-13 | `yield` 恢复时前缀子表达式可能重复求值 | 已在 v0.5.0-alpha.3 修复常见形态（按节点 + 出现次序记忆），v0.5.0-alpha.4 修复同族迭代上限，v0.5.0-alpha.5 修复「同一语句内普通 `yield` 与 `yield from` 交替」的重复产出 |
 
 ### P2 — 边缘差异
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
-| P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案已在 **v0.5.0-alpha.4** 对齐 CPython；其余解析期错误的措辞与行号格式仍可能不同 |
+| P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案已在 **v0.5.0-alpha.4** 对齐；语句尾部冗余 Token 的静默忽略已在 **v0.5.0-alpha.5** 修复（现报 `SyntaxError`）。其余解析期错误的措辞与行号格式仍可能不同 |
 
 ---
 

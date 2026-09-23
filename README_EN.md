@@ -181,13 +181,11 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 ### P0 — Silent Wrong Values
 
-| ID | Issue | Details |
-| :--- | :--- | :--- |
-| P0-2 | An eager comprehension's element expression runs repeatedly when it has side effects | When the **element expression itself** of a list/set/dict comprehension has side effects and the iterable is a generator containing `sleep`, the element expression is re-evaluated on statement replay: `seen=[]; print([seen.append(v) or v for v in a()])` yields `seen: [0, 0, 1]` instead of `[0, 1]`. The printed values are correct, and generator expressions, `for` statements and side-effect-free element expressions are unaffected. See P0-2 in `tests/已知问题清单.md` |
+No known P0 issues remain (see the corresponding `CHANGELOG` sections).
 
 ### P1 — Clear Errors or Missing Features
 
-Items P1-1 to P1-6, P1-11, P1-14, P1-16, P1-17 and P1-18 were fixed in **v0.5.0-alpha.3 / v0.5.0-alpha.4** (see the corresponding sections of `CHANGELOG`); only the still-unsupported ones are listed here.
+Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in **v0.5.0-alpha.3 to v0.5.0-alpha.5** (see the corresponding sections of `CHANGELOG`); only the still-unsupported ones are listed here.
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
@@ -195,14 +193,14 @@ Items P1-1 to P1-6, P1-11, P1-14, P1-16, P1-17 and P1-18 were fixed in **v0.5.0-
 | P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
 | P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`). As reserved words, misuse of `async` / `await` now raises `SyntaxError` matching CPython |
 | P1-10 | `match` / `case` structural pattern matching unsupported | Deferred to v0.6.0 |
-| P1-13 | `yield` resumption may re-evaluate prefix subexpressions | Common forms fixed in v0.5.0-alpha.3 (memoised by node + occurrence); the iteration-cap issue of the same family was fixed in v0.5.0-alpha.4 (nested calls resetting the `yield` position counter) |
+| P1-13 | `yield` resumption may re-evaluate prefix subexpressions | Common forms fixed in v0.5.0-alpha.3 (memoised by node + occurrence); the iteration-cap issue of the same family was fixed in v0.5.0-alpha.4, and repeated yields when a plain `yield` and a `yield from` alternate in one statement were fixed in v0.5.0-alpha.5 |
 
 ### P2 — Edge Differences
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
 | P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
-| P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` were aligned with CPython in **v0.5.0-alpha.4**; wording and line-number formatting of other parse-time errors may still differ |
+| P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` were aligned with CPython in **v0.5.0-alpha.4**; trailing redundant tokens were silently ignored and now raise `SyntaxError` as of **v0.5.0-alpha.5**. Wording and line-number formatting of other parse-time errors may still differ |
 
 ---
 

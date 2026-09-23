@@ -6,6 +6,40 @@
 
 当前无待发布条目。其余已知问题与功能缺口见 README 的「已知问题与限制」章节，或在仓库 `tests/已知问题清单.md` 查看带复现脚本的完整清单
 
+## [0.5.0-alpha.5] - 2026-09-23
+
+本版修复 `[0.5.0-alpha.3]` 记录的 P0-2（最后一个 P0 级问题），并清理排查中发现的同族缺陷
+
+### 修复
+
+- **eager 推导式的元素表达式含副作用时重复执行（P0-2）**：列表/集合/字典推导式的元素表达式本身含副作用、且迭代源是含 `sleep` 的生成器时，语句重放会让元素表达式被重新求值（`seen=[]; print([seen.append(v) or v for v in a()])` 得到 `seen: [0, 0, 1]` 而非 `[0, 1]`）。根因是急切推导式由原生循环驱动，重放时整个循环从头再跑一遍。现在三类急切推导式改为驱动一个内部生成器（与生成器表达式共用同一套挂起感知机制），已产出的元素累积在生成器对象上，重放时只追加新元素；生成器本身按「节点 + 祖先推导式迭代进度」记忆，使「父级进入下一轮」能拿到新实例、而本轮重放始终复用同一个
+- **同一语句内普通 `yield` 与 `yield from` 交替时重复产出**：`v = (yield 0) + (yield from inner())` 之类混合语句此前会重复产出已挂起过的 `yield` 值（得 `0 1 0 2` 而非 `0 1 2`）。根因是子表达式记忆仅按 `_pending_yield_index` 判定重放轮，而 `yield from` 的挂起不设该标记、被误判为「新一轮」而清空记忆。现在记忆在整个挂起周期内保持，并在语句真正执行完毕后才复位
+- **多个内置类型的魔术方法缺失导致宿主侧崩溃**：未重写算术/一元/位运算的类型（如 `None`、`list`、`str`）此前会令宿主报 `Invalid call. Nonexistent function 'magic_div'` 并中止执行。DSLObject 补齐了 `magic_div` / `magic_lshift` / `magic_rshift` / `magic_and` / `magic_or` / `magic_xor` / `magic_neg` / `magic_pos` / `magic_invert` 等默认实现，统一给出与 CPython 一致的 `TypeError` 文案
+- **`None` 参与运算时误报 `RuntimeError`**：`None + 1`、`None * 2`、`-None`、`~None` 等此前报 `RuntimeError: Unknown binary operation error`（或直接崩溃），现按 CPython 报 `unsupported operand type(s) for X: 'NoneType' and 'Y'` 与 `bad operand type for unary X`
+- **一元 `+` 号不被解析**：`+x` 此前报 `Unexpected token '+'`，现支持（数值原样返回，其余类型报 CPython 文案），并补齐 `bool` 作为 `int` 子类的全部算术、位运算与比较语义
+- **`int()` / `float()` 静默接受非法字面量**：`int("abc")`、`float("abc")` 此前直接调用宿主转换函数，分别静默返回 `0` 与 `0.0`。现在按 Python 规则严格解析：非法字面量报 `ValueError` / `TypeError`，支持 `1_0` 下划线分隔、`+` 号、首尾空白、`inf` / `infinity` / `nan`（大小写不敏感），`int(float("inf"))` 报 `OverflowError`、`int(float("nan"))` 报 `ValueError`
+- **`float` 的 repr 丢失精度**：此前用宿主默认格式化，`1/3` 打印为 `0.33333333333333`（14 位）、`0.1 + 0.2` 打印为 `0.3`。现在取「能往返解析的最短十进制」并按 Python 规则在指数 `< -4` 或 `>= 16` 时切到科学计数法，与 CPython 逐位一致
+- **字符串与序列拼接的静默错值**：`"s" + 2` 此前静默得到 `"s2"`、`[1] + (2,)` 静默得到 `[1, 2]`。现在按 CPython 类型规则报 `can only concatenate str (not "int") to str` / `can only concatenate list (not "tuple") to list`；序列重复的次数只接受整数，非整数报 `can't multiply sequence by non-int of type 'X'`
+- **`None` 单例被污染**：`int()` / `float()` 抛错时返回的 `None` 占位会被类调用流程打上 `klass` 标记，由于 `None` 是全局单例，此后整段脚本的 `type(None).__name__`、`str(None)` 全部错乱（实测为 `int`）。现在类调用不再给 `DSLNone` 打标记
+- **操作数的 `last_error` 残留**：被复用的对象（如 `None` 单例）上残留的上一次运算错误会让本次运算的错误文案取自上一次的操作数类型（`1 + None` 报成 `'NoneType' and 'int'`）。现每次运算前清除两侧操作数的错误状态
+- **语句尾部的冗余 Token 被静默忽略（P2-2 残留）**：`1 + 2 3`、`x = 1 2`、`return 1 2` 等此前被静默接受并照常执行；现在按 CPython 报 `SyntaxError: invalid syntax`
+- **内置异常缺少父类**：`OverflowError` 此前未注册（`except OverflowError` 报 `NameError`），`IndexError` / `KeyError` 也不继承 `LookupError`、`ZeroDivisionError` 不继承 `ArithmeticError`。现在补齐层次：`OverflowError` / `FloatingPointError` 继承 `ArithmeticError`，`IndexError` / `KeyError` 继承 `LookupError`，并新增 `UnboundLocalError` / `RecursionError` / `NotImplementedError` / `OSError` / `MemoryError` / `UnicodeError`
+- **反射运算符缺失**：`1 * "ab"`、`2 * [1]` 这类「序列在右」的写法此前报 `TypeError`，现按 CPython 语义回退到右侧的 `__rmul__`（本轮实现重复运算）
+- **`set` / `frozenset` 的 `repr` 错误**：`repr({1})` 此前返回 `<set object>`、`repr(frozenset({1}))` 返回 `<frozenset object>`（缺少 `__repr__` 而回退到默认对象表示），现与 `str` 一致分别返回 `{1}` 与 `frozenset({1})`
+- **`"..." %` 的参数校验缺失**：`"s" % 1` 此前静默返回 `"s"`；现在按 CPython 校验参数个数（`"s" % ()` 报 `not enough arguments for format string`，`"s" % (1, 2)` 报 `not all arguments converted during string formatting`），并支持 `%(name)s` 命名字段与映射实参（`"%(a)s" % {"a": 1}`），可作映射的下标对象（`list` / `dict` / `bytes` / `range`）按 CPython 规则跳过个数校验
+- **`b"..." %` 不支持**：`b"x" % 1` 此前报通用类型错误，现按 CPython 报 `not all arguments converted during bytes formatting`
+- **`bool` 的运算结果类型**：`True & True` 等两个 bool 的位运算此前返回整数 `1`，现返回 `True`；`True // 1.5`、`True % 1.5` 等与浮点混合的运算此前返回整数，现返回浮点（与 CPython 一致）
+
+### 变更
+
+- **分号可作语句分隔符**：`x = 1; y = 2` 此前报 `Unexpected character ';'`，现按 CPython 视为换行等价
+- **`str` / `list` / `tuple` / `bytes` 的拼接与重复更严格**：跨类型拼接不再隐式转换（此前 `"s" + 2`、`[1] + (2,)` 会静默给出结果），依赖该行为的脚本会开始报错
+- **整数与浮点的除零文案区分**：`1 / 0` 报 `division by zero`，`1.0 / 0` 报 `float division by zero`，`1 // 0` 报 `integer division or modulo by zero`，`1.0 // 0` 报 `float floor division by zero`，`1 % 0` 报 `integer modulo by zero`，`1.0 % 0` 报 `float modulo`
+
+### 测试
+
+- 新增 5 个行为一致性测试：`lang_sleep_comp_effect`（eager 推导式副作用与取值）/ `lang_numeric_convert`（`int()` / `float()` 严格解析、float repr、真值算术、运算符文案）/ `lang_seq_concat`（序列拼接与重复类型规则）/ `lang_operators`（反射运算符与除零文案）/ `lang_exc_hierarchy`（异常继承与捕获后状态隔离），并入 `expected.json`（共 158 个用例全部通过），挂起测试 22 个用例通过
+
 ## [0.5.0-alpha.4] - 2026-09-23
 
 本版修复 `[0.5.0-alpha.3]` 记录的 P1-16 / P1-17 / P1-18 与 P2-2 四项问题

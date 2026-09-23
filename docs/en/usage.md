@@ -778,7 +778,7 @@ except StopIteration as e:
 ```
 
 > **⚠️ Breaking Change (v0.4.0)**: `yield` is now a reserved keyword and can no longer be used as an identifier.
-> **⚠️ Known Differences**: `yield` resumption uses statement re-execution; subexpressions before the suspension point in the same statement are memoised by node + occurrence (so `a()` in `f(a(), (yield 1))` runs only once), but that memo does not recurse into nested statement blocks.
+> **⚠️ Known Differences**: `yield` resumption uses statement re-execution; subexpressions before the suspension point in the same statement are memoised by node + occurrence (so `a()` in `f(a(), (yield 1))` runs only once). Several structurally equal calls in one statement can still be mistaken for each other; resolving that fully needs expression-level continuations.
 > **⚠️ Breaking Change (v0.5.0-alpha.4)**: `async` / `await` are now reserved keywords and can no longer be used as identifiers (variable/function names, etc.).
 
 ### `slice` Object
