@@ -169,14 +169,19 @@ len({"a": 1, "b": 2})    # 2
 
 ### `range(stop)` / `range(start, stop)` / `range(start, stop, step)`
 
-Mimics Python `range()`, generating a sequence of integers (as a list).
+Mimics Python `range()`, returning a lazy integer sequence object.
 
-- Return type: `list` (DSLList)
+- Return type: `range` (DSLRange), storing only `start` / `stop` / `step` and evaluating on demand (large ranges are not materialised)
+- Supports `len` / indexing (including negative) / slicing (returns a new range) / containment / iteration / `reversed()`
+- Immutable: item assignment and deletion both raise `TypeError`
+- A `step` of 0 raises `ValueError`; non-integer arguments raise `TypeError`
 
 ```python
-range(5)                 # [0, 1, 2, 3, 4]
-range(2, 5)              # [2, 3, 4]
-range(0, 10, 2)          # [0, 2, 4, 6, 8]
+range(5)                 # range(0, 5)
+list(range(5))           # [0, 1, 2, 3, 4]
+range(0, 10, 2)          # range(0, 10, 2)
+range(10)[2:5]           # range(2, 5)
+len(range(1000000))      # 1000000 (not materialised)
 ```
 
 ### `type(obj)`
@@ -423,7 +428,7 @@ name = input("Enter name: ")
 > [!WARNING]
 > This method always raises an `EOFError` exception.
 >
-> **Changed in v0.5.0-alpha.2**: `sleep()` has moved into the `time` module — use `time.sleep(seconds)` (see the `time` module section below). CPython has no built-in bare `sleep` either.
+> **Changed in v0.5.0-alpha.1**: `sleep()` has moved into the `time` module — use `time.sleep(seconds)` (see the `time` module section below). CPython has no built-in bare `sleep` either.
 
 ### `getattr(obj, name, default=None)`
 

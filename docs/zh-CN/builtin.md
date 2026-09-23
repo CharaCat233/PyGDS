@@ -169,14 +169,19 @@ len({"a": 1, "b": 2})    # 2
 
 ### `range(stop)` / `range(start, stop)` / `range(start, stop, step)`
 
-模仿 Python `range()`，生成整数序列（列表）
+模仿 Python `range()`，返回惰性的整数序列对象
 
-- 返回类型：`list` (DSLList)
+- 返回类型：`range` (DSLRange)，只保存 `start` / `stop` / `step`，按需求值（大范围不展开内存）
+- 支持 `len` / 索引（含负索引）/ 切片（返回新 range）/ 成员判定 / 迭代 / `reversed()`
+- 不可变：元素赋值与删除均报 `TypeError`
+- `step` 为 0 报 `ValueError`，参数非整数报 `TypeError`
 
 ```python
-range(5)                 # [0, 1, 2, 3, 4]
-range(2, 5)              # [2, 3, 4]
-range(0, 10, 2)          # [0, 2, 4, 6, 8]
+range(5)                 # range(0, 5)
+list(range(5))           # [0, 1, 2, 3, 4]
+range(0, 10, 2)          # range(0, 10, 2)
+range(10)[2:5]           # range(2, 5)
+len(range(1000000))      # 1000000 (不展开)
 ```
 
 ### `type(obj)`
@@ -423,7 +428,7 @@ name = input("Enter name: ")
 > [!WARNING]
 > 该方法始终抛出 `EOFError` 异常
 >
-> **v0.5.0-alpha.2 变更**：`sleep()` 已迁移到 `time` 模块，见下文 [`time` 模块](#time-模块) 的 `time.sleep(seconds)`
+> **v0.5.0-alpha.1 变更**：`sleep()` 已迁移到 `time` 模块，见下文 [`time` 模块](#time-模块) 的 `time.sleep(seconds)`
 
 ### `getattr(obj, name, default=None)`
 

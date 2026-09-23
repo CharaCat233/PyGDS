@@ -691,8 +691,7 @@ print(list(counter()))                             # [0, 1, 2]
 print(sum(counter()))                              # 3
 ```
 
-> **⚠️ 破坏性变更（v0.5.0-alpha.2）**：裸 `sleep(n)` 不再存在，须 `import time` 后调用 `time.sleep(n)`
-> **⚠️ 已知问题（v0.5.0-alpha.2，待修复）**：在**表达式**里消费含 `time.sleep()` 的生成器时（`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `[x for x in g()]` 等），语句挂起后重放会重新创建生成器对象，导致生成器体内的副作用重复执行、依赖被修改状态的元素值出错，真实等待次数也偏少；用 `for` 语句消费是正确的
+> **⚠️ 破坏性变更（v0.5.0-alpha.1）**：裸 `sleep(n)` 不再存在，须 `import time` 后调用 `time.sleep(n)`
 
 ### 生成器函数 (`yield`)
 

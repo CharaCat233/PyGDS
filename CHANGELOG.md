@@ -6,6 +6,35 @@
 
 当前无待发布条目。其余已知问题与功能缺口见 README 的「已知问题与限制」章节，或在仓库 `tests/已知问题清单.md` 查看带复现脚本的完整清单
 
+## [0.5.0-alpha.3] - 2026-09-23
+
+本版实现 P1 系列问题（除 `with` / 用户文件 `import` / `async` 等既定范围外）的修复
+
+### 新增
+
+- **`bytes` 独立类型**：新增 `DSLBytes` 与 `b"..."` / `rb"..."` 字面量，`type(x).__name__` 为 `bytes`；索引与迭代产出整数（`b"xy"[0] == 120`）、`len` 为字节数、支持切片、`b"a" * 3` 重复、`in` 支持单个字节与子串；repr 形如 b'xy'（不可打印字节转义为 \xNN 形式）；与 `str` 严格区分（`b"a" == "a"` 为 `False`，拼接报 `can't concat str to bytes`）
+- **`range` 为独立惰性类型**：新增 `DSLRange`，只保存 `start` / `stop` / `step` 按需求值，`len(range(1000000))` 等大范围无需展开；`type(x).__name__` 为 `range`；支持负索引、`[start:stop:step]` 切片（返回新 range）、成员判定（等差求解）、`reversed()` 与全部消费函数；不可变（赋值与删除分别报 CPython 原文，两处措辞不同）
+- **用户类迭代协议**：定义 `__iter__` / `__next__` 的类现可被 `for` / `list()` / `sum()` / `sorted()` / `max()` / `enumerate()` / `in` 等全部消费路径迭代；`__iter__` 返回 `self`、返回生成器函数调用结果、或对象自身实现 `__next__` 三种写法均支持；`__next__` 抛 `StopIteration` 视为正常耗尽
+- **多重赋值目标**：`a[0], a[2] = a[2], a[0]` 之类的下标目标与 `o.x, o.y = 1, 2` 之类的属性目标现可作赋值目标（此前报 `Invalid assignment target`）；支持链式后缀（如 `self.data[k] = v`）与单一目标退化路径
+
+### 修复
+
+- **用户类 `__eq__` 未参与容器操作**：`x in [a, b]`、`list.remove` / `index` / `count` 等此前直接按对象身份比较，未定义 `__ne__` 时还会因查找该魔术方法而报 `AttributeError`；现在容器的相等判定统一优先调用用户 `__eq__`，`!=` 按 CPython 语义回退为 `not __eq__`
+- **用户类 `__hash__` 无法用于字典键 / 集合元素**：此前一律报 `TypeError: unhashable type`；现在定义了 `__hash__` 的实例可作键与集合元素（按「哈希 + 相等」判定），定义了 `__eq__` 但未定义 `__hash__` 时按 CPython 规则仍不可哈希，两者都未定义时按身份哈希；元组与 `frozenset` 也可作键
+- **`dict.keys()` / `dict.values()` 不支持迭代与 `len()`**：`len(d.keys())` 此前报 `TypeError`、`list(d.values())` 返回空列表；现在两者均可迭代、有 `len`、支持 `in` 成员判定，`repr` 与 `type()` 名称也与 CPython 一致（新增 `dict_keys` / `dict_values` 类型类）
+- **`yield from` 不转发 `send` / `throw`**：实现了 PEP 380 的委托语义——`send` 值送达子生成器挂起点、`throw` 的异常由子生成器内 `try/except` 优先捕获，子生成器的 `return` 值经 `yield from` 表达式传出
+- **`yield` 恢复期重复求值前缀子表达式**：语句因 `yield` 挂起后会被重新执行，此前挂起点之前的子表达式（如 `f(a(), (yield 1))` 中的 `a()`、`side() + (yield 1)` 中的 `side()`）会重复求值导致副作用执行两次；现在按「节点 + 出现次序」记忆已求值结果，重放轮直接复用。记忆仅在语句自身含 `yield` 时启用，与 `sleep` 的语句重放机制相互隔离
+- **空字面量被误判为三引号**：`b""` / `""` 这类空字面量此前因只检查前两个引号而被当作三引号起始，报 `Unterminated triple-quoted string`；现改为要求连续三个引号
+
+### 变更
+
+- **`range()` 返回值类型变化**：此前返回列表（带 `is_range` 标记），现返回独立的 `DSLRange` 惰性对象。`list(range(n))` / 索引 / 切片 / 迭代等用法不变，但 `range(3) == [0, 1, 2]` 现在为 `False`（与 CPython 一致），`repr(range(3))` 为 `range(0, 3)`
+- **`bytes` 字面量类型变化**：`b"..."` 此前被解析为 `str`，现为独立的 `bytes` 类型；`b"xy"[0]` 现在返回整数 `120` 而非字符形式
+
+### 测试
+
+- 新增 3 个行为一致性测试：`lang_types2`（`bytes` / `range` / `dict` 视图）/ `lang_object_proto`（`__eq__` / `__hash__` / 迭代协议 / 多重赋值目标）/ `lang_yield_delegate`（`yield from` 完整委托与 `yield` 恢复期记忆），并入 `expected.json`（共 142 个用例全部通过），挂起测试 22 个用例通过
+
 ## [0.5.0-alpha.2] - 2026-09-23
 
 本版修复 `[0.5.0-alpha.1]` 记录的 P0 问题：表达式级消费含 `sleep` 的生成器时会重复执行生成器体内的副作用
@@ -69,12 +98,12 @@
 
 ### 已知问题
 
-- **表达式级消费含 `sleep` 的生成器时会重复执行生成器体内的副作用**（已在 [0.5.0-alpha.2] 修复）：把含 `time.sleep()` 的生成器直接放进**表达式**里消费时（`print(list(g()))`、`sum(g())`、`sorted(g())`、`max(g())`、`tuple(g())`、`[x for x in g()]`、`list(x * 2 for x in g())` 等，凡不是 `for` 语句的形式），该语句因 `sleep` 挂起后会被整体重放，而重放时生成器对象被**重新创建**而非复用，于是生成器体从头再执行一遍：
+- **表达式级消费含 `sleep` 的生成器时会重复执行生成器体内的副作用**（已在 [0.5.0-alpha.3] 修复）：把含 `time.sleep()` 的生成器直接放进**表达式**里消费时（`print(list(g()))`、`sum(g())`、`sorted(g())`、`max(g())`、`tuple(g())`、`[x for x in g()]`、`list(x * 2 for x in g())` 等，凡不是 `for` 语句的形式），该语句因 `sleep` 挂起后会被整体重放，而重放时生成器对象被**重新创建**而非复用，于是生成器体从头再执行一遍：
   - 生成器体内的副作用（`append`、`print`、累加等）会被执行多次。例如 `log=[]; def a(): for i in range(2): log.append(i); time.sleep(0); yield i` 后 `list(a())`，CPython 得到 `log == [0, 1]`，PyGDS 得到 `log == [0, 0, 1, 0, 1]`
   - 若产出的值依赖被修改的状态（如 `n += 1; yield n`），**元素值本身也会出错**：CPython `[1, 2]`，PyGDS `[4, 5]`
   - 真实等待次数同样偏少（2 个元素只等 1 次）
   - 受影响范围：`for` 语句消费是正确的（迭代器经 `resume_info` 复用），只有表达式级消费受影响；不含 `sleep` 的生成器不受影响
-  - 根因有两处且相互叠加：`Call` 求值在分派前清空 `_current_call_node`，使 `call_user_function` 里的生成器记忆（`_memo_generator`）始终收到 `null` 而形同虚设；同时 `_clear_gen_memo` / `_clear_stmt_window` 在重放根语句期间会被内层语句触发的清理逻辑按根语句键清空。两处都属于「语句重放 + 消费窗口」的核心区域，为便于回退与独立验证，留待下一版专门处理（已在 [0.5.0-alpha.2] 修复）
+  - 根因有两处且相互叠加：`Call` 求值在分派前清空 `_current_call_node`，使 `call_user_function` 里的生成器记忆（`_memo_generator`）始终收到 `null` 而形同虚设；同时 `_clear_gen_memo` / `_clear_stmt_window` 在重放根语句期间会被内层语句触发的清理逻辑按根语句键清空。两处都属于「语句重放 + 消费窗口」的核心区域，为便于回退与独立验证，留待下一版专门处理（已在 [0.5.0-alpha.3] 修复）
 
 ### 测试
 

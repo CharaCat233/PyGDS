@@ -149,9 +149,15 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator/time; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter) |
 | `set` | ✅ Full | Literal `{1, 2}`, constructor, set operations and methods |
 | `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
+| `bytes` type | ✅ Full | `b"xy"` literals as a distinct `bytes` type; indexing/iteration yield integers, plus slicing, repetition and `in`, strictly distinct from `str` |
+| `range` type | ✅ Full | A distinct lazy `range` object supporting `len` / indexing / slicing / containment / iteration without materialising large ranges |
+| User-class iteration protocol | ✅ Full | A class defining `__iter__` / `__next__` can be iterated by `for` / `list()` and all consuming functions |
+| User-class `__eq__` / `__hash__` | ✅ Full | `__eq__` participates in `in` / `remove` / `index` / `count`; instances defining `__hash__` can be dict keys and set elements |
+| Multiple assignment targets | ✅ Full | `a[0], a[2] = a[2], a[0]`, `o.x, o.y = 1, 2`, including chained suffixes like `self.data[k] = v` |
+| `dict` views | ✅ Full | `keys()` / `values()` are iterable and support `len` and `in` |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |
 | `async`/`await` | ❌ Not Supported | — |
-| Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators (including `time.sleep()` inside nested generators), and closures persisting across `yield` |
+| Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators (including `time.sleep()` inside nested generators), full `send` / `throw` delegation through `yield from` (PEP 380, sub-generator catches first), and closures persisting across `yield` |
 | Decorators | ⚠️ Partial | `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) |
 | `with` Statement | ❌ Not Supported | — |
 | User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator/time) |
@@ -176,25 +182,19 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
-| P0-2 | An eager comprehension's element expression runs repeatedly when it has side effects | When the **element expression itself** of a list/set/dict comprehension has side effects and the iterable is a generator containing `sleep`, the element expression is re-evaluated on statement replay: `seen=[]; print([seen.append(v) or v for v in a()])` yields `seen: [0, 0, 1]` instead of `[0, 1]` (the same applies to side-effecting functions called from it). The printed values are correct, and generator expressions, `for` statements and side-effect-free element expressions are unaffected. See P0-2 in `tests/已知问题清单.md` |
+| P0-2 | An eager comprehension's element expression runs repeatedly when it has side effects | When the **element expression itself** of a list/set/dict comprehension has side effects and the iterable is a generator containing `sleep`, the element expression is re-evaluated on statement replay: `seen=[]; print([seen.append(v) or v for v in a()])` yields `seen: [0, 0, 1]` instead of `[0, 1]`. The printed values are correct, and generator expressions, `for` statements and side-effect-free element expressions are unaffected. See P0-2 in `tests/已知问题清单.md` |
 
 ### P1 — Clear Errors or Missing Features
 
+Items P1-1 to P1-6, P1-11 and P1-14 were fixed in **v0.5.0-alpha.3** (see the `[0.5.0-alpha.3]` section of `CHANGELOG`); only the still-unsupported ones are listed here.
+
 | ID | Issue | Details |
 | :--- | :--- | :--- |
-| P1-1 | Multiple assignment targets unsupported | `a[0], a[1] = 1, 2`, `o.x, o.y = 1, 2` and `d["x"], d["y"] = 1, 2` raise `Invalid assignment target` (tuple unpacking `a, b = 1, 2` and chained assignment `z = y = x = 5` work) |
-| P1-2 | User-class iteration protocol unsupported | A class defining `__iter__` / `__next__` cannot be iterated by `for` / `list()`; raises `TypeError: 'X' object is not iterable` |
-| P1-3 | User-class `__hash__` cannot be used as a dict key / set element | `d = {P(1): "a"}` raises `TypeError: unhashable type: 'P'` (calling `hash(p)` on its own works) |
-| P1-4 | User-class `__eq__` is not used by `in` | `x in [y]` does not go through the user's `__eq__` and raises `RuntimeError: Unknown binary operation error` (direct `x == y` works) |
-| P1-5 | `dict.keys()` / `values()` are not iterable and have no `len()` | `len(d.keys())` raises `TypeError`; `list(d.values())` returns `[]` (`items()` works) |
-| P1-6 | `range` is not a distinct type | Backed by a list internally: `repr(range(3))` gives `[0, 1, 2]`, `isinstance(range(3), range)` is `False`, and `range(5)[::-1]` yields a list. The type name and immutability are aligned |
-| P1-7 | `with` statement unsupported | — |
-| P1-8 | User-file `import` unsupported | Only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
-| P1-9 | `async` / `await` unsupported | Async scenarios are covered by the suspend system (`time.sleep` / `request_suspend_waiting`) |
-| P1-10 | `match` / `case` structural pattern matching unsupported | Raises a parse error |
-| P1-11 | `bytes` has no distinct type | `b"xy"` parses as `str`: `type(b"xy").__name__` is `str`, and `b"xy"[0]` gives `'x'` instead of `120` |
-| P1-13 | `yield` resumption re-evaluates the prefix expression | In `f(a(), (yield 1))`, `a()` runs twice on resume. A full fix needs expression-level continuations |
-| P1-14 | `send` / `throw` are not forwarded into a `yield from` sub-generator | A `try/except` inside the sub-generator does not catch an outer `throw`, and a `send` value never reaches the sub-generator (the `x = yield from it` assignment form now works) |
+| P1-7 | `with` statement unsupported | Not implemented by design for now |
+| P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
+| P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`) |
+| P1-10 | `match` / `case` structural pattern matching unsupported | Deferred to v0.6.0 |
+| P1-13 | `yield` resumption may re-evaluate prefix subexpressions | Common forms fixed in v0.5.0-alpha.3 (memoised by node + occurrence); complex `yield from` / alternating-generator combinations can still hit the iteration cap (pre-existing since alpha.2) |
 
 ### P2 — Edge Differences
 

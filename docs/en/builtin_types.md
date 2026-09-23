@@ -99,6 +99,34 @@ class DSLString extends DSLObject:
     var value: String
 ```
 
+### DSLBytes — Bytes Type
+
+Corresponds to Python `bytes`, created by `b"..."` / `rb"..."` literals (immutable)
+
+```gdscript
+class DSLBytes extends DSLObject:
+    # byte array (each element 0-255)
+    var data: Array[int] = []
+```
+
+Indexing and iteration yield integers (`b"xy"[0] == 120`); `len` is the byte count; slicing, `b"a" * 3` repetition and `in` are supported. `repr` looks like `b'xy'`, with non-printable bytes escaped as `\xNN`. Strictly distinct from `str` (`b"a" == "a"` is `False`).
+
+### DSLRange — Lazy Integer Sequence Type
+
+Corresponds to Python `range`, storing only `start` / `stop` / `step` and evaluating on demand (large ranges are not materialised)
+
+```gdscript
+class DSLRange extends DSLObject:
+    # start value (inclusive)
+    var start: int = 0
+    # stop value (exclusive)
+    var stop: int = 0
+    # step (non-zero)
+    var step: int = 1
+```
+
+Supports `len` / indexing (including negative) / slicing (returns a new range) / containment / iteration / `reversed()`. Immutable: item assignment and deletion both raise `TypeError`.
+
 ### DSLList — List Type
 
 ```gdscript

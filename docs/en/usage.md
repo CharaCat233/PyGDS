@@ -692,8 +692,7 @@ print(list(counter()))                             # [0, 1, 2]
 print(sum(counter()))                              # 3
 ```
 
-> **⚠️ Breaking Change (v0.5.0-alpha.2)**: a bare `sleep(n)` no longer exists — use `import time` then `time.sleep(n)`.
-> **⚠️ Known Issue (v0.5.0-alpha.2, to be fixed)**: consuming a generator containing `time.sleep()` inside an **expression** (`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `[x for x in g()]` and the like) re-creates the generator object on statement replay, so side effects in the generator body run more than once and values that depend on mutated state come out wrong; the number of real waits is too low as well. Consumption via a `for` statement is correct.
+> **⚠️ Breaking Change (v0.5.0-alpha.1)**: a bare `sleep(n)` no longer exists — use `import time` then `time.sleep(n)`.
 
 ### Generator Functions (`yield`)
 

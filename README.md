@@ -149,9 +149,15 @@ dsl.run()
 | 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator/time；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter，time 提供 sleep/time/time_ns/monotonic/perf_counter） |
 | `set` | ✅ 完整 | 字面量 `{1, 2}`、构造、集合运算与方法 |
 | `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
+| `bytes` 类型 | ✅ 完整 | `b"xy"` 字面量，独立的 `bytes` 类型；索引/迭代产出整数、切片、重复、`in`，与 `str` 严格区分 |
+| `range` 类型 | ✅ 完整 | 独立的惰性 `range` 对象，支持 `len` / 索引 / 切片 / 成员判定 / 迭代，大范围不展开内存 |
+| 用户类迭代协议 | ✅ 完整 | 定义 `__iter__` / `__next__` 的类可被 `for` / `list()` / 各消费函数迭代 |
+| 用户类 `__eq__` / `__hash__` | ✅ 完整 | `__eq__` 参与 `in` / `remove` / `index` / `count`；定义 `__hash__` 的实例可作字典键与集合元素 |
+| 多重赋值目标 | ✅ 完整 | `a[0], a[2] = a[2], a[0]`、`o.x, o.y = 1, 2`，含链式后缀 `self.data[k] = v` |
+| `dict` 视图 | ✅ 完整 | `keys()` / `values()` 可迭代且有 `len` 与 `in` |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
 | `async`/`await` | ❌ 不支持 | — |
-| 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套（含嵌套生成器内 `time.sleep()`）、闭包跨 `yield` 保持 |
+| 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套（含嵌套生成器内 `time.sleep()`）、`yield from` 的 `send` / `throw` 完整委托（PEP 380，子生成器优先捕获）、闭包跨 `yield` 保持 |
 | 装饰器 | ⚠️ 部分 | `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter） |
 | `with` 语句 | ❌ 不支持 | — |
 | 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator/time） |
@@ -176,25 +182,19 @@ dsl.run()
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
-| P0-2 | eager 推导式的元素表达式含副作用时会重复执行 | 列表/集合/字典推导式的**元素表达式本身**含副作用、且迭代源是含 `sleep` 的生成器时，元素表达式会在语句重放时被重新求值：`seen=[]; print([seen.append(v) or v for v in a()])` 得到 `seen: [0, 0, 1]` 而非 `[0, 1]`（元素表达式调用的含副作用函数同样受影响）。行内输出取值正确，生成器表达式、`for` 语句与无副作用的元素表达式均不受影响。详情见 `tests/已知问题清单.md` 的 P0-2 |
+| P0-2 | eager 推导式的元素表达式含副作用时会重复执行 | 列表/集合/字典推导式的**元素表达式本身**含副作用、且迭代源是含 `sleep` 的生成器时，元素表达式会在语句重放时被重新求值：`seen=[]; print([seen.append(v) or v for v in a()])` 得到 `seen: [0, 0, 1]` 而非 `[0, 1]`。行内输出取值正确，生成器表达式、`for` 语句与无副作用的元素表达式均不受影响。详情见 `tests/已知问题清单.md` 的 P0-2 |
 
 ### P1 — 明确报错或功能缺失
 
+下列 P1-1 ~ P1-6、P1-11、P1-14 已在 **v0.5.0-alpha.3** 修复，详见 `CHANGELOG` 的 `[0.5.0-alpha.3]` 节；此处仅保留仍未支持项。
+
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
-| P1-1 | 多重赋值目标不支持 | `a[0], a[1] = 1, 2`、`o.x, o.y = 1, 2`、`d["x"], d["y"] = 1, 2` 报 `Invalid assignment target`（元组解包 `a, b = 1, 2` 与链式赋值 `z = y = x = 5` 正常） |
-| P1-2 | 用户类迭代协议不支持 | 定义 `__iter__` / `__next__` 的类不能被 `for` / `list()` 迭代，报 `TypeError: 'X' object is not iterable` |
-| P1-3 | 用户类 `__hash__` 无法用于字典键/集合元素 | `d = {P(1): "a"}` 报 `TypeError: unhashable type: 'P'`（单独调用 `hash(p)` 是正常的） |
-| P1-4 | 用户类 `__eq__` 不参与 `in` 运算 | `x in [y]` 不走用户的 `__eq__`，报 `RuntimeError: Unknown binary operation error`（直接比较 `x == y` 正常） |
-| P1-5 | `dict.keys()` / `values()` 不可迭代且无 `len()` | `len(d.keys())` 报 `TypeError`，`list(d.values())` 返回 `[]`（`items()` 正常） |
-| P1-6 | `range` 不是独立类型 | 内部以列表承载：`repr(range(3))` 得 `[0, 1, 2]`、`isinstance(range(3), range)` 为 `False`、`range(5)[::-1]` 得列表。类型名与不可变性已对齐 |
-| P1-7 | `with` 语句不支持 | — |
-| P1-8 | 用户文件 `import` 不支持 | 仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
-| P1-9 | `async` / `await` 不支持 | 异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代 |
-| P1-10 | `match` / `case` 结构化模式匹配不支持 | 报解析错误 |
-| P1-11 | `bytes` 无独立类型 | `b"xy"` 被解析为 `str`：`type(b"xy").__name__` 为 `str`，`b"xy"[0]` 得 `'x'` 而非 `120` |
-| P1-13 | `yield` 恢复时重复求值前缀表达式 | `f(a(), (yield 1))` 中 `a()` 在恢复时执行两次。彻底解决需要表达式级续延 |
-| P1-14 | `send` / `throw` 不转发给 `yield from` 的子生成器 | 子生成器内的 `try/except` 捕获不到外层 `throw`；`send` 的值不会送达子生成器（`x = yield from it` 的赋值形式现已支持） |
+| P1-7 | `with` 语句不支持 | 按既定范围当前不实现 |
+| P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
+| P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代 |
+| P1-10 | `match` / `case` 结构化模式匹配不支持 | 延后至 v0.6.0 |
+| P1-13 | `yield` 恢复时前缀子表达式可能重复求值 | 已在 v0.5.0-alpha.3 修复常见形态（按节点 + 出现次序记忆）；`yield from` 与多生成器交替的复杂组合仍可能触达迭代上限（alpha.2 起既有） |
 
 ### P2 — 边缘差异
 

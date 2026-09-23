@@ -99,6 +99,34 @@ class DSLString extends DSLObject:
     var value: String
 ```
 
+### DSLBytes — 字节串类型
+
+对应 Python `bytes`，由 `b"..."` / `rb"..."` 字面量创建（不可变）
+
+```gdscript
+class DSLBytes extends DSLObject:
+    # 字节数组 (每个元素 0-255)
+    var data: Array[int] = []
+```
+
+索引与迭代产出整数（`b"xy"[0] == 120`），`len` 为字节数，支持切片、`b"a" * 3` 重复与 `in` 判定；`repr` 形如 `b'xy'`，不可打印字节转义为 `\xNN` 形式；与 `str` 严格区分（`b"a" == "a"` 为 `False`）
+
+### DSLRange — 惰性整数序列类型
+
+对应 Python `range`，只保存 `start` / `stop` / `step`，按需求值（大范围不展开内存）
+
+```gdscript
+class DSLRange extends DSLObject:
+    # 起始值 (含)
+    var start: int = 0
+    # 终止值 (不含)
+    var stop: int = 0
+    # 步长 (非 0)
+    var step: int = 1
+```
+
+支持 `len` / 索引（含负索引）/ 切片（返回新 range）/ 成员判定 / 迭代 / `reversed()`；不可变，元素赋值与删除均报 `TypeError`
+
 ### DSLList — 列表类型
 
 ```gdscript
