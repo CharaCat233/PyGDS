@@ -245,8 +245,7 @@ isinstance({1}, frozenset)              # False
 
 ### DSLGenerator — 生成器类型
 
-对应 Python 生成器（`generator`），由生成器表达式 `(expr for var in iterable [if cond])` 创建，
-**惰性求值**：仅在 `next()` 或迭代时逐一产出元素，适合大序列与无限序列
+对应 Python 生成器（`generator`），由生成器表达式 `(expr for var in iterable [if cond])` 创建，**惰性求值**：仅在 `next()` 或迭代时逐一产出元素，适合大序列与无限序列
 
 ```gdscript
 class DSLGenerator extends DSLObject:
@@ -320,7 +319,7 @@ except StopIteration as e:
 ```
 
 > **注意**：生成器函数同样是**一次性迭代器**；耗尽后再 `next()` 抛 `StopIteration`（携带 `return` 值），`next(g, default)` 返回默认值，`for` / `list()` 耗尽时正常结束
-> 生成器体内调用 `sleep()` 会明确报错，与挂起系统暂不共存
+> 生成器体内可调用 `time.sleep()`（协作式挂起，与 CPython 行为一致），嵌套生成器内同理，详见 `time` 模块说明
 > lambda 体内直接含 `yield`（Python 3.12+）也会生成 lambda 生成器
 
 #### 循环子句 (CompClause)

@@ -284,6 +284,18 @@ print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
 > 目标必须是简单变量名：`(obj.attr := 1)` / `(lst[0] := 1)` 分别报 `cannot use assignment expressions with attribute` / `with subscript`
 > 裸写 `x := 1` 作为语句报 `SyntaxError`（需写成 `(x := 1)`），`del (x := 1)` 报 `cannot delete named expression`——以上均与 Python 一致
 
+**推导式内的两条禁止规则**（与 CPython 一致，均为解析期 `SyntaxError`）：
+
+```python
+[i := 0 for i in range(3)]          # assignment expression cannot rebind
+                                    # comprehension iteration variable 'i'
+[x for x in (y := [1, 2])]          # assignment expression cannot be used in a
+                                    # comprehension iterable expression
+```
+
+- **不得重绑定推导式循环变量**：赋值表达式的目标名若与本推导式（或任意外层推导式）的循环目标同名即报错；适用于列表/集合/字典/生成器推导式的元素、键值、条件与后续子句的可迭代表达式。跨 `lambda` / `def` 边界不继承（`[lambda: (i := 0) for i in range(3)]` 合法）
+- **不得出现在可迭代表达式内**：与名字无关，任何赋值表达式出现在推导式的 `for ... in <此处>` 都会报错，且不区分是否嵌套在 `lambda` / 内层推导式里
+
 ### 数字字面量
 
 支持十六进制、八进制、二进制、下划线分隔与科学计数法：
@@ -640,6 +652,47 @@ list(islice((x * x for x in count()), 5))   # [0, 1, 4, 9, 16] (配合无限序�
 > **⚠️ 破坏性变更（v0.3.0）**：此前 `(x for x in it)` 被当作列表推导式**急切求值为列表**，现在改为**惰性生成器对象**
 > 旧代码若直接对结果下标/`len()`/调用列表方法会报错，需先用 `list(g)` / `tuple(g)` 转换
 > 生成器为**一次性迭代器**，重复迭代不会从头开始
+
+### `time` 模块与 sleep
+
+`sleep()` 位于 `time` 模块（与 CPython 一致，CPython 同样没有裸 `sleep`），是**协作式挂起**：挂起期间宿主继续运行，超时后自动恢复，不阻塞游戏
+
+```python
+import time
+from time import sleep
+
+print("start")
+time.sleep(1.0)          # 挂起 1.0 秒后自动恢复
+print("after")           # 输出顺序与 CPython 一致
+
+time.sleep(0)            # 立即恢复; 返回值与 CPython 一致为 None
+print(time.sleep(0) is None)     # True
+
+# 时间戳与单调时钟
+time.time()              # 当前 Unix 时间戳 (秒)
+time.time_ns()           # 当前 Unix 时间戳 (纳秒)
+time.monotonic()         # 单调递增时钟 (秒)
+time.perf_counter()      # 性能计数器 (秒)
+```
+
+`sleep()` 可用于推导式、生成器表达式与生成器函数体内：
+
+```python
+[time.sleep(0) for x in range(3)]                  # [None, None, None]
+[x for x in [1, 2, 3] if time.sleep(0)]            # []
+list(time.sleep(0) for x in range(2))              # [None, None]
+[v for v in (time.sleep(0) for x in range(2))]     # [None, None]
+
+def counter():
+    for i in range(3):
+        time.sleep(0)
+        yield i
+print(list(counter()))                             # [0, 1, 2]
+print(sum(counter()))                              # 3
+```
+
+> **⚠️ 破坏性变更（v0.5.0-alpha.1）**：裸 `sleep(n)` 不再存在，须 `import time` 后调用 `time.sleep(n)`
+> **⚠️ 已知问题（v0.5.0-alpha.1，待修复）**：在**表达式**里消费含 `time.sleep()` 的生成器时（`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `[x for x in g()]` 等），语句挂起后重放会重新创建生成器对象，导致生成器体内的副作用重复执行、依赖被修改状态的元素值出错，真实等待次数也偏少；用 `for` 语句消费是正确的
 
 ### 生成器函数 (`yield`)
 

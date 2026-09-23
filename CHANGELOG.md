@@ -1,6 +1,67 @@
 # Changelog
 
-本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
+
+## [Unreleased]
+
+### 计划修复
+
+- **表达式级消费含 `sleep` 的生成器时重复执行副作用**（即下方 `[0.5.0-alpha.1]` 已知问题小节记录的 P0 问题）：把含 `time.sleep()` 的生成器放进**表达式**里消费时（`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `tuple(g())` / `[x for x in g()]` 等，凡不是 `for` 语句的形式），语句因挂起被重放时会重新创建生成器对象而非复用，导致生成器体内的副作用重复执行；若产出值依赖被修改的状态，元素值本身也会出错；真实等待次数同样偏少。用 `for` 语句消费是正确的，不含 `sleep` 的生成器不受影响
+- 根因涉及 `_current_call_node` 的生命周期与 `_clear_gen_memo` / `_clear_stmt_window` 的清理条件，修复需覆盖 `list` / `tuple` / `sum` / `sorted` / `max` / 推导式 / 生成器表达式等全部表达式级消费路径，并新增可观察副作用的回归测试（现有用例只断言 `print_output`，无法捕获此类副作用重复）
+
+完整的问题清单（含复现脚本与实测结果）见 `tests/已知问题清单.md`（本地）
+
+## [0.5.0-alpha.1] - 2026-09-23
+
+### 新增
+
+- **`time` 模块**：新增内置 `time` 模块，提供 `sleep` / `time` / `time_ns` / `monotonic` / `monotonic_ns` / `perf_counter` / `perf_counter_ns`；`time.sleep(n)` 为协作式挂起（挂起期间宿主继续运行，不阻塞游戏），返回值与 CPython 一致为 `None`，参数错误信息也对齐 CPython（`TypeError: 'str' object cannot be interpreted as an integer` / `ValueError: sleep length must be non-negative`）
+- **生成器/推导式内的 `sleep` 支持**：此前「生成器体内 `sleep()` 报错」与「推导式/生成器表达式内 `sleep()` 静默给出错值或死循环」的问题一并解决；现在 `[time.sleep(0) for x in range(3)]`、`[x for x in it if time.sleep(0)]`、`[f(x) for x in it]`（`f` 内含 sleep）、`list(time.sleep(0) for x in range(2))`、`[v for v in (time.sleep(0) for x in range(2))]`、`sum` / `sorted` / `min` / `max` / `any` / `all` / `enumerate` / `zip` / `itertools.islice` 消费含 sleep 的生成器、生成器函数体内 `sleep` 等写法全部按 CPython 语义产出正确结果
+- **嵌套生成器内的 `sleep` 支持**：生成器体内再迭代另一个含 `time.sleep()` 的生成器（含多层嵌套、`yield from` 委托、生成器内 genexpr、生成器工厂闭包等组合）此前会明确报错，现按 CPython 语义正确产出。内层迭代器因 `sleep` 挂起时不再被当作「已耗尽」，而是经 `for` 语句向上传播为程序挂起，由语句重放机制接管续跑；`_step()` 中的嵌套守卫与 `_outer_generator` 字段一并移除
+- **赋值表达式（walrus）严格规则**：新增两条与 CPython 一致的解析期校验——`assignment expression cannot rebind comprehension iteration variable 'x'`（覆盖列表/集合/字典/生成器推导式，保护名包含本推导式与所有外层推导式的循环目标，跨 `lambda` / `def` 边界不继承）与 `assignment expression cannot be used in a comprehension iterable expression`（推导式可迭代表达式内禁止赋值表达式，与名字无关）
+- **`yield` 在推导式内的规则细化**：裸 `yield` 在推导式内报 `SyntaxError: invalid syntax`；括号包裹的 `yield` 按推导式类型报 `'yield' inside list/set/dict comprehension` 或 `'yield' inside generator expression`；最外层子句的可迭代表达式内的 `yield` 属外层生成器函数、合法（此前一律报 `invalid syntax`）
+
+### 破坏性变更 (Breaking Changes)
+
+- **`sleep()` 迁移到 `time` 模块**（v0.4.0 → v0.5.0-alpha.1）：裸 `sleep(n)` 不再存在，需 `import time` 后调用 `time.sleep(n)`；CPython 同样没有内置的裸 `sleep`，此项使两者一致。`demo/demo.gd` 与 `demo/test_suspend_all.gd` 已同步更新
+
+### 修复
+
+- **推导式 / 生成器表达式内 `sleep()` 的挂起支持**：此前 `[sleep(..) for x in ...]` 会重复挂起直至死循环（永不结束），`list(sleep(..) for x in ...)` 静默给出 `[]` 或多余 `None`；现通过「语句重放 + 消费窗口」机制正确推进：一次性迭代器把产出记入日志，语句被挂起后重放时按窗口起点重读已产出元素，从而让原生消费循环（`list` / `sum` / 推导式等）无需感知挂起即可得到正确序列
+- **生成器函数体内 `sleep()` 支持**：移除 v0.4.0 的「generator body cannot suspend」报错，改为正确的挂起—恢复（体内 `sleep` 计数按重放轮次去重，保证每次等待只发生一次）
+- **递归函数内的 `sleep` 重放**：修复重放时复用调用帧导致的重复执行（如 `def f(n): print(n); sleep(); f(n-1)` 会打印多次 `n`）；调用帧按实参**值**比对（不可变字面量按值、其余按身份），并记录 `return_pc` 时按 `(statements, env)` 双重身份定位，使递归各层帧各自正确恢复
+- **`min()` / `max()` 在消费中途挂起时误报空序列**：`has_next()` 返回 false 时区分「确实为空」与「本次挂起中断」，后者交回语句重放而不抛 `ValueError`
+- **`for` 循环体挂起后的重放重复推进**：循环内语句因 `sleep` 挂起而重放时，此前会按上一次遗留的 `body_resume` 标记跳过迭代器推进、直接重跑循环体，导致元素被重复产出（如 `for v in b():` 中 `b()` 内含 `sleep` 时同一元素反复输出）；现在在推进迭代器前清除该标记，使「body 恢复」与「迭代器推进」两种情况正确区分
+- **`next()` 在生成器消费中途挂起时误抛 `StopIteration`**：`has_next()` 返回 false 时先判 `suspended`，挂起交回语句重放而不是当作迭代结束
+- **`operator.indexOf()` 在消费中途挂起时误抛 `ValueError`**：同样区分「确实未找到」与「本次挂起中断」，后者返回 `null` 交回重放
+- **字面量 `*` 解包在生成器消费中途挂起时输出多次部分结果**：`[*g()]` / `(*g(),)`（星号元素位于字面量末尾）此前会因 `_append_literal_element` 带着部分元素返回成功，导致语句被视为已完成并反复输出逐步增长的部分列表（`[]` / `[0]` / `[0, 1]` …）；现在循环内检测挂起并返回 false，使表达式返回 `null` 触发语句重放
+- **`for` 循环吞掉迭代器抛出的异常**：迭代器推进时抛出异常（如生成器体内 `raise`）会被本语句吞掉；当 `for` 位于 `try` 体内且其后没有别的语句时，外层 `try/except` 无法捕获，错误直接冒泡为未捕获异常。现在 `has_next()` 返回 false 时一并检查 `report.has_error`，把异常向上传播交给 `try` 分发
+- **调用表达式抛异常时泄漏半成品值**：`list()` / `tuple()` / 用户类构造等 `DSLClass` 调用在内部抛出异常时，返回的是半成品（如 `[]`、`<C object>`），而 `Call` 求值分支只检查挂起、不检查错误，导致实参求值带着它继续（`print(list(gen))` 会先多输出一行部分列表再抛异常，`print(C())` 会多输出一行对象 repr）；现补上 `report.has_error` 判定，异常原样交给 `try/except`
+- **`random` 抽样函数对生成器的拒绝行为对齐 CPython**：`choice` / `choices` / `shuffle` 此前对生成器报 `argument must be a sequence` / `Cannot choose from an empty population`，现统一报 CPython 的 `TypeError: object of type 'generator' has no len()`；`sample` 报 CPython 的 `TypeError: Population must be a sequence.  For dicts or sets, use sorted(d).`。`weights` 参数仅需可迭代，生成器仍被接受（与 CPython 一致）
+- **`random.choices` 在人口/权重消费中途挂起时使用半截数据**：`has_next()` 返回 false 时未区分「确实耗尽」与「本次挂起中断」，会拿着不完整的人口或权重继续抽样（权重场景直接误报 `ValueError: The number of weights does not match the population`）；现补上 `suspended` 判定，交回语句重放
+- **`KeyError` 的 `str()` / `repr()` / `args` 与 CPython 不一致**：`str(KeyError("k"))` 应为参数的 repr（`'k'`，非字符串参数如 `1` 输出 `1`），无参数时为空串、多参数时为参数元组；`repr(e)` 应为 `KeyError('k')` 形式而非 `<KeyError object>`；`e.args` 应保留原始参数对象。此前内部 `KeyError` 站点一律用 `str` 语义拼消息、异常类也没有 `__repr__`，因此 `KeyError('k')`、`d["missing"]`、`{}.popitem()` 等场景的显示与 `args` 都不对
+- **字典/集合方法把错误记在实例上导致异常被静默吞掉**：`dict.popitem()`、`dict.pop(k)`、`set.remove(x)`、`set.pop()` 在失败时把错误写在接收者实例的 `last_error` 上，而 `Call` 求值只检查内置方法原型（proto）的 `last_error`，于是异常既不抛出也不报错，调用静默返回 `None`（如 `print({}.popitem())` 输出 `None`）；现同时检查接收者实例并把原始参数带出，转为对应异常
+- **`random` 抽样函数的参数类型规则与 CPython 不一致**：`choice` / `shuffle` 现按 CPython 的「取 `len(seq)` 后按整数下标索引/赋值」语义处理 —— 生成器报 `object of type 'generator' has no len()`，集合报 `'set' object is not subscriptable`，字典按键取（键非 `0..n-1` 时 `KeyError`），`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`；`sample` 对生成器/集合/字典统一报 `Population must be a sequence.  For dicts or sets, use sorted(d).`。为此给 `range()` 产物加了类型标记，使其类型名与可变性可与列表区分
+- **未捕获错误后的宿主状态**：执行中发生未捕获错误时清除挂起标志并记录致命错误，使宿主状态机进入 `ERROR` 终态，不再停留在挂起态被反复恢复（此前会无限重跑并重复输出错误）
+
+### 变更
+
+- 兼容性矩阵更新（README.md / README_EN.md）：内置模块行与用户 import 行补 `time`，赋值表达式行补充两条严格规则，挂起系统示例改为 `time.sleep`，并新增 `sleep` 迁移的破坏性变更说明
+- 文档（`docs/zh-CN` 与 `docs/en`）：`architecture.md` 补充赋值表达式校验与生成器挂起重放机制，`builtin.md` 新增 `time` 模块章节与抽样函数的参数类型规则说明，`usage.md` 补充 `time` 模块用法与 walrus 严格规则说明，`exception_system.md` 补充 `str` / `repr` / `args` 取值规则；`sleep` 在嵌套生成器内的已知差异条目已在完成支持后删除并改写为「已支持」
+
+### 已知问题
+
+- **表达式级消费含 `sleep` 的生成器时会重复执行生成器体内的副作用**（待修复，见 [Unreleased]）：把含 `time.sleep()` 的生成器直接放进**表达式**里消费时（`print(list(g()))`、`sum(g())`、`sorted(g())`、`max(g())`、`tuple(g())`、`[x for x in g()]`、`list(x * 2 for x in g())` 等，凡不是 `for` 语句的形式），该语句因 `sleep` 挂起后会被整体重放，而重放时生成器对象被**重新创建**而非复用，于是生成器体从头再执行一遍：
+  - 生成器体内的副作用（`append`、`print`、累加等）会被执行多次。例如 `log=[]; def a(): for i in range(2): log.append(i); time.sleep(0); yield i` 后 `list(a())`，CPython 得到 `log == [0, 1]`，PyGDS 得到 `log == [0, 0, 1, 0, 1]`
+  - 若产出的值依赖被修改的状态（如 `n += 1; yield n`），**元素值本身也会出错**：CPython `[1, 2]`，PyGDS `[4, 5]`
+  - 真实等待次数同样偏少（2 个元素只等 1 次）
+  - 受影响范围：`for` 语句消费是正确的（迭代器经 `resume_info` 复用），只有表达式级消费受影响；不含 `sleep` 的生成器不受影响
+  - 根因有两处且相互叠加：`Call` 求值在分派前清空 `_current_call_node`，使 `call_user_function` 里的生成器记忆（`_memo_generator`）始终收到 `null` 而形同虚设；同时 `_clear_gen_memo` / `_clear_stmt_window` 在重放根语句期间会被内层语句触发的清理逻辑按根语句键清空。两处都属于「语句重放 + 消费窗口」的核心区域，为便于回退与独立验证，留待下一版专门处理（见 [Unreleased]）
+  - 完整清单见 README 的「已知问题与限制」章节与 `tests/已知问题清单.md`
+
+### 测试
+
+- 新增 8 个行为一致性测试：`lang_time`（time 模块与参数校验）/ `lang_sleep_lazy`（推导式、生成器表达式、生成器函数与各消费函数内的 sleep）/ `lang_sleep_nested`（嵌套生成器内的 sleep、多层嵌套、`yield from`、genexpr、`send`、闭包工厂、异常传播，以及 `next()` / `operator.indexOf()` / 字面量 `*` 解包三处消费点）/ `lang_gen_error`（调用表达式抛异常时不再泄漏半成品值）/ `lang_exc_str`（异常的 str / repr / args 语义）/ `lang_random_gen`（抽样函数的参数类型规则与 weights 挂起重放）/ `err_walrus_rebind` / `err_walrus_comp_iter` / `err_yield_paren_comp`（共 138 个用例全部通过），挂起测试 22 个用例通过
 
 ## [0.4.0] - 2026-09-22
 
@@ -33,7 +94,7 @@
 
 ### 测试
 
-- 新增 10 个行为一致性测试：`lang_yield` / `lang_yield_control`（send/yield from/throw/close）/ `lang_yield_consumers`（消费链路）/ `lang_yield_lambda`（生成器 lambda）/ `edge_yield_errprop` / `edge_yield_closure` / `edge_yield_controlflow` / `err_yield_outside` / `err_yield_listcomp` / `err_yield_dictcomp`（共 129 个用例全部通过），挂起测试 22 个用例通过
+- 新增 6 个行为一致性测试：`lang_yield` / `lang_yield_control`（send/yield from/throw/close）/ `lang_yield_consumers`（消费链路）/ `lang_yield_lambda`（生成器 lambda）/ `edge_yield_errprop` / `edge_yield_closure` / `edge_yield_controlflow` / `err_yield_outside` / `err_yield_listcomp` / `err_yield_dictcomp`（共 129 个用例全部通过），挂起测试 22 个用例通过
 
 ## [0.3.0] - 2026-09-21
 

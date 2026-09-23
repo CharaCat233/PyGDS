@@ -84,9 +84,12 @@ func _define_exception(type_name: String, base_name: String = "Exception"):
     var init_desc = DSLMethodDescriptor.new("__init__", Callable(self, "_exception_init"))
     methods["__init__"] = init_desc
 
-    # 3. 注入 __str__ (使用 _exception_str 回调)
+    # 3. 注入 __str__ / __repr__ (使用 _exception_str / _exception_repr 回调)
     var str_desc = DSLWrappedDescriptor.new("__str__", Callable(self, "_exception_str"))
     methods["__str__"] = str_desc
+
+    var repr_desc = DSLWrappedDescriptor.new("__repr__", Callable(self, "_exception_repr"))
+    methods["__repr__"] = repr_desc
 
     # 4. 创建 DSLClass 并注册到全局作用域
     var class_obj = DSLClass.new(type_name, base_class, methods, self)
@@ -190,9 +193,24 @@ func _exception_str(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLO
 
 ```python
 e = TypeError("bad type")
-print(str(e))     # TypeError: bad type
+print(str(e))     # bad type
+print(repr(e))    # TypeError('bad type')
 print(e.args)     # ("bad type",)
 ```
+
+### `str()` / `repr()` / `args` 的取值规则
+
+与 CPython 一致，`_exception_init` 按参数个数与类型生成消息：
+
+| 参数个数 | `str(e)` | `repr(e)` | `e.args` |
+| :--- | :--- | :--- | :--- |
+| 0 个 | 空串 | `TypeError()` | `()` |
+| 1 个 | 参数的 `str` | `TypeError('bad type')` | `('bad type',)` |
+| 多个 | 参数元组 | `TypeError('a', 'b')` | `('a', 'b')` |
+
+`KeyError` 是特例：`str(e)` 取参数的 **repr**（`KeyError("k")` 显示为 `'k'`，`KeyError(1)` 显示为 `1`，`{}.popitem()` 显示为 `'popitem(): dictionary is empty'`）
+
+解释器内部站点（字典取值、`pop` / `popitem`、集合 `remove` / `pop` 等）通过 `last_error` 传递错误，其中 `KeyError` 站点会同时记录原始参数对象于 `last_error_args`，经 `raise_exception_from_last_error` 转为异常时保证 `str` / `repr` / `args` 三者一致
 
 ---
 

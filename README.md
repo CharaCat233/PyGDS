@@ -126,7 +126,7 @@ dsl.run()
 | 集合推导式 | ✅ 完整 | `{x*x for x in iterable [if cond]}` |
 | 多 `for` 推导式 | ✅ 完整 | `[x*y for x in a for y in b]`，每个 `for` 可带多个 `if`；列表/字典/集合推导式与生成器表达式均支持，循环变量可为 `k, v` 元组目标 |
 | 字面量 `*` 解包 | ✅ 完整 | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}`（Python 3.5+） |
-| 赋值表达式 (`:=`) | ✅ 完整 | `if (n := len(a)) > 5:`、`while chunk := read():`、推导式内绑定到外层作用域（Python 3.8+） |
+| 赋值表达式 (`:=`) | ✅ 完整 | `if (n := len(a)) > 5:`、`while chunk := read():`、推导式内绑定到外层作用域（Python 3.8+）；与 CPython 一致地拒绝「重绑定推导式循环变量」与「出现在推导式可迭代表达式内」两种写法 |
 | `slice` | ✅ 完整 | `slice(start, stop[, step])` 对象，可复用索引 `lst[slice(...)]` |
 | 增强赋值 | ✅ 完整 | `+=`, `-=`, `*=`, `/=` 等 |
 | 下标访问 | ✅ 完整 | `obj[key]` 含 `getitem`/`setitem` |
@@ -146,15 +146,15 @@ dsl.run()
 | 字典合并 | ✅ 完整 | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}`（Python 3.9+） |
 | `str` `%` 格式化 | ✅ 完整 | `"%s: %d" % (x, y)`（printf 风格） |
 | `str.format` | ✅ 完整 | `"{:.2f} {:>8}".format(x, s)`，含位置/关键字参数与格式说明符 |
-| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter） |
+| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator/time；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter，time 提供 sleep/time/time_ns/monotonic/perf_counter） |
 | `set` | ✅ 完整 | 字面量 `{1, 2}`、构造、集合运算与方法 |
 | `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
 | `async`/`await` | ❌ 不支持 | — |
-| 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套、闭包跨 `yield` 保持 |
+| 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套（含嵌套生成器内 `time.sleep()`）、闭包跨 `yield` 保持 |
 | 装饰器 | ⚠️ 部分 | `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter） |
 | `with` 语句 | ❌ 不支持 | — |
-| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator） |
+| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator/time） |
 
 > **⚠️ 破坏性变更（v0.3.0）**：生成器表达式 `(x for x in iterable)` 的语义已从「急切求值为列表」改为「惰性生成器对象」
 > 旧代码若直接对生成器表达式结果做下标/`len()`/列表方法会报错，需先 `list(g)` / `tuple(g)` 转换
@@ -162,7 +162,46 @@ dsl.run()
 >
 > **⚠️ 破坏性变更（v0.4.0）**：`yield` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；若旧代码以 `yield` 命名变量，需改名
 >
-> **⚠️ 已知差异（v0.4.0）**：生成器体内调用 `sleep()` 会明确报错（「generator body cannot suspend」），与挂起系统暂不共存；`yield` 表达式恢复时采用语句重执行续延，含副作用的前缀表达式会在恢复时重复求值（如 `f(a(), (yield 1))` 中 `a()` 会执行两次），`x = yield from it` 的赋值形式与 `send` / `throw` 向 `yield from` 子生成器的转发不支持；生成器表达式元素内含 `sleep()` 的行为仍不可靠（v0.3.0 遗留，建议避免在生成器/推导式内调用 `sleep()`）
+> **⚠️ 破坏性变更（v0.5.0-alpha.1）**：`sleep()` 已迁移到 `time` 模块，须 `import time` 后用 `time.sleep(n)` 调用；裸 `sleep()` 不再存在（与 CPython 一致，CPython 也没有内置的裸 `sleep`）
+>
+> 已知的行为差异与功能缺失（含 `yield` 恢复重复求值、`send` / `throw` 不转发、多重赋值目标、用户类迭代协议等）已移至下方「已知问题与限制」章节
+
+---
+
+## 已知问题与限制
+
+以下列出 PyGDS 当前与 CPython 不一致、或尚未实现的行为。**P0 = 静默错值**（最危险，优先修复）、**P1 = 明确报错或功能缺失**、**P2 = 边缘差异**
+
+### P0 — 静默错值
+
+| 编号 | 问题 | 说明 |
+| :--- | :--- | :--- |
+| P0-1 | 表达式级消费含 `sleep` 的生成器时重复执行副作用 | 把含 `time.sleep()` 的生成器放进**表达式**里消费（`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `tuple(g())` / `[x for x in g()]` 等，凡不是 `for` 语句的形式），语句因挂起被重放时会重新创建生成器对象而非复用，生成器体内的副作用（`append` / `print` / 累加）会执行多次；若产出值依赖被修改的状态，**元素值本身也会出错**（`n += 1; yield n` 得 `[4, 5]` 而非 `[1, 2]`）；真实等待次数同样偏少。用 `for` 语句消费正确，不含 `sleep` 的生成器不受影响。已在 `CHANGELOG` 的 `[Unreleased]` 节记录为下一版修复项 |
+
+### P1 — 明确报错或功能缺失
+
+| 编号 | 问题 | 说明 |
+| :--- | :--- | :--- |
+| P1-1 | 多重赋值目标不支持 | `a[0], a[1] = 1, 2`、`o.x, o.y = 1, 2`、`d["x"], d["y"] = 1, 2` 报 `Invalid assignment target`（元组解包 `a, b = 1, 2` 与链式赋值 `z = y = x = 5` 正常） |
+| P1-2 | 用户类迭代协议不支持 | 定义 `__iter__` / `__next__` 的类不能被 `for` / `list()` 迭代，报 `TypeError: 'X' object is not iterable` |
+| P1-3 | 用户类 `__hash__` 无法用于字典键/集合元素 | `d = {P(1): "a"}` 报 `TypeError: unhashable type: 'P'`（单独调用 `hash(p)` 是正常的） |
+| P1-4 | 用户类 `__eq__` 不参与 `in` 运算 | `x in [y]` 不走用户的 `__eq__`，报 `RuntimeError: Unknown binary operation error`（直接比较 `x == y` 正常） |
+| P1-5 | `dict.keys()` / `values()` 不可迭代且无 `len()` | `len(d.keys())` 报 `TypeError`，`list(d.values())` 返回 `[]`（`items()` 正常） |
+| P1-6 | `range` 不是独立类型 | 内部以列表承载：`repr(range(3))` 得 `[0, 1, 2]`、`isinstance(range(3), range)` 为 `False`、`range(5)[::-1]` 得列表。类型名与不可变性已对齐 |
+| P1-7 | `with` 语句不支持 | — |
+| P1-8 | 用户文件 `import` 不支持 | 仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
+| P1-9 | `async` / `await` 不支持 | 异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代 |
+| P1-10 | `match` / `case` 结构化模式匹配不支持 | 报解析错误 |
+| P1-11 | `bytes` 无独立类型 | `b"xy"` 被解析为 `str`：`type(b"xy").__name__` 为 `str`，`b"xy"[0]` 得 `'x'` 而非 `120` |
+| P1-13 | `yield` 恢复时重复求值前缀表达式 | `f(a(), (yield 1))` 中 `a()` 在恢复时执行两次。彻底解决需要表达式级续延 |
+| P1-14 | `send` / `throw` 不转发给 `yield from` 的子生成器 | 子生成器内的 `try/except` 捕获不到外层 `throw`；`send` 的值不会送达子生成器（`x = yield from it` 的赋值形式现已支持） |
+
+### P2 — 边缘差异
+
+| 编号 | 问题 | 说明 |
+| :--- | :--- | :--- |
+| P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
+| P2-2 | 部分语法错误文案不同 | 例如 `async` 报 `NameError` 而非 `SyntaxError` |
 
 ---
 
@@ -222,7 +261,7 @@ PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中�
 
 | 类型 | 调用方法 | 适用范围 | 恢复方式 |
 | :--- | :--- | :--- | :--- |
-| SLEEPING | DSL 内部调用 `sleep(n)`，API 函数调用 `request_suspend_sleeping()` | 已知等待时间 | Timer 超时后自动调用 `run()` 恢复 |
+| SLEEPING | DSL 内部调用 `time.sleep(n)`，API 函数调用 `request_suspend_sleeping()` | 已知等待时间 | Timer 超时后自动调用 `run()` 恢复 |
 | WAITING | API 函数调用 `request_suspend_waiting()` | 等待时间不确定 | 外部设置 `state = RUNNING` 后调用 `run()` |
 
 `run()` 方法返回 `State` 枚举值（`FINISHED` / `SUSPENDED_SLEEPING` / `SUSPENDED_WAITING` / `ERROR`），外部代码根据返回值驱动后续执行流程
@@ -240,8 +279,9 @@ dsl.register_api_pair("wait_for_confirm", func(_args, _kwargs):
 )
 
 dsl.write_dsl_script("""
+import time
 print("开始")
-sleep(1.0)
+time.sleep(1.0)
 print("1 秒后继续")
 wait_for_confirm()
 print("手动恢复后继续")
@@ -323,7 +363,7 @@ dsl.register_api_pair("move_player", func(args, _kwargs):
 
 ### 脚本能读取玩家输入或网络数据吗？
 
-可以。通过 `register_api()` 把 GDScript 侧的能力暴露给脚本；需要等待的异步场景通过挂起系统实现（`sleep` / `request_suspend_waiting`），而非 Python 的 `async/await`
+可以。通过 `register_api()` 把 GDScript 侧的能力暴露给脚本；需要等待的异步场景通过挂起系统实现（`time.sleep` / `request_suspend_waiting`），而非 Python 的 `async/await`
 
 ---
 

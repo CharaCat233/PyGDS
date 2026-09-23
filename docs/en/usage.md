@@ -309,6 +309,18 @@ print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
 > The target must be a plain variable name: `(obj.attr := 1)` and `(lst[0] := 1)` raise `cannot use assignment expressions with attribute` / `with subscript`; a bare `x := 1` statement
 > raises `SyntaxError` (write `(x := 1)` instead) and `del (x := 1)` raises `cannot delete named expression` — all matching Python.
 
+**Two restrictions inside comprehensions** (both `SyntaxError` at parse time, matching CPython):
+
+```python
+[i := 0 for i in range(3)]          # assignment expression cannot rebind
+                                    # comprehension iteration variable 'i'
+[x for x in (y := [1, 2])]          # assignment expression cannot be used in a
+                                    # comprehension iterable expression
+```
+
+- **No rebinding a comprehension iteration variable**: an assignment expression whose target matches a loop target of this or any enclosing comprehension is rejected. It applies to the element, keys/values, conditions and later clauses' iterables of list/set/dict/generator comprehensions. The protection does not cross `lambda` / `def` boundaries (`[lambda: (i := 0) for i in range(3)]` is legal).
+- **No assignment expression in a comprehension iterable expression**: name-independent — any assignment expression in a comprehension's `for ... in <here>` is rejected, including when nested inside a `lambda` or an inner comprehension.
+
 ### Operators
 
 | Category | Operators |
@@ -641,6 +653,47 @@ list(islice((x * x for x in count()), 5))   # [0, 1, 4, 9, 16] (with infinite se
 > **⚠️ Breaking Change (v0.3.0)**: Previously `(x for x in it)` was treated as a list comprehension and **eagerly evaluated to a list**; it is now a **lazy generator object**.
 > Old code that directly subscripts / `len()`s / calls list methods on the result will fail — convert with `list(g)` / `tuple(g)` first
 > generators are **one-shot iterators** (re-iterating does not restart).
+
+### `time` Module and sleep
+
+`sleep()` lives in the `time` module (matching CPython, which has no bare `sleep` either). It is a **cooperative suspension**: the host keeps running while suspended and resumes on timeout — the game is not blocked.
+
+```python
+import time
+from time import sleep
+
+print("start")
+time.sleep(1.0)          # suspends for 1.0 second, then resumes automatically
+print("after")           # output order matches CPython
+
+time.sleep(0)            # resumes immediately; the return value is None, as in CPython
+print(time.sleep(0) is None)     # True
+
+# Timestamps and monotonic clocks
+time.time()              # current Unix timestamp (seconds)
+time.time_ns()           # current Unix timestamp (nanoseconds)
+time.monotonic()         # monotonically increasing clock (seconds)
+time.perf_counter()      # performance counter (seconds)
+```
+
+`sleep()` works inside comprehensions, generator expressions and generator function bodies:
+
+```python
+[time.sleep(0) for x in range(3)]                  # [None, None, None]
+[x for x in [1, 2, 3] if time.sleep(0)]            # []
+list(time.sleep(0) for x in range(2))              # [None, None]
+[v for v in (time.sleep(0) for x in range(2))]     # [None, None]
+
+def counter():
+    for i in range(3):
+        time.sleep(0)
+        yield i
+print(list(counter()))                             # [0, 1, 2]
+print(sum(counter()))                              # 3
+```
+
+> **⚠️ Breaking Change (v0.5.0-alpha.1)**: a bare `sleep(n)` no longer exists — use `import time` then `time.sleep(n)`.
+> **⚠️ Known Issue (v0.5.0-alpha.1, to be fixed)**: consuming a generator containing `time.sleep()` inside an **expression** (`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `[x for x in g()]` and the like) re-creates the generator object on statement replay, so side effects in the generator body run more than once and values that depend on mutated state come out wrong; the number of real waits is too low as well. Consumption via a `for` statement is correct.
 
 ### Generator Functions (`yield`)
 

@@ -313,7 +313,7 @@ _step():
   5. 保存生成器状态, 换回调用方状态
 ```
 
-`yield` 挂起时设置 `_suspend_reason = YIELD`（与 `sleep` / `waiting` 区分），返回 `null` 使表达式层空值传播，语句重执行时首个 `yield` 注入 `send` 值（或 `throw` 注入的异常）。生成器体内调用 `sleep()` 被明确拦截报错，与挂起系统暂不共存
+`yield` 挂起时设置 `_suspend_reason = YIELD`（与 `sleep` / `waiting` 区分），返回 `null` 使表达式层空值传播，语句重执行时首个 `yield` 注入 `send` 值（或 `throw` 注入的异常）。生成器体内可调用 `time.sleep()`：挂起时生成器把已推进的进度保存在自身挂起状态中，宿主恢复后从挂起点继续；嵌套生成器内同理，内层迭代器的挂起会经 `for` 循环向上传播为语句重放
 
 ### Binary 运算分发详情
 
@@ -611,7 +611,7 @@ Exception
 
 ```txt
 DSL 层
-  sleep(n)                     — DSL 内置函数
+  time.sleep(n)                — time 模块成员 (协作式挂起)
 GDScript 层
   request_suspend_waiting()    — GDScript API 函数
      ↓
@@ -629,7 +629,7 @@ PyGDS 层
 ### SLEEPING 挂起流程
 
 ```txt
-DSL: sleep(1.5)
+DSL: time.sleep(1.5)
   → Interpreter._suspended = true, _is_waiting = false
   → PyGDS.request_suspend_sleeping(1.5)
      → state = SUSPENDED_SLEEPING

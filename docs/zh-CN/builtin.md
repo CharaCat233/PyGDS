@@ -423,16 +423,7 @@ name = input("Enter name: ")
 > [!WARNING]
 > 该方法始终抛出 `EOFError` 异常
 
-### `sleep(seconds)`
-
-模仿 Python `time.sleep()`，挂起当前 DSL 脚本执行指定的秒数，超时后自动恢复
-
-- `seconds`：挂起时长（秒），必须为非负数值
-
-```python
-sleep(1.5)  # 挂起 1.5 秒后自动恢复
-sleep(0.0)  # 立即恢复 (无延迟)
-```
+> **v0.5.0-alpha.1 变更**：`sleep()` 已迁移到 `time` 模块，见下文 [`time` 模块](#time-模块) 的 `time.sleep(seconds)`
 
 ### `getattr(obj, name, default=None)`
 
@@ -575,6 +566,8 @@ random.randint(1, 6)   # 1..6 内
 ```
 
 > **注意**：PyGDS 使用内置 xorshift32 PRNG，数值序列与 CPython 的 Mersenne Twister **不同**；但 `seed()` 可保证在 PyGDS 内部复现相同序列
+> **说明**：抽样函数的参数类型规则与 CPython 一致——`choice` / `shuffle` 取 `len(seq)` 后按整数下标索引/赋值，因此生成器报 `TypeError: object of type `generator` has no len()`、集合报 `not subscriptable`、`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`，字典按键取（键非 `0..n-1` 时 `KeyError`）；`sample` 仅接受列表/元组/字符串；`choices` 的 `weights` 只需可迭代，可传生成器
+
 
 ### `statistics` 模块
 
@@ -711,6 +704,47 @@ sorted(pairs, key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 
 > `itemgetter(k1, k2, ...)` / `attrgetter("a", "b")` 返回可调用对象：单参数返回单个值，多参数返回由各值组成的元组；`attrgetter` 的属性名支持 `a.b` 点号路径
 > `length_hint(obj)` 在对象无长度信息时返回 0（不抛异常）
+
+### `time` 模块
+
+时间相关功能，对标 CPython 的 `time` 模块；`sleep` 为**协作式挂起**（挂起期间宿主继续运行，不阻塞游戏）
+
+```python
+import time
+from time import sleep
+
+# 协作式睡眠: 挂起指定秒数后自动恢复; 返回值与 CPython 一致为 None
+time.sleep(1.5)
+time.sleep(0)
+
+# 时间戳与单调时钟
+time.time()             # 当前 Unix 时间戳 (秒, float)
+time.time_ns()          # 当前 Unix 时间戳 (纳秒, int)
+time.monotonic()        # 单调递增时钟 (秒, 不受系统时间调整影响)
+time.monotonic_ns()     # 单调递增时钟 (纳秒)
+time.perf_counter()     # 性能计数器 (秒)
+time.perf_counter_ns()  # 性能计数器 (纳秒)
+```
+
+`time.sleep()` 可用于推导式、生成器表达式与生成器函数体内（与 CPython 行为一致）：
+
+```python
+import time
+
+[time.sleep(0) for x in range(3)]                       # [None, None, None]
+[x for x in [1, 2, 3] if time.sleep(0)]                 # []
+list(time.sleep(0) for x in range(2))                   # [None, None]
+[v for v in (time.sleep(0) for x in range(2))]          # [None, None]
+
+def counter():
+    for i in range(3):
+        time.sleep(0)
+        yield i
+print(list(counter()))                                  # [0, 1, 2]
+```
+
+- 参数为非数值时报 `TypeError`，为负数时报 `ValueError`（错误信息与 CPython 一致）
+- 支持在生成器函数体内、推导式内以及嵌套生成器（生成器体内再迭代另一个生成器）内调用，行为与 CPython 一致
 
 ### `string` 模块（字符串常量）
 

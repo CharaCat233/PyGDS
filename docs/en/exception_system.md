@@ -84,9 +84,12 @@ func _define_exception(type_name: String, base_name: String = "Exception"):
     var init_desc = DSLMethodDescriptor.new("__init__", Callable(self, "_exception_init"))
     methods["__init__"] = init_desc
 
-    # 3. Inject __str__ (using _exception_str callback)
+    # 3. Inject __str__ / __repr__ (using the _exception_str / _exception_repr callbacks)
     var str_desc = DSLWrappedDescriptor.new("__str__", Callable(self, "_exception_str"))
     methods["__str__"] = str_desc
+
+    var repr_desc = DSLWrappedDescriptor.new("__repr__", Callable(self, "_exception_repr"))
+    methods["__repr__"] = repr_desc
 
     # 4. Create DSLClass and register in global scope
     var class_obj = DSLClass.new(type_name, base_class, methods, self)
@@ -190,9 +193,24 @@ When `str(e)` is called, the interpreter looks up `__str__` on the exception cla
 
 ```python
 e = TypeError("bad type")
-print(str(e))     # TypeError: bad type
+print(str(e))     # bad type
+print(repr(e))    # TypeError('bad type')
 print(e.args)     # ("bad type",)
 ```
+
+### Rules for `str()` / `repr()` / `args`
+
+Matching CPython, `_exception_init` derives the message from the argument count and types:
+
+| Argument count | `str(e)` | `repr(e)` | `e.args` |
+| :--- | :--- | :--- | :--- |
+| none | empty string | `TypeError()` | `()` |
+| one | the argument's `str` | `TypeError('bad type')` | `('bad type',)` |
+| several | tuple of arguments | `TypeError('a', 'b')` | `('a', 'b')` |
+
+`KeyError` is the exception: `str(e)` uses the **repr** of its argument (`KeyError("k")` shows `'k'`, `KeyError(1)` shows `1`, and `{}.popitem()` shows `'popitem(): dictionary is empty'`).
+
+Internal interpreter sites (dict lookup, `pop` / `popitem`, set `remove` / `pop`, and so on) carry errors through `last_error`; `KeyError` sites also record the original argument object in `last_error_args`, so that `raise_exception_from_last_error` keeps `str`, `repr` and `args` mutually consistent.
 
 ---
 

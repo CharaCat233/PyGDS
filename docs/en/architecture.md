@@ -313,7 +313,7 @@ _step():
   5. Save the generator state, swap the caller's state back
 ```
 
-A `yield` suspension sets `_suspend_reason = YIELD` (distinct from `sleep` / `waiting`) and returns `null` to propagate through the expression layer; on statement re-execution the first `yield` injects the `send` value (or a `throw`-injected exception). Calling `sleep()` inside a generator body is explicitly rejected — generator functions do not yet coexist with the suspend system.
+A `yield` suspension sets `_suspend_reason = YIELD` (distinct from `sleep` / `waiting`) and returns `null` to propagate through the expression layer; on statement re-execution the first `yield` injects the `send` value (or a `throw`-injected exception). Calling `time.sleep()` inside a generator body is supported: the generator keeps its progress in its own suspended state and resumes after the host wakes up. The same holds for nested generators: an inner iterator's suspension propagates through the `for` loop as a statement replay.
 
 ### Binary Operation Dispatch Details
 

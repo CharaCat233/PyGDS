@@ -126,7 +126,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Set Comprehensions | ✅ Full | `{x*x for x in iterable [if cond]}` |
 | Multiple `for` clauses | ✅ Full | `[x*y for x in a for y in b]`, each `for` may carry several `if`; list/dict/set comprehensions and generator expressions all support it, loop variables may be `k, v` tuple targets |
 | Literal `*` unpacking | ✅ Full | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}` (Python 3.5+) |
-| Assignment expressions (`:=`) | ✅ Full | `if (n := len(a)) > 5:`, `while chunk := read():`, binds to the enclosing scope inside comprehensions (Python 3.8+) |
+| Assignment expressions (`:=`) | ✅ Full | `if (n := len(a)) > 5:`, `while chunk := read():`, binds to the enclosing scope inside comprehensions (Python 3.8+); matching CPython, both "rebinding a comprehension iteration variable" and "appearing in a comprehension iterable expression" are rejected |
 | `slice` | ✅ Full | `slice(start, stop[, step])` object, reusable indexing `lst[slice(...)]` |
 | Augmented Assignment | ✅ Full | `+=`, `-=`, `*=`, `/=`, etc. |
 | Subscript Access | ✅ Full | `obj[key]` with `getitem`/`setitem` |
@@ -146,15 +146,15 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Dict merge | ✅ Full | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}` (Python 3.9+) |
 | `str` `%` formatting | ✅ Full | `"%s: %d" % (x, y)` (printf style) |
 | `str.format` | ✅ Full | `"{:.2f} {:>8}".format(x, s)`, with positional/keyword arguments and format specifiers |
-| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter) |
+| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator/time; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter) |
 | `set` | ✅ Full | Literal `{1, 2}`, constructor, set operations and methods |
 | `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |
 | `async`/`await` | ❌ Not Supported | — |
-| Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators, and closures persisting across `yield` |
+| Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators (including `time.sleep()` inside nested generators), and closures persisting across `yield` |
 | Decorators | ⚠️ Partial | `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) |
 | `with` Statement | ❌ Not Supported | — |
-| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator) |
+| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator/time) |
 
 > **⚠️ Breaking Change (v0.3.0)**: Generator expressions `(x for x in iterable)` have changed from "eagerly evaluated to a list" to "lazy generator object".
 > Code that directly subscripts/`len()`s or calls list methods on a generator expression result will fail — convert with `list(g)` / `tuple(g)` first
@@ -162,7 +162,46 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 >
 > **⚠️ Breaking Change (v0.4.0)**: `yield` is now a reserved keyword and can no longer be used as an identifier (variable/function name, etc.). Code that used `yield` as a name must rename it.
 >
-> **⚠️ Known Differences (v0.4.0)**: calling `sleep()` inside a generator body raises a clear error ("generator body cannot suspend") — generator functions do not yet coexist with the suspend system. `yield` resumption uses statement re-execution, so a side-effecting prefix before a yield re-evaluates on resume (e.g. in `f(a(), (yield 1))`, `a()` runs twice); the `x = yield from it` assignment form is not supported, and `send` / `throw` are not forwarded into a `yield from` sub-generator; calling `sleep()` inside a generator-expression element is still unreliable (a v0.3.0 leftover — avoid `sleep()` inside generators/comprehensions).
+> **⚠️ Breaking Change (v0.5.0-alpha.1)**: `sleep()` has moved into the `time` module — use `import time` then `time.sleep(n)`. A bare `sleep()` no longer exists (matching CPython, which has no built-in bare `sleep` either).
+>
+> Known behavioural differences and missing features (`yield` resumption re-evaluating prefixes, `send` / `throw` not forwarded, multiple assignment targets, user-class iteration protocol, and so on) have moved to the **Known Issues & Limitations** section below
+
+---
+
+## Known Issues & Limitations
+
+The following lists behaviours that currently diverge from CPython or are not implemented. **P0 = silent wrong values** (most dangerous, fix first), **P1 = a clear error or a missing feature**, **P2 = a edge difference**.
+
+### P0 — Silent Wrong Values
+
+| ID | Issue | Details |
+| :--- | :--- | :--- |
+| P0-1 | Consuming a `sleep`-containing generator in an expression runs side effects repeatedly | Consuming a generator that contains `time.sleep()` inside an **expression** (`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `tuple(g())` / `[x for x in g()]` — anything other than a `for` statement) re-creates the generator object when the statement is replayed after suspension, so side effects in the generator body (`append` / `print` / accumulation) run more than once. When the yielded values depend on the mutated state, **the values themselves come out wrong** (`n += 1; yield n` yields `[4, 5]` instead of `[1, 2]`), and the number of real waits is too low. Consumption via a `for` statement is correct, and generators without `sleep` are unaffected. Recorded in the `[Unreleased]` section of `CHANGELOG` as the next release's fix |
+
+### P1 — Clear Errors or Missing Features
+
+| ID | Issue | Details |
+| :--- | :--- | :--- |
+| P1-1 | Multiple assignment targets unsupported | `a[0], a[1] = 1, 2`, `o.x, o.y = 1, 2` and `d["x"], d["y"] = 1, 2` raise `Invalid assignment target` (tuple unpacking `a, b = 1, 2` and chained assignment `z = y = x = 5` work) |
+| P1-2 | User-class iteration protocol unsupported | A class defining `__iter__` / `__next__` cannot be iterated by `for` / `list()`; raises `TypeError: 'X' object is not iterable` |
+| P1-3 | User-class `__hash__` cannot be used as a dict key / set element | `d = {P(1): "a"}` raises `TypeError: unhashable type: 'P'` (calling `hash(p)` on its own works) |
+| P1-4 | User-class `__eq__` is not used by `in` | `x in [y]` does not go through the user's `__eq__` and raises `RuntimeError: Unknown binary operation error` (direct `x == y` works) |
+| P1-5 | `dict.keys()` / `values()` are not iterable and have no `len()` | `len(d.keys())` raises `TypeError`; `list(d.values())` returns `[]` (`items()` works) |
+| P1-6 | `range` is not a distinct type | Backed by a list internally: `repr(range(3))` gives `[0, 1, 2]`, `isinstance(range(3), range)` is `False`, and `range(5)[::-1]` yields a list. The type name and immutability are aligned |
+| P1-7 | `with` statement unsupported | — |
+| P1-8 | User-file `import` unsupported | Only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
+| P1-9 | `async` / `await` unsupported | Async scenarios are covered by the suspend system (`time.sleep` / `request_suspend_waiting`) |
+| P1-10 | `match` / `case` structural pattern matching unsupported | Raises a parse error |
+| P1-11 | `bytes` has no distinct type | `b"xy"` parses as `str`: `type(b"xy").__name__` is `str`, and `b"xy"[0]` gives `'x'` instead of `120` |
+| P1-13 | `yield` resumption re-evaluates the prefix expression | In `f(a(), (yield 1))`, `a()` runs twice on resume. A full fix needs expression-level continuations |
+| P1-14 | `send` / `throw` are not forwarded into a `yield from` sub-generator | A `try/except` inside the sub-generator does not catch an outer `throw`, and a `send` value never reaches the sub-generator (the `x = yield from it` assignment form now works) |
+
+### P2 — Edge Differences
+
+| ID | Issue | Details |
+| :--- | :--- | :--- |
+| P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
+| P2-2 | Some syntax-error messages differ | For example `async` raises `NameError` instead of `SyntaxError` |
 
 ---
 
@@ -222,7 +261,7 @@ Two types of suspension:
 
 | Type | Call Method | Use Case | Resume |
 | :--- | :--- | :--- | :--- |
-| SLEEPING | DSL calls `sleep(n)`, API functions call `request_suspend_sleeping()` | Known wait time | Timer fires, automatically calls `run()` |
+| SLEEPING | DSL calls `time.sleep(n)`, API functions call `request_suspend_sleeping()` | Known wait time | Timer fires, automatically calls `run()` |
 | WAITING | API functions call `request_suspend_waiting()` | Unknown wait time | External sets `state = RUNNING` then calls `run()` |
 
 The `run()` method returns a `State` enum value (`FINISHED` / `SUSPENDED_SLEEPING` / `SUSPENDED_WAITING` / `ERROR`), allowing external code to drive the execution flow.
@@ -240,8 +279,9 @@ dsl.register_api_pair("wait_for_confirm", func(_args, _kwargs):
 )
 
 dsl.write_dsl_script("""
+import time
 print("Start")
-sleep(1.0)
+time.sleep(1.0)
 print("Continues after 1 second")
 wait_for_confirm()
 print("Continues after manual resume")
@@ -323,7 +363,7 @@ In non-debug mode, output is not printed to the console in real time; it accumul
 
 ### Can scripts read player input or network data?
 
-Yes. Expose GDScript-side capabilities to scripts via `register_api()`; asynchronous scenarios that need to wait are implemented with the suspend system (`sleep` / `request_suspend_waiting`) rather than Python's `async/await`.
+Yes. Expose GDScript-side capabilities to scripts via `register_api()`; asynchronous scenarios that need to wait are implemented with the suspend system (`time.sleep` / `request_suspend_waiting`) rather than Python's `async/await`.
 
 ---
 

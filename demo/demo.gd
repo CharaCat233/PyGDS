@@ -2,7 +2,7 @@ extends Control
 ## PyGDS 挂起系统 Demo: 回合制战斗模拟器 [br]
 ##
 ## 演示三种挂起方式: [br]
-##   1. sleep(n)             — SLEEPING 挂起 (Timer 延时后自动恢复) [br]
+##   1. time.sleep(n)        — SLEEPING 挂起 (Timer 延时后自动恢复) [br]
 ##   2. wait_for_confirm()   — WAITING 挂起 (等待用户点击按钮) [br]
 ##   3. play_animation(...)  — WAITING 挂起 + on_resume 回调 [br]
 ##
@@ -93,15 +93,16 @@ def hp_bar(current, maximum):
 
 func _write_combat_script():
 	_dsl.write_dsl_script("""
+import time
 # ===== 回合制战斗脚本 =====
 print("战斗开始!")
 
 # 第一回合: 被动挂起延时
 print("--- 第一回合 ---")
 print("勇者准备攻击...")
-sleep(1.0)
+time.sleep(1.0)
 attack("勇者", "史莱姆", 30)
-sleep(1.0)
+time.sleep(1.0)
 print("史莱姆反击!")
 attack("史莱姆", "勇者", 15)
 
@@ -114,7 +115,7 @@ wait_for_confirm()
 print("")
 print("--- 第二回合 ---")
 print("勇者蓄力...")
-sleep(1.5)
+time.sleep(1.5)
 attack("勇者", "史莱姆", 60, True)
 print("史莱姆被击败了!")
 

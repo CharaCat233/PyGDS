@@ -314,7 +314,7 @@ except StopIteration as e:
     e.value            # 42
 ```
 
-> **Note**: Generator functions are also **one-shot iterators**; `next()` past the end raises `StopIteration` (carrying the `return` value), `next(g, default)` returns the default, and `for` / `list()` finish normally when exhausted. Calling `sleep()` inside a generator body raises a clear error — generator functions do not yet coexist with the suspend system. A lambda whose body directly contains `yield` (Python 3.12+) also produces a generator lambda.
+> **Note**: Generator functions are also **one-shot iterators**; `next()` past the end raises `StopIteration` (carrying the `return` value), `next(g, default)` returns the default, and `for` / `list()` finish normally when exhausted. `time.sleep()` works inside a generator body (cooperative suspension, matching CPython), and likewise inside nested generators — see the `time` module notes. A lambda whose body directly contains `yield` (Python 3.12+) also produces a generator lambda.
 
 #### Loop Clauses (CompClause)
 

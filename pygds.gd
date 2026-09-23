@@ -1615,6 +1615,9 @@ class DSLObject:
 	static var _next_object_id: int = 0
 	## 存储最后一个错误信息 (仅解释器读取)
 	var last_error: String = ""
+	## 与 last_error 对应的原始参数对象 (如 KeyError 的键) [br]
+	## 异常构造需要原始对象才能给出正确的 e.args 与 repr (键可能是非字符串)
+	var last_error_args: Array[DSLObject] = []
 	## 唯一对象标识 (用于 id() 内置函数)
 	var _object_id: int
 	## 类型指针 (对应 PyObject.ob_type), 统一方法查找入口
@@ -1958,6 +1961,32 @@ class DSLObject:
 		if obj._wrapped != null:
 			return obj._wrapped
 		return obj
+
+	## Python 风格的 repr (静态方法) [br]
+	## 与 CPython 的 repr() 一致: 字符串带引号、None/True/False 用字面量、容器递归 [br]
+	## 异常构造 (如 KeyError 的参数) 与异常 repr 需要它区分 str 与 repr [br]
+	## [param obj] 要表示的对象 [br]
+	## [returns] repr 字符串
+	static func _py_repr(obj: DSLObject) -> String:
+		var o = obj
+		if o == null:
+			return "None"
+		if o._wrapped != null and o.klass != null:
+			# 用户类实参 (DSLInstance 包装): 取内层值做 repr
+			o = o._wrapped
+		if o is DSLNone:
+			return "None"
+		if o is DSLBool:
+			return "True" if o.value else "False"
+		if o is DSLString:
+			return "'" + _py_str_repr(o.value) + "'"
+		if o is DSLInteger:
+			return str(o.value)
+		if o is DSLFloat:
+			return str(o.value)
+		if o is DSLList or o is DSLTuple or o is DSLDict or o is DSLSet or o is DSLFrozenSet:
+			return o._dsl_str()
+		return "<" + o._type_name() + " object>"
 
 	## Python 风格的字符串 repr 转义 (静态方法) [br]
 	## 转义换行/制表/回车/反斜杠/单引号, 用于容器 (list/tuple/dict/set) 的字符串表示 [br]
@@ -4034,6 +4063,9 @@ class DSLString extends DSLObject:
 class DSLList extends DSLObject:
 	## 列表元素数组
 	var items: Array[DSLObject]
+	## 是否为 range() 的产物 [br]
+	## range 在 PyGDS 中以列表承载, 但类型名与可变性须与 CPython 区分 (如 shuffle 拒绝)
+	var is_range: bool = false
 	## 迭代器索引, 用于 __next__ 支持
 	var iter_index: int = 0
 	## list 类型的魔法方法描述符缓存 [br]
@@ -4053,7 +4085,7 @@ class DSLList extends DSLObject:
 		items = p_items
 	
 	func _type_name() -> String:
-		return "list"
+		return "range" if is_range else "list"
 	
 	func magic_add(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
@@ -4195,6 +4227,10 @@ class DSLList extends DSLObject:
 		return DSLBool.new(false)
 	
 	func _dsl_setitem(index: DSLObject, value: DSLObject):
+		if is_range:
+			# range 对象不可变 (CPython: 'range' object does not support item assignment)
+			last_error = "TypeError: 'range' object does not support item assignment"
+			return
 		if index is DSLInteger:
 			var i = index.value
 			if i < 0:
@@ -4208,6 +4244,10 @@ class DSLList extends DSLObject:
 	
 	func _dsl_delitem(index: DSLObject):
 		var raw = DSLObject._unwrap_dsl(self)
+		if raw.is_range:
+			# range 对象不可变 (CPython: 'range' object doesn't support item deletion)
+			last_error = "TypeError: 'range' object doesn't support item deletion"
+			return
 		if index is DSLInteger:
 			var i = index.value
 			if i < 0:
@@ -4266,6 +4306,8 @@ class DSLList extends DSLObject:
 				return null
 			while it.has_next():
 				raw.items.append(it.next())
+				if it.suspended:
+					break
 		return DSLNone.new()
 	
 	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -4703,7 +4745,8 @@ class DSLDict extends DSLObject:
 			return null
 		if self_obj.dict.has(vkey):
 			return self_obj.dict[vkey]
-		self_obj.last_error = "KeyError: " + key._dsl_str()
+		self_obj.last_error = "KeyError: " + DSLObject._py_repr(key)
+		self_obj.last_error_args = [key] as Array[DSLObject]
 		return null
 	
 	func magic_setitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -4774,7 +4817,8 @@ class DSLDict extends DSLObject:
 			last_error = "TypeError: unhashable type"
 			return
 		if not dict.has(vkey):
-			last_error = "KeyError: " + key._dsl_str()
+			last_error = "KeyError: " + DSLObject._py_repr(key)
+			last_error_args = [key] as Array[DSLObject]
 			return
 		dict.erase(vkey)
 		
@@ -4822,7 +4866,8 @@ class DSLDict extends DSLObject:
 		if not raw.dict.has(vkey):
 			if args.size() >= 3:
 				return args[2]
-			last_error = "KeyError: " + key._dsl_str()
+			last_error = "KeyError: " + DSLObject._py_repr(key)
+			last_error_args = [key] as Array[DSLObject]
 			return null
 		var val = raw.dict[vkey]
 		raw.dict.erase(vkey)
@@ -4892,7 +4937,8 @@ class DSLDict extends DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if raw.dict.size() == 0:
-			raw.last_error = "KeyError: 'popitem(): dictionary is empty'"
+			raw.last_error = "KeyError: " + DSLObject._py_repr(DSLString.new("popitem(): dictionary is empty"))
+			raw.last_error_args = [DSLString.new("popitem(): dictionary is empty")] as Array[DSLObject]
 			return null
 		var keys = raw.dict.keys()
 		var raw_key = keys[keys.size() - 1]
@@ -5075,7 +5121,8 @@ class DSLSet extends DSLObject:
 			last_error = "TypeError: unhashable type: '%s'" % obj._type_name()
 			return null
 		if not items.has(k):
-			last_error = "KeyError: %s" % obj._dsl_str()
+			last_error = "KeyError: %s" % DSLObject._py_repr(obj)
+			last_error_args = [obj] as Array[DSLObject]
 			return null
 		items.erase(k)
 		return DSLNone.new()
@@ -5090,7 +5137,8 @@ class DSLSet extends DSLObject:
 	## 弹出任意元素, 空集合抛 KeyError
 	func _dsl_pop() -> DSLObject:
 		if items.is_empty():
-			last_error = "KeyError: 'pop from an empty set'"
+			last_error = "KeyError: " + DSLObject._py_repr(DSLString.new("pop from an empty set"))
+			last_error_args = [DSLString.new("pop from an empty set")] as Array[DSLObject]
 			return null
 		var k = items.keys()[0]
 		var v = items[k]
@@ -5366,7 +5414,8 @@ class DSLDefaultDict extends DSLObject:
 			if created != null:
 				inner.dict[vkey] = created
 				return created
-		last_error = "KeyError: %s" % index._dsl_str()
+		last_error = "KeyError: %s" % DSLObject._py_repr(index)
+		last_error_args = [index] as Array[DSLObject]
 		return null
 
 	## 设置键值 (委托底层字典)
@@ -6333,6 +6382,60 @@ class DSLModule extends DSLObject:
 ## DSLIterator 从未暴露, 无需继承自 DSLObject [br]
 ## 提供 has_next() / next() 接口的子类可 for 循环使用
 class DSLIterator:
+	## 最近一次推进是否因程序挂起 (sleep) 而中断 [br]
+	## 消费方应据此把挂起向上传播, 而不是把迭代器当作已耗尽
+	var suspended: bool = false
+	## 是否已耗尽
+	var done: bool = false
+	## 是否为一次性迭代器 (生成器): 语句重放时必须从产出日志重读 [br]
+	## 可重建迭代器 (列表/字符串/无限对象等) 重放时由消费方新建, 无需日志
+	var once: bool = false
+	## 已产出值的日志 (一次性迭代器维护; 供语句重放时重读)
+	var _log: Array = []
+	## 已消费位置 (一次性迭代器的读取游标)
+	var _read_pos: int = 0
+	## 当前消费窗口起点 (语句开始消费时的 _read_pos); 语句重放时游标回退到此 [br]
+	## 使消费方无需感知挂起: 重放时重新调用 has_next()/next() 会自动重读相同序列
+	var _win_start: int = -1
+	## 是否参与语句消费窗口 (yield from 的子迭代器设为 false, 由父生成器状态负责)
+	var windowed: bool = true
+	## 窗口所属语句标识 (见 Interpreter._current_stmt_key)
+	var _win_stmt: int = 0
+
+	## 把迭代器层面的挂起转为解释器层面的挂起 [br]
+	## 使消费方 (list/sum/推导式等原生循环) 无需感知挂起: [br]
+	## 它们按 has_next() 返回 false 退出, 而语句会整体重放并重新消费 [br]
+	## [param ip] 解释器引用
+	func _propagate_suspend(ip) -> void:
+		if ip == null:
+			return
+		ip._needs_replay = true
+		ip._suspended = true
+		ip._suspend_reason = Interpreter.SuspendReason.SLEEPING
+		ip._is_waiting = false
+
+	## 进入消费窗口: 语句切换时记录窗口起点并登记到解释器 (供语句重放时回退游标) [br]
+	## 仅一次性迭代器需要; 可重建迭代器重放时由消费方新建实例 [br]
+	## [param ip] 解释器引用
+	func _begin_use(ip) -> void:
+		if ip == null or not windowed:
+			return
+		if ip._current_generator != null:
+			# 生成器步内部: 重放由生成器自身的挂起状态负责, 不再叠加语句消费窗口
+			return
+		# 以「重放根语句」为窗口锚点: 嵌套用户函数内部的语句会改变 _current_stmt_key,
+		# 若按它锚定会在重放时把窗口起点重置到当前位置, 从而跳过此前已产出的元素
+		var key = ip._sleep_root_key if ip._sleep_root_key != 0 else ip._current_stmt_key
+		if _win_stmt == key:
+			return
+		_win_start = _read_pos
+		_win_stmt = key
+		if not ip._stmt_iterators.has(key):
+			ip._stmt_iterators[key] = []
+		var lst: Array = ip._stmt_iterators[key]
+		if not lst.has(self):
+			lst.append(self)
+
 	## 检查是否还有下一个元素 [br]
 	## [returns] 还有元素时返回 true
 	func has_next() -> bool:
@@ -6555,13 +6658,7 @@ class DSLGenerator extends DSLObject:
 class DSLGeneratorIterator extends DSLIterator:
 	## 所属生成器
 	var gen
-	## 是否已耗尽
-	var done: bool = false
-	## 预取的下一值 (使 has_next() 准确)
-	var _buffered: DSLObject = null
-	## 是否有预取值
-	var _has_buffer: bool = false
-	## 循环帧栈, 每帧对应一个子句 (键: clause/iterator/bound/saved)
+	## 循环帧栈, 每帧对应一个子句 (键: clause/iterator/phase/bound/saved/cond_idx)
 	var _frames: Array = []
 	## 是否已初始化首个子句的迭代器
 	var _started: bool = false
@@ -6570,55 +6667,90 @@ class DSLGeneratorIterator extends DSLIterator:
 	## [param g] 所属生成器
 	func _init(g):
 		gen = g
+		once = true
 
 	func has_next() -> bool:
-		if _has_buffer:
+		_begin_use(gen.interp)
+		if _read_pos < _log.size():
+			suspended = false
 			return true
 		if done:
 			return false
-		var v = _advance()
+		var v = _walk_next()
+		if suspended:
+			_propagate_suspend(gen.interp)
+			return false
 		if v == null:
 			done = true
 			return false
-		_buffered = v
-		_has_buffer = true
+		_log.append(v)
 		return true
 
 	func next() -> DSLObject:
-		if _has_buffer:
-			var r = _buffered
-			_buffered = null
-			_has_buffer = false
-			return r
+		_begin_use(gen.interp)
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			suspended = false
+			return buffered
 		if done:
 			return null
-		var v = _advance()
+		var v = _walk_next()
+		if suspended:
+			_propagate_suspend(gen.interp)
+			return null
 		if v == null:
 			done = true
+			return null
+		_log.append(v)
+		_read_pos += 1
+		return v
+
+	## 推进推导式一轮并返回产出的元素 (不移动读取游标; 挂起时置 suspended) [br]
+	## [returns] 产出的值; 耗尽返回 null; 挂起时返回 null 且 suspended 为 true
+	func _walk_next() -> DSLObject:
+		suspended = false
+		var v = _advance()
+		if suspended:
 			return null
 		return v
 
 	## 为指定子句创建迭代器并压入帧栈 [br]
-	## 迭代对象在闭包环境中惰性求值 [br]
+	## 迭代对象在闭包环境中惰性求值; 求值过程若挂起 (sleep), 置 suspended 并返回 false [br]
 	## [param idx] 子句下标 [br]
 	## [returns] 成功返回 true
 	func _push_frame(idx: int) -> bool:
 		var interp = gen.interp
 		var clause = gen.clauses[idx]
+		var it = null
 		var prev_env = interp.environment
 		interp.environment = gen.closure
 		var iterable_val = interp.evaluate(clause.iterable)
 		interp.environment = prev_env
+		if interp._suspended:
+			suspended = true
+			return false
 		if iterable_val == null:
 			return false
-		var it = iterable_val._dsl_iter()
-		if it == null:
-			interp.raise_exception_from_last_error(iterable_val.last_error if iterable_val.last_error != "" else "TypeError: object is not iterable")
-			return false
-		_frames.append({"clause": clause, "iterator": it, "bound": false, "saved": []})
+		# 挂起可能发生在内层消费 (如元素为生成器函数调用): 重新求值时复用已保存的迭代器
+		var frame_state = null
+		for fs in _frames:
+			if fs.get("pending_idx", -1) == idx:
+				frame_state = fs
+				break
+		if frame_state != null and frame_state.get("iter", null) != null:
+			it = frame_state.iter
+		else:
+			it = iterable_val._dsl_iter()
+			if it == null:
+				interp.raise_exception_from_last_error(iterable_val.last_error if iterable_val.last_error != "" else "TypeError: object is not iterable")
+				return false
+		_frames.append({"clause": clause, "iterator": it, "bound": false, "saved": [], "phase": "start", "cond_idx": 0})
 		return true
 
-	## 推进嵌套循环并返回下一个满足条件的元素, 耗尽或出错时返回 null
+	## 推进嵌套循环并返回下一个满足条件的元素, 耗尽或出错时返回 null [br]
+	## 支持挂起恢复: 子句迭代器/循环变量绑定/条件进度都保存在帧栈中, [br]
+	## 挂起后重新进入时从上次阶段继续 (不重复绑定, 也不跳过元素)
 	func _advance() -> DSLObject:
 		var interp = gen.interp
 		if not _started:
@@ -6629,47 +6761,102 @@ class DSLGeneratorIterator extends DSLIterator:
 			if interp.report.has_error:
 				return null
 			var top = _frames.back()
-			# 进入帧: 先恢复上一轮迭代的循环变量绑定
-			if top["bound"]:
-				interp._restore_comp_bindings(gen.closure, top["saved"])
-				top["bound"] = false
-				top["saved"] = []
-			var it = top["iterator"]
-			if not it.has_next():
-				_frames.pop_back()
+			# 阶段 init: 取下一个元素并绑定循环变量
+			if top["phase"] == "init":
+				var it0 = top["iterator"]
+				if not it0.has_next():
+					if it0.suspended:
+						suspended = true
+						return null
+					it0.suspended = false
+					_frames.pop_back()
+					continue
+				var item0 = it0.next()
+				if interp._suspended:
+					suspended = true
+					return null
+				var saved0 = interp._bind_comp_targets(top["clause"].targets, item0, gen.closure)
+				if interp._suspended:
+					suspended = true
+					return null
+				if saved0 == null:
+					return null
+				top["saved"] = saved0
+				top["bound"] = true
+				top["cond_idx"] = 0
+				top["phase"] = "cond"
 				continue
-			var item = it.next()
-			var saved = interp._bind_comp_targets(top["clause"].targets, item, gen.closure)
-			if saved == null:
-				return null
-			top["saved"] = saved
-			top["bound"] = true
-			var cond_ok = true
-			for cond in top["clause"].conditions:
-				var prev_env = interp.environment
+			# 阶段 emit: 上一轮元素求值被挂起, 本次重新求值同一元素
+			if top["phase"] == "emit":
+				top["phase"] = "cond"
+				continue
+			# 阶段 cond: 依次求值当前帧的条件
+			if top["phase"] == "cond":
+				var conds = top["clause"].conditions
+				var cond_ok = true
+				while top["cond_idx"] < conds.size():
+					var prev_env = interp.environment
+					interp.environment = gen.closure
+					var cond_result = interp.evaluate(conds[top["cond_idx"]])
+					interp.environment = prev_env
+					if interp._suspended:
+						suspended = true
+						return null
+					if cond_result == null:
+						return null
+					if not cond_result._dsl_bool():
+						cond_ok = false
+						break
+					top["cond_idx"] = int(top["cond_idx"]) + 1
+				if not cond_ok:
+					_finish_frame(top)
+					continue
+				# 条件通过: 尚有未展开的子句则进入下一层 (子帧耗尽后回到本帧的 sub 阶段)
+				if _frames.size() < gen.clauses.size():
+					top["phase"] = "sub"
+					var sub_idx = _frames.size()
+					if not _push_frame(sub_idx):
+						if suspended:
+							return null
+						return null
+					continue
+				# 最内层: 求值元素表达式并产出
+				# 阶段保持 emit 直到求值成功, 使挂起重入时对同一元素重新求值 (绑定未变)
+				top["phase"] = "emit"
+				var prev_env_e = interp.environment
 				interp.environment = gen.closure
-				var cond_result = interp.evaluate(cond)
-				interp.environment = prev_env
-				if cond_result == null:
+				var element = interp.evaluate(gen.elt_expr)
+				interp.environment = prev_env_e
+				if interp._suspended:
+					suspended = true
 					return null
-				if not cond_result._dsl_bool():
-					cond_ok = false
-					break
-			if not cond_ok:
-				continue
-			# 尚有未展开的子句: 进入下一层
-			if _frames.size() < gen.clauses.size():
-				if not _push_frame(_frames.size()):
+				if element == null:
 					return null
+				top["phase"] = "finish"
+				return element
+			# 阶段 sub: 子帧已耗尽并弹出, 本帧继续取下一个元素
+			if top["phase"] == "sub":
+				_finish_frame(top)
 				continue
-			var prev_env = interp.environment
-			interp.environment = gen.closure
-			var element = interp.evaluate(gen.elt_expr)
-			interp.environment = prev_env
-			if element == null:
-				return null
-			return element
+			# 阶段 finish: 上一轮元素已产出, 本帧继续取下一个元素
+			if top["phase"] == "finish":
+				_finish_frame(top)
+				continue
+			# 未知阶段 (不应发生): 复位到 init 以免死循环
+			top["phase"] = "init"
 		return null
+
+	## 结束当前帧的本次迭代: 恢复循环变量绑定并回到 init 阶段 [br]
+	## [param top] 帧栈顶帧
+	func _finish_frame(top) -> void:
+		var interp = gen.interp
+		if top["bound"]:
+			interp._restore_comp_bindings(gen.closure, top["saved"])
+			top["bound"] = false
+			top["saved"] = []
+		top["cond_idx"] = 0
+		top["phase"] = "init"
+
 
 ## 生成器函数迭代器: 每次 next() 驱动生成器函数体推进一个 yield [br]
 ## 预取缓冲保证 has_next() 准确; 一次性迭代语义 (与 Python 生成器一致) [br]
@@ -6677,49 +6864,62 @@ class DSLGeneratorIterator extends DSLIterator:
 class DSLFunctionGeneratorIterator extends DSLIterator:
 	## 所属生成器
 	var gen: DSLFunctionGenerator = null
-	## 是否已耗尽
-	var done: bool = false
-	## 预取的下一值 (使 has_next() 准确)
-	var _buffered: DSLObject = null
-	## 是否有预取值
-	var _has_buffer: bool = false
 
 	## 构造生成器迭代器 [br]
 	## [param g] 所属生成器
 	func _init(g: DSLFunctionGenerator):
 		gen = g
+		once = true
 
 	func has_next() -> bool:
-		if _has_buffer:
+		_begin_use(gen.interp)
+		if _read_pos < _log.size():
 			return true
 		if done:
 			return false
-		var res = gen._step()
-		if res == 1:
-			_buffered = gen._yielded_value
-			_has_buffer = true
-			return true
-		done = true
-		return false
+		var v = _produce()
+		if suspended:
+			_propagate_suspend(gen.interp)
+			return false
+		return v != null
 
 	func next() -> DSLObject:
-		if _has_buffer:
-			var r = _buffered
-			_buffered = null
-			_has_buffer = false
-			return r
+		_begin_use(gen.interp)
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			return buffered
+		if done:
+			return null
+		var v = _produce()
+		if suspended:
+			_propagate_suspend(gen.interp)
+			return null
+		if v == null:
+			return null
+		_read_pos += 1
+		return v
+
+	## 推进一步生成器: 产出值记入日志; 挂起时置 suspended 由消费方传播 [br]
+	## [returns] 产出的值, 结束/挂起/出错时返回 null
+	func _produce() -> DSLObject:
+		suspended = false
 		if done:
 			return null
 		var res = gen._step()
+		if gen._stepped_suspended:
+			gen._stepped_suspended = false
+			suspended = true
+			return null
 		if res == 1:
+			_log.append(gen._yielded_value)
 			return gen._yielded_value
 		done = true
 		return null
 
-	## 使预取缓冲失效 (send/throw/close 直接驱动生成器后调用)
+	## 使读取游标与缓冲失效 (send/throw/close 直接驱动生成器后调用)
 	func _invalidate() -> void:
-		_buffered = null
-		_has_buffer = false
+		pass
 
 ## 生成器函数对象, 对应 def 中含 yield 的函数调用结果 (Python generator) [br]
 ## 调用时不执行函数体, 立即返回本对象; 持有函数声明/闭包与参数绑定后的局部环境, [br]
@@ -6766,6 +6966,8 @@ class DSLFunctionGenerator extends DSLObject:
 	var _iterator: DSLFunctionGeneratorIterator = null
 	## 生成器名称 (repr 用)
 	var _name: String = "<genexpr>"
+	## 最近一次 _step 是否因程序挂起 (sleep) 中断 (由迭代器读取并转为 suspended)
+	var _stepped_suspended: bool = false
 
 	## 构造生成器对象 [br]
 	## [param p_interp] 解释器引用 [br]
@@ -6825,9 +7027,6 @@ class DSLFunctionGenerator extends DSLObject:
 		if _finished:
 			return 2
 		var ip = interp
-		var pcs = []
-		for fr in exec_stack:
-			pcs.append(fr.get("pc", -1))
 		# 保存解释器当前状态 (调用方)
 		var caller_env = ip.environment
 		var caller_exec = ip._exec_stack
@@ -6875,10 +7074,9 @@ class DSLFunctionGenerator extends DSLObject:
 			step_result = 3
 		elif res == Interpreter.ExecResult.SUSPENDED:
 			if ip._suspend_reason != Interpreter.SuspendReason.YIELD:
-				# 生成器体内调用 sleep/挂起 → v0.4.0 明确报错
-				_finished = true
-				ip.raise_exception("RuntimeError", "generator body cannot suspend: sleep() is not supported inside a generator")
-				step_result = 3
+				# 生成器体内发起程序挂起 (time.sleep): 暂停本步, 交由消费方传播
+				_stepped_suspended = true
+				step_result = 4
 			else:
 				_suspended = true
 				step_result = 1
@@ -6895,9 +7093,15 @@ class DSLFunctionGenerator extends DSLObject:
 		ip._call_stack = caller_call
 		ip._current_class = caller_class
 		ip._current_self = caller_self
-		ip._suspended = caller_suspended
-		ip._is_waiting = caller_waiting
-		ip._suspend_reason = caller_reason
+		if step_result == 4:
+			# 生成器体内发起程序挂起: 保留挂起标志与原因, 让上层语句/消费方继续传播
+			ip._suspended = true
+			ip._is_waiting = caller_waiting
+			ip._suspend_reason = caller_reason
+		else:
+			ip._suspended = caller_suspended
+			ip._is_waiting = caller_waiting
+			ip._suspend_reason = caller_reason
 		ip._expr_evaluated = caller_expr_eval
 		ip._current_generator = caller_gen
 		return step_result
@@ -8170,159 +8374,203 @@ class Parser:
 					_walk_yield_expr(t, scope, "")
 		return found
 
-	## 递归遍历表达式, 检测 yield 用法 [br]
+	## 递归遍历表达式, 检测 yield 用法 (对标 CPython 3.12) [br]
 	## [param expr] 表达式节点 [br]
-	## [param scope] 0=模块/类体, 1=函数体, 2=lambda 体, -1=推导式内部 [br]
-	## [param comp_err] 非空时表示处于推导式内, 遇到 yield 报该错误 [br]
-	## [returns] 本作用域内是否含直接 yield (嵌套函数/lambda/推导式的 yield 不计)
-	func _walk_yield_expr(expr, scope: int, comp_err: String) -> bool:
+	## [param scope] 0=模块/类体, 1=函数体, 2=lambda 体 [br]
+	## [param comp_ctx] 推导式上下文: ""=不在推导式内, "outer"=推导式最外层可迭代 (在函数作用域求值), [br]
+	## 其余为推导式作用域 (list/set/dict/generator), 其中的 yield 一律报错 [br]
+	## [returns] 本作用域内是否含直接 yield (嵌套函数/lambda 的 yield 不计)
+	func _walk_yield_expr(expr, scope: int, comp_ctx: String) -> bool:
 		if expr == null:
 			return false
 		if expr is YieldExpr:
-			if comp_err != "":
-				report.error(comp_err)
+			if comp_ctx != "":
+				# 裸 yield 是语法错误, 括号 yield 在推导式作用域内报 "inside ... comprehension"
+				if not expr.has_meta("parenthesized"):
+					report.error("SyntaxError: invalid syntax")
+					return false
+				if comp_ctx == "outer":
+					if expr.value != null:
+						_walk_yield_expr(expr.value, scope, comp_ctx)
+					if expr.from_expr != null:
+						_walk_yield_expr(expr.from_expr, scope, comp_ctx)
+					return true
+				report.error("SyntaxError: 'yield' inside " + _comp_kind_phrase(comp_ctx))
 				return false
 			if scope == 0:
 				report.error("SyntaxError: 'yield' outside function")
 				return false
 			if expr.value != null:
-				_walk_yield_expr(expr.value, scope, comp_err)
+				_walk_yield_expr(expr.value, scope, comp_ctx)
 			if expr.from_expr != null:
-				_walk_yield_expr(expr.from_expr, scope, comp_err)
+				_walk_yield_expr(expr.from_expr, scope, comp_ctx)
 			return true
 		if expr is LambdaExpr:
 			if expr.body != null and _walk_yield_expr(expr.body, 2, ""):
 				expr.is_generator = true
 			for p in expr.params:
 				if p.default_value != null:
-					_walk_yield_expr(p.default_value, scope, comp_err)
+					_walk_yield_expr(p.default_value, scope, comp_ctx)
 			return false
-		if expr is ListComp or expr is SetComp or expr is GenComp:
-			_walk_comp_yield(expr, "SyntaxError: invalid syntax")
-			return false
-		if expr is DictComp:
-			_walk_comp_yield(expr, "SyntaxError: 'yield' inside dict comprehension")
-			return false
+		if expr is ListComp or expr is SetComp or expr is GenComp or expr is DictComp:
+			return _walk_comp_yield(expr, scope, comp_ctx)
 		if expr is Assign:
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is WalrusExpr:
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is AugAssign:
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is AugAssignAttr:
-			if _walk_yield_expr(expr.object, scope, comp_err):
+			if _walk_yield_expr(expr.object, scope, comp_ctx):
 				return true
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is AugAssignItem:
-			if _walk_yield_expr(expr.object, scope, comp_err):
+			if _walk_yield_expr(expr.object, scope, comp_ctx):
 				return true
-			if _walk_yield_expr(expr.index, scope, comp_err):
+			if _walk_yield_expr(expr.index, scope, comp_ctx):
 				return true
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is GetItem:
-			if _walk_yield_expr(expr.object, scope, comp_err):
+			if _walk_yield_expr(expr.object, scope, comp_ctx):
 				return true
-			return _walk_yield_expr(expr.index, scope, comp_err)
+			return _walk_yield_expr(expr.index, scope, comp_ctx)
 		if expr is SetItem:
-			if _walk_yield_expr(expr.object, scope, comp_err):
+			if _walk_yield_expr(expr.object, scope, comp_ctx):
 				return true
-			if _walk_yield_expr(expr.index, scope, comp_err):
+			if _walk_yield_expr(expr.index, scope, comp_ctx):
 				return true
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is SliceExpr:
-			if expr.start != null and _walk_yield_expr(expr.start, scope, comp_err):
+			if expr.start != null and _walk_yield_expr(expr.start, scope, comp_ctx):
 				return true
-			if expr.stop != null and _walk_yield_expr(expr.stop, scope, comp_err):
+			if expr.stop != null and _walk_yield_expr(expr.stop, scope, comp_ctx):
 				return true
-			if expr.step != null and _walk_yield_expr(expr.step, scope, comp_err):
+			if expr.step != null and _walk_yield_expr(expr.step, scope, comp_ctx):
 				return true
 			return false
 		if expr is CompareChainExpr:
-			if _walk_yield_expr(expr.left, scope, comp_err):
+			if _walk_yield_expr(expr.left, scope, comp_ctx):
 				return true
 			for cmp in expr.comparators:
-				if _walk_yield_expr(cmp, scope, comp_err):
+				if _walk_yield_expr(cmp, scope, comp_ctx):
 					return true
 			return false
 		if expr is Binary:
-			if _walk_yield_expr(expr.left, scope, comp_err):
+			if _walk_yield_expr(expr.left, scope, comp_ctx):
 				return true
-			return _walk_yield_expr(expr.right, scope, comp_err)
+			return _walk_yield_expr(expr.right, scope, comp_ctx)
 		if expr is Unary:
-			return _walk_yield_expr(expr.right, scope, comp_err)
+			return _walk_yield_expr(expr.right, scope, comp_ctx)
 		if expr is GetAttr:
-			return _walk_yield_expr(expr.object, scope, comp_err)
+			return _walk_yield_expr(expr.object, scope, comp_ctx)
 		if expr is SetAttr:
-			if _walk_yield_expr(expr.object, scope, comp_err):
+			if _walk_yield_expr(expr.object, scope, comp_ctx):
 				return true
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is Call:
-			if _walk_yield_expr(expr.callee_expr, scope, comp_err):
+			if _walk_yield_expr(expr.callee_expr, scope, comp_ctx):
 				return true
 			for a in expr.arguments:
-				if _walk_yield_expr(a, scope, comp_err):
+				if _walk_yield_expr(a, scope, comp_ctx):
 					return true
 			for sa in expr.star_args:
-				if _walk_yield_expr(sa, scope, comp_err):
+				if _walk_yield_expr(sa, scope, comp_ctx):
 					return true
 			for skw in expr.star_kwargs:
-				if _walk_yield_expr(skw, scope, comp_err):
+				if _walk_yield_expr(skw, scope, comp_ctx):
 					return true
 			for kw in expr.keyword_args:
-				if _walk_yield_expr(kw.value, scope, comp_err):
+				if _walk_yield_expr(kw.value, scope, comp_ctx):
 					return true
 			return false
 		if expr is ListLiteral or expr is TupleLiteral or expr is SetLiteral:
 			for e in expr.elements:
-				if _walk_yield_expr(e, scope, comp_err):
+				if _walk_yield_expr(e, scope, comp_ctx):
 					return true
 			return false
 		if expr is DictLiteral:
 			for k in expr.keys:
-				if _walk_yield_expr(k, scope, comp_err):
+				if _walk_yield_expr(k, scope, comp_ctx):
 					return true
 			for v in expr.values:
-				if _walk_yield_expr(v, scope, comp_err):
+				if _walk_yield_expr(v, scope, comp_ctx):
 					return true
 			return false
 		if expr is StarredExpr:
-			return _walk_yield_expr(expr.value, scope, comp_err)
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is UnpackAssign:
-			if _walk_yield_expr(expr.value, scope, comp_err):
+			if _walk_yield_expr(expr.value, scope, comp_ctx):
 				return true
 			return false
 		if expr is ConditionalExpr:
-			if _walk_yield_expr(expr.condition, scope, comp_err):
+			if _walk_yield_expr(expr.condition, scope, comp_ctx):
 				return true
-			if _walk_yield_expr(expr.true_expr, scope, comp_err):
+			if _walk_yield_expr(expr.true_expr, scope, comp_ctx):
 				return true
-			return _walk_yield_expr(expr.false_expr, scope, comp_err)
+			return _walk_yield_expr(expr.false_expr, scope, comp_ctx)
 		if expr is FStringExpr:
 			for part in expr.parts:
-				if part.expr != null and _walk_yield_expr(part.expr, scope, comp_err):
+				if part.expr != null and _walk_yield_expr(part.expr, scope, comp_ctx):
 					return true
 			return false
 		if expr is SuperExpr:
 			for a in expr.arguments:
-				if _walk_yield_expr(a, scope, comp_err):
+				if _walk_yield_expr(a, scope, comp_ctx):
 					return true
 			return false
 		return false
 
 	## 遍历推导式的子表达式, 遇到直接 yield 时按 [param err_msg] 报错 [br]
-	## 嵌套 lambda 内的 yield 属于 lambda 自身, 不计入推导式 [br]
-	## [param expr] 推导式节点 [br]
-	## [param err_msg] 报错文案 (dict 推导式与其余推导式不同)
-	func _walk_comp_yield(expr, err_msg: String) -> void:
-		if expr is DictComp:
-			_walk_yield_expr(expr.key_expr, -1, err_msg)
-			_walk_yield_expr(expr.value_expr, -1, err_msg)
-		else:
-			_walk_yield_expr(expr.elt_expr, -1, err_msg)
-		for clause in expr.clauses:
-			_walk_yield_expr(clause.iterable, -1, err_msg)
+	## 将推导式上下文标识转为报错文案 [br]
+	## [param ctx] list/set/dict/generator [br]
+	## [returns] 对应的英文短语 (CPython 报错文案用)
+	func _comp_kind_phrase(ctx: String) -> String:
+		match ctx:
+			"list":
+				return "list comprehension"
+			"set":
+				return "set comprehension"
+			"dict":
+				return "dict comprehension"
+			"generator":
+				return "generator expression"
+		return "comprehension"
+
+	## 遍历推导式的子表达式, 按 CPython 规则处理其中的 yield [br]
+	## 最外层子句的可迭代表达式在外层作用域求值 (其中的 yield 属于外层生成器函数, 合法) [br]
+	## 其余子句可迭代/元素/键值/条件都在推导式自身作用域求值 (其中的 yield 报错) [br]
+	## 嵌套 lambda 体内的 yield 属于 lambda 自身, 不计入推导式 [br]
+	## [param comp] 推导式节点 [br]
+	## [param scope] 外层作用域 [br]
+	## [param enclosing_ctx] 外层推导式上下文 [br]
+	## [returns] 最外层可迭代内是否含属于外层函数的 yield
+	func _walk_comp_yield(comp, scope: int, enclosing_ctx: String) -> bool:
+		var kind = "generator"
+		if comp is ListComp:
+			kind = "list"
+		elif comp is SetComp:
+			kind = "set"
+		elif comp is DictComp:
+			kind = "dict"
+		var found = false
+		# 最外层子句的可迭代表达式在 "外层作用域" 求值 (外层非推导式时 yield 合法)
+		if comp.clauses.size() > 0:
+			var outer_ctx = enclosing_ctx if enclosing_ctx != "" else "outer"
+			if _walk_yield_expr(comp.clauses[0].iterable, scope, outer_ctx):
+				found = true
+		# 其余子句可迭代表达式在推导式自身作用域求值
+		for i in range(1, comp.clauses.size()):
+			_walk_yield_expr(comp.clauses[i].iterable, scope, kind)
+		# 条件与元素/键值同样在推导式自身作用域求值
+		for clause in comp.clauses:
 			for cond in clause.conditions:
-				_walk_yield_expr(cond, -1, err_msg)
+				_walk_yield_expr(cond, scope, kind)
+		if comp is DictComp:
+			_walk_yield_expr(comp.key_expr, scope, kind)
+			_walk_yield_expr(comp.value_expr, scope, kind)
+		else:
+			_walk_yield_expr(comp.elt_expr, scope, kind)
+		return found
 
 	## 解析 super(...) 调用 [br]
 	## 支持零参数 super() 与双参数 super(Class, obj) [br]
@@ -8553,7 +8801,267 @@ class Parser:
 		var clauses = _parse_comp_clauses(false)
 		if clauses == null:
 			return null
-		return GenComp.new(first, clauses)
+		var gen_comp = GenComp.new(first, clauses)
+		if not _check_comp_walrus(gen_comp):
+			return null
+		return gen_comp
+
+	## 校验推导式的赋值表达式规则 (对标 CPython) [br]
+	## 规则 1: 赋值表达式不得重绑定本推导式或其外层推导式的循环变量 [br]
+	## 规则 2: 赋值表达式不得出现在推导式的可迭代表达式内 [br]
+	## [param node] 推导式节点 (ListComp/SetComp/DictComp/GenComp) [br]
+	## [param outer_protected] 外层推导式的循环变量名 (嵌套推导式继承) [br]
+	## [returns] 校验通过返回 true, 违反规则时报错并返回 false
+	func _check_comp_walrus(node, outer_protected: Array = []) -> bool:
+		var protected: Array = outer_protected.duplicate()
+		for clause in node.clauses:
+			for t in clause.targets:
+				protected.append(t)
+		# 规则 2: 可迭代表达式内禁止任何赋值表达式 (含 lambda 与嵌套推导式内部)
+		for clause in node.clauses:
+			if _has_walrus_anywhere(clause.iterable):
+				report.error("SyntaxError: assignment expression cannot be used in a comprehension iterable expression")
+				return false
+		# 规则 1: 元素/键值/条件内不得重绑定循环变量
+		if node is DictComp:
+			if not _check_walrus_rebind(node.key_expr, protected):
+				return false
+			if not _check_walrus_rebind(node.value_expr, protected):
+				return false
+		else:
+			if not _check_walrus_rebind(node.elt_expr, protected):
+				return false
+		for clause in node.clauses:
+			for cond in clause.conditions:
+				if not _check_walrus_rebind(cond, protected):
+					return false
+		return true
+
+	## 检查表达式内是否存在重绑定受保护循环变量的赋值表达式 (规则 1) [br]
+	## 不进入 lambda 体 (其作用域独立); 进入嵌套推导式时把其循环变量一并纳入保护 [br]
+	## [param expr] 待检查表达式 [br]
+	## [param protected] 受保护的循环变量名数组 [br]
+	## [returns] 通过返回 true, 违反时返回 false
+	func _check_walrus_rebind(expr, protected: Array) -> bool:
+		if expr == null:
+			return true
+		if expr is WalrusExpr:
+			if protected.has(expr.name):
+				report.error("SyntaxError: assignment expression cannot rebind comprehension iteration variable '%s'" % expr.name)
+				return false
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is LambdaExpr:
+			return true
+		if expr is ListComp or expr is SetComp or expr is GenComp or expr is DictComp:
+			return _check_comp_walrus(expr, protected)
+		if expr is Assign:
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is AugAssign:
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is AugAssignAttr:
+			if not _check_walrus_rebind(expr.object, protected):
+				return false
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is AugAssignItem:
+			if not _check_walrus_rebind(expr.object, protected):
+				return false
+			if not _check_walrus_rebind(expr.index, protected):
+				return false
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is GetItem:
+			if not _check_walrus_rebind(expr.object, protected):
+				return false
+			return _check_walrus_rebind(expr.index, protected)
+		if expr is SetItem:
+			if not _check_walrus_rebind(expr.object, protected):
+				return false
+			if not _check_walrus_rebind(expr.index, protected):
+				return false
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is SliceExpr:
+			if not _check_walrus_rebind(expr.start, protected):
+				return false
+			if not _check_walrus_rebind(expr.stop, protected):
+				return false
+			return _check_walrus_rebind(expr.step, protected)
+		if expr is CompareChainExpr:
+			if not _check_walrus_rebind(expr.left, protected):
+				return false
+			for cmp in expr.comparators:
+				if not _check_walrus_rebind(cmp, protected):
+					return false
+			return true
+		if expr is Binary:
+			if not _check_walrus_rebind(expr.left, protected):
+				return false
+			return _check_walrus_rebind(expr.right, protected)
+		if expr is Unary:
+			return _check_walrus_rebind(expr.right, protected)
+		if expr is GetAttr:
+			return _check_walrus_rebind(expr.object, protected)
+		if expr is SetAttr:
+			if not _check_walrus_rebind(expr.object, protected):
+				return false
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is Call:
+			if not _check_walrus_rebind(expr.callee_expr, protected):
+				return false
+			for a in expr.arguments:
+				if not _check_walrus_rebind(a, protected):
+					return false
+			for sa in expr.star_args:
+				if not _check_walrus_rebind(sa, protected):
+					return false
+			for skw in expr.star_kwargs:
+				if not _check_walrus_rebind(skw, protected):
+					return false
+			for kw in expr.keyword_args:
+				if not _check_walrus_rebind(kw.value, protected):
+					return false
+			return true
+		if expr is ListLiteral or expr is TupleLiteral or expr is SetLiteral:
+			for e in expr.elements:
+				if not _check_walrus_rebind(e, protected):
+					return false
+			return true
+		if expr is DictLiteral:
+			for k in expr.keys:
+				if not _check_walrus_rebind(k, protected):
+					return false
+			for v in expr.values:
+				if not _check_walrus_rebind(v, protected):
+					return false
+			return true
+		if expr is StarredExpr:
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is UnpackAssign:
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is ConditionalExpr:
+			if not _check_walrus_rebind(expr.condition, protected):
+				return false
+			if not _check_walrus_rebind(expr.true_expr, protected):
+				return false
+			return _check_walrus_rebind(expr.false_expr, protected)
+		if expr is FStringExpr:
+			for part in expr.parts:
+				if part.expr != null and not _check_walrus_rebind(part.expr, protected):
+					return false
+			return true
+		if expr is SuperExpr:
+			for a in expr.arguments:
+				if not _check_walrus_rebind(a, protected):
+					return false
+			return true
+		return true
+
+	## 检查表达式子树内是否存在赋值表达式 (规则 2 用) [br]
+	## 不做作用域区分: lambda 体与嵌套推导式内部同样计入 [br]
+	## [param expr] 待检查表达式 [br]
+	## [returns] 存在赋值表达式时返回 true
+	func _has_walrus_anywhere(expr) -> bool:
+		if expr == null:
+			return false
+		if expr is WalrusExpr:
+			return true
+		if expr is LambdaExpr:
+			return _has_walrus_anywhere(expr.body)
+		if expr is ListComp or expr is SetComp or expr is GenComp:
+			if _has_walrus_anywhere(expr.elt_expr):
+				return true
+			return _has_walrus_in_clauses(expr.clauses)
+		if expr is DictComp:
+			if _has_walrus_anywhere(expr.key_expr):
+				return true
+			if _has_walrus_anywhere(expr.value_expr):
+				return true
+			return _has_walrus_in_clauses(expr.clauses)
+		if expr is Assign:
+			return _has_walrus_anywhere(expr.value)
+		if expr is AugAssign:
+			return _has_walrus_anywhere(expr.value)
+		if expr is AugAssignAttr:
+			return _has_walrus_anywhere(expr.object) or _has_walrus_anywhere(expr.value)
+		if expr is AugAssignItem:
+			return _has_walrus_anywhere(expr.object) or _has_walrus_anywhere(expr.index) or _has_walrus_anywhere(expr.value)
+		if expr is GetItem:
+			return _has_walrus_anywhere(expr.object) or _has_walrus_anywhere(expr.index)
+		if expr is SetItem:
+			return _has_walrus_anywhere(expr.object) or _has_walrus_anywhere(expr.index) or _has_walrus_anywhere(expr.value)
+		if expr is SliceExpr:
+			return _has_walrus_anywhere(expr.start) or _has_walrus_anywhere(expr.stop) or _has_walrus_anywhere(expr.step)
+		if expr is CompareChainExpr:
+			if _has_walrus_anywhere(expr.left):
+				return true
+			for cmp in expr.comparators:
+				if _has_walrus_anywhere(cmp):
+					return true
+			return false
+		if expr is Binary:
+			return _has_walrus_anywhere(expr.left) or _has_walrus_anywhere(expr.right)
+		if expr is Unary:
+			return _has_walrus_anywhere(expr.right)
+		if expr is GetAttr:
+			return _has_walrus_anywhere(expr.object)
+		if expr is SetAttr:
+			return _has_walrus_anywhere(expr.object) or _has_walrus_anywhere(expr.value)
+		if expr is Call:
+			if _has_walrus_anywhere(expr.callee_expr):
+				return true
+			for a in expr.arguments:
+				if _has_walrus_anywhere(a):
+					return true
+			for sa in expr.star_args:
+				if _has_walrus_anywhere(sa):
+					return true
+			for skw in expr.star_kwargs:
+				if _has_walrus_anywhere(skw):
+					return true
+			for kw in expr.keyword_args:
+				if _has_walrus_anywhere(kw.value):
+					return true
+			return false
+		if expr is ListLiteral or expr is TupleLiteral or expr is SetLiteral:
+			for e in expr.elements:
+				if _has_walrus_anywhere(e):
+					return true
+			return false
+		if expr is DictLiteral:
+			for k in expr.keys:
+				if _has_walrus_anywhere(k):
+					return true
+			for v in expr.values:
+				if _has_walrus_anywhere(v):
+					return true
+			return false
+		if expr is StarredExpr:
+			return _has_walrus_anywhere(expr.value)
+		if expr is UnpackAssign:
+			return _has_walrus_anywhere(expr.value)
+		if expr is ConditionalExpr:
+			return _has_walrus_anywhere(expr.condition) or _has_walrus_anywhere(expr.true_expr) or _has_walrus_anywhere(expr.false_expr)
+		if expr is FStringExpr:
+			for part in expr.parts:
+				if part.expr != null and _has_walrus_anywhere(part.expr):
+					return true
+			return false
+		if expr is SuperExpr:
+			for a in expr.arguments:
+				if _has_walrus_anywhere(a):
+					return true
+			return false
+		return false
+
+	## 检查推导式子句序列内是否存在赋值表达式 (规则 2 用) [br]
+	## [param clauses] CompClause 数组 [br]
+	## [returns] 存在赋值表达式时返回 true
+	func _has_walrus_in_clauses(clauses: Array) -> bool:
+		for clause in clauses:
+			if _has_walrus_anywhere(clause.iterable):
+				return true
+			for cond in clause.conditions:
+				if _has_walrus_anywhere(cond):
+					return true
+		return false
 
 	## 解析推导式的循环子句序列 (支持多 for 与多 if) [br]
 	## 调用时当前令牌必须是 FOR [br]
@@ -8623,7 +9131,10 @@ class Parser:
 			var rbracket = consume(TokenType.RBRACKET, "Expected ']'")
 			if rbracket == null:
 				return null
-			return ListComp.new(first, clauses)
+			var list_comp = ListComp.new(first, clauses)
+			if not _check_comp_walrus(list_comp):
+				return null
+			return list_comp
 		else:
 			var elems = [first]
 			while match_types([TokenType.COMMA]):
@@ -8714,7 +9225,10 @@ class Parser:
 				var comp_rbrace = consume(TokenType.RBRACE, "Expected '}'")
 				if comp_rbrace == null:
 					return null
-				return SetComp.new(first, clauses)
+				var set_comp = SetComp.new(first, clauses)
+				if not _check_comp_walrus(set_comp):
+					return null
+				return set_comp
 			var elems = [first]
 			while match_types([TokenType.COMMA]):
 				if check(TokenType.RBRACE):
@@ -8743,7 +9257,10 @@ class Parser:
 			var rbrace = consume(TokenType.RBRACE, "Expected '}'")
 			if rbrace == null:
 				return null
-			return DictComp.new(key_expr, value_expr, clauses)
+			var dict_comp = DictComp.new(key_expr, value_expr, clauses)
+			if not _check_comp_walrus(dict_comp):
+				return null
+			return dict_comp
 		else:
 			var keys = [key_expr]
 			var values = [value_expr]
@@ -9175,6 +9692,30 @@ class Interpreter:
 	var _suspend_reason: int = SuspendReason.NONE
 	## 当前正在执行步骤的生成器 (生成器体内 yield 定位与 sleep 拦截用)
 	var _current_generator = null
+	## 本次执行是否发生过未捕获的致命错误 (宿主据此进入 ERROR 终态)
+	var _had_fatal_error: bool = false
+	## 本轮重放已遇到的睡眠序号 (每次挂起后归零, 下一轮从 0 重新计数)
+	var _sleep_seq: int = 0
+	## 已确认等待完成的睡眠数 (跨轮累计): 对应序号 < 它的睡眠在本轮立即返回, 不重复等待
+	var _sleep_skip: int = 0
+	## 本轮已真正发起等待的睡眠数 (挂起时累加进 _sleep_skip)
+	var _sleep_waited: int = 0
+	## 重放根语句标识 (该语句正常结束时睡眠计数全部归零)
+	var _sleep_root_key: int = 0
+	## 当前正在执行的语句节点标识 (消费窗口按语句隔离)
+	var _current_stmt_key: int = 0
+	## 消费过程中发生挂起 (语句必须整体重放, 不能视为已完成)
+	var _needs_replay: bool = false
+	## 生成器创建记忆表: 语句标识 -> { 表达式标识 -> [第1个生成器, 第2个...] } [br]
+	## 语句重放时按出现次序复用同一批生成器 (否则会重新创建, 丢失已推进的进度)
+	var _gen_memo: Dictionary = {}
+	## 本轮各生成器表达式的出现计数: 语句标识 -> { 表达式标识 -> int }
+	var _gen_occur: Dictionary = {}
+	## 当前正在求值的调用表达式节点 (生成器函数调用需要它做记忆键)
+	var _current_call_node = null
+	## 语句消费窗口登记表: 语句标识 -> 该语句消费过的一次性迭代器数组 [br]
+	## 语句被挂起重放时, 把这些迭代器的读取游标退回各自窗口起点, 使消费方重读相同序列
+	var _stmt_iterators: Dictionary = {}
 	## 当前执行语句的行号 (运行时错误定位)
 	var _current_line: int = 0
 	## 当前正在执行的方法所属的类 (super() 定位)
@@ -9198,6 +9739,42 @@ class Interpreter:
 		environment = globals
 		register_builtins()
 	
+	## 比对两次调用的实参是否一致 (按对象身份) [br]
+	## 用于判断保存的挂起帧能否被当前调用复用: 参数不同说明是另一次调用, 不能复用旧环境 [br]
+	## [param a] 保存帧的实参数组 [br]
+	## [param b] 当前调用的实参数组 [br]
+	## [returns] 数量与每个参数的对象身份都一致时返回 true
+	func _args_match(a, b) -> bool:
+		if not (a is Array) or not (b is Array):
+			return false
+		if a.size() != b.size():
+			return false
+		for i in range(a.size()):
+			if not _arg_value_eq(a[i], b[i]):
+				return false
+		return true
+
+	## 判断两个实参是否表示同一次调用的同一参数 [br]
+	## 不可变字面量 (int/float/str/bool/None) 按值比较: 重放会重新求值字面量产生新对象 [br]
+	## 其余对象按身份比较: 避免把不同的可变对象误判为同一次调用 [br]
+	## [param x] 保存帧中的实参 [br]
+	## [param y] 当前调用的实参 [br]
+	## [returns] 视为同一实参时返回 true
+	func _arg_value_eq(x, y) -> bool:
+		if x == null or y == null:
+			return x == y
+		if x is DSLInteger and y is DSLInteger:
+			return x.value == y.value
+		if x is DSLFloat and y is DSLFloat:
+			return x.value == y.value
+		if x is DSLString and y is DSLString:
+			return x.value == y.value
+		if x is DSLBool and y is DSLBool:
+			return x.value == y.value
+		if x is DSLNone and y is DSLNone:
+			return true
+		return x == y
+
 	## 取 None 单例, 必要时初始化缓存 [br]
 	## 保证同一解释器内 None 的身份唯一 (`x is None` 依赖于此) [br]
 	## [returns] DSLNone 单例
@@ -9305,13 +9882,33 @@ class Interpreter:
 	
 	## 从带格式 last_error 字符串中抛出异常 [br]
 	## 解析 "TypeName: message" 格式的错误字符串并抛出对应异常 [br]
-	## [param last_err] 格式为 "TypeName: message" 的错误字符串
-	func raise_exception_from_last_error(last_err: String):
+	## message 已是最终显示文本 (各站点按 CPython 的 str 规则生成), 不再经 __init__ 加工 [br]
+	## [param last_err] 格式为 "TypeName: message" 的错误字符串 [br]
+	## [param args] 原始参数对象 (如 KeyError 的键), 使 e.args 与 repr 正确, 省略时用消息本身
+	func raise_exception_from_last_error(last_err: String, args: Array[DSLObject] = []):
 		var colon_idx = last_err.find(": ")
+		var err_type = "RuntimeError"
+		var msg = last_err
 		if colon_idx != -1:
-			raise_exception(last_err.substr(0, colon_idx), last_err.substr(colon_idx + 2))
+			err_type = last_err.substr(0, colon_idx)
+			msg = last_err.substr(colon_idx + 2)
+		var exc_args: Array[DSLObject] = args
+		if exc_args.is_empty():
+			exc_args = [DSLString.new(msg)] as Array[DSLObject]
+		var exc_class = globals.get_val(err_type)
+		if exc_class is DSLClass:
+			last_exception = exc_class.magic_call([], {})
+			var raw = last_exception._wrapped
+			if raw is DSLException:
+				raw.message = msg
+				raw.args = exc_args
+			last_exception.fields["args"] = DSLTuple.new(exc_args)
 		else:
-			raise_exception("RuntimeError", last_err)
+			last_exception = DSLException.new(msg, err_type)
+		var line_suffix = ""
+		if _current_line > 0:
+			line_suffix = " (line %d)" % _current_line
+		report.error(err_type + ": " + msg + line_suffix)
 	
 	## 注册内置异常类型 DSLClass [br]
 	## 在全局作用域中定义异常 [br]
@@ -9333,6 +9930,9 @@ class Interpreter:
 		
 		var str_desc = DSLWrappedDescriptor.new("__str__", Callable(self, "_exception_str"))
 		methods["__str__"] = str_desc
+		
+		var repr_desc = DSLWrappedDescriptor.new("__repr__", Callable(self, "_exception_repr"))
+		methods["__repr__"] = repr_desc
 		
 		var class_obj = DSLClass.new(type_name, base_class, methods, self)
 		globals.define(type_name, class_obj)
@@ -9401,13 +10001,26 @@ class Interpreter:
 		var pos_args: Array[DSLObject] = []
 		for i in range(1, exc_args.size()):
 			pos_args.append(exc_args[i])
-		var msg = ""
-		if pos_args.size() > 0:
-			msg = pos_args[0]._dsl_str()
+		var msg = _exception_message(wrapper.klass.name, pos_args)
 		var exc = DSLException.new(msg, wrapper.klass.name, pos_args)
 		wrapper._wrapped = exc
 		wrapper.fields["args"] = DSLTuple.new(pos_args)
 		return DSLNone.new()
+
+	## 按 CPython 语义计算异常的 str() 结果 [br]
+	## 无参数为空串, 多参数为参数元组的 repr, 单参数时 KeyError 用 repr, 其余用 str [br]
+	## [param type_name] 异常类型名 [br]
+	## [param pos_args] 构造参数 [br]
+	## [returns] 异常消息
+	func _exception_message(type_name: String, pos_args: Array[DSLObject]) -> String:
+		if pos_args.size() == 0:
+			return ""
+		if pos_args.size() > 1:
+			var tup = DSLTuple.new(pos_args)
+			return tup._dsl_str()
+		if type_name == "KeyError":
+			return DSLObject._py_repr(pos_args[0])
+		return pos_args[0]._dsl_str()
 	
 	## 内置 object.__init__ 回调 [br]
 	## 默认无操作, 仅返回 DSLNone [br]
@@ -9456,6 +10069,26 @@ class Interpreter:
 		if raw and raw is DSLException:
 			return DSLString.new(raw._dsl_str())
 		return DSLString.new(wrapper._type_name())
+
+	## 内置异常 __repr__ 回调 [br]
+	## 与 CPython 一致: 类型名后跟参数 repr, 如 KeyError('b') / ValueError() [br]
+	## [param exc_args] 异常参数, 首个为 wrapper 实例 [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] 异常的 repr 字符串
+	func _exception_repr(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var wrapper = exc_args[0]
+		var type_name = wrapper._type_name()
+		var pos_args: Array[DSLObject] = []
+		if wrapper._wrapped != null and wrapper._wrapped is DSLException:
+			pos_args = wrapper._wrapped.args
+		elif wrapper.fields != null and wrapper.fields.has("args") and wrapper.fields["args"] is DSLTuple:
+			pos_args = wrapper.fields["args"].items
+		var parts = ""
+		for i in range(pos_args.size()):
+			if i > 0:
+				parts += ", "
+			parts += DSLObject._py_repr(pos_args[i])
+		return DSLString.new(type_name + "(" + parts + ")")
 		
 	## 注册内置类型, 函数与异常到全局作用域 [br]
 	## 创建 object/type/int/float/str/list/tuple/dict/bool 类型类, [br]
@@ -9642,6 +10275,101 @@ class Interpreter:
 		modules["collections"] = _create_collections_module()
 		modules["string"] = _create_string_module()
 		modules["operator"] = _create_operator_module()
+		modules["time"] = _create_time_module()
+
+	## 创建 time 模块 [br]
+	## sleep 为协作式挂起 (不阻塞宿主), 其余函数对标 CPython 的 time 模块 [br]
+	## [returns] DSLModule
+	func _create_time_module() -> DSLModule:
+		var mod = DSLModule.new("time")
+		mod.members["sleep"] = _make_builtin("sleep", Callable(self, "_time_sleep"))
+		mod.members["time"] = _make_builtin("time", Callable(self, "_time_time"))
+		mod.members["time_ns"] = _make_builtin("time_ns", Callable(self, "_time_time_ns"))
+		mod.members["monotonic"] = _make_builtin("monotonic", Callable(self, "_time_monotonic"))
+		mod.members["monotonic_ns"] = _make_builtin("monotonic_ns", Callable(self, "_time_monotonic_ns"))
+		mod.members["perf_counter"] = _make_builtin("perf_counter", Callable(self, "_time_monotonic"))
+		mod.members["perf_counter_ns"] = _make_builtin("perf_counter_ns", Callable(self, "_time_monotonic_ns"))
+		mod.members["process_time"] = _make_builtin("process_time", Callable(self, "_time_monotonic"))
+		return mod
+
+	## time.sleep(secs) — 协作式睡眠挂起 [br]
+	## 挂起期间宿主继续运行, 超时后由宿主恢复执行 (不阻塞游戏) [br]
+	## [param args] [secs] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] None
+	func _time_sleep(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "sleep() takes exactly 1 argument (%d given)" % args.size())
+			return null
+		var v = args[0]
+		var secs = 0.0
+		if v is DSLInteger:
+			secs = float(v.value)
+		elif v is DSLFloat:
+			secs = v.value
+		elif v is DSLBool:
+			secs = 1.0 if v.value else 0.0
+		else:
+			raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % v._type_name())
+			return null
+		if secs < 0:
+			raise_exception("ValueError", "sleep length must be non-negative")
+			return null
+		# 语句重放时的睡眠去重:
+		# 同一轮重放内按遇到次序编号, 序号小于「已等待数」的睡眠立即返回 (已完成等待, 不重复等待)
+		# 其余睡眠真正发起等待, 并在挂起时把本轮已等待数累加进 _sleep_skip, 供后续轮次跳过
+		var sleep_idx = _sleep_seq
+		_sleep_seq += 1
+		if sleep_idx < _sleep_skip:
+			return get_none()
+		_sleep_waited += 1
+		_suspended = true
+		_is_waiting = false
+		_suspend_reason = SuspendReason.SLEEPING
+		if owner != null:
+			owner.request_suspend_sleeping(secs)
+		return get_none()
+
+	## time.time() — 当前 Unix 时间戳 (秒) [br]
+	## [param args] 无 [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLFloat
+	func _time_time(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 0:
+			raise_exception("TypeError", "time.time() takes no arguments (%d given)" % args.size())
+			return null
+		return DSLFloat.new(Time.get_unix_time_from_system())
+
+	## time.time_ns() — 当前 Unix 时间戳 (纳秒) [br]
+	## [param args] 无 [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLInteger
+	func _time_time_ns(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 0:
+			raise_exception("TypeError", "time.time_ns() takes no arguments (%d given)" % args.size())
+			return null
+		return DSLInteger.new(int(Time.get_unix_time_from_system() * 1000000000.0))
+
+	## time.monotonic() / perf_counter() / process_time() — 单调递增时钟 (秒) [br]
+	## 基于宿主引擎的运行时长, 不受系统时间调整影响 [br]
+	## [param args] 无 [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLFloat
+	func _time_monotonic(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 0:
+			raise_exception("TypeError", "monotonic() takes no arguments (%d given)" % args.size())
+			return null
+		return DSLFloat.new(Time.get_ticks_usec() / 1000000.0)
+
+	## time.monotonic_ns() / perf_counter_ns() — 单调递增时钟 (纳秒) [br]
+	## [param args] 无 [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLInteger
+	func _time_monotonic_ns(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 0:
+			raise_exception("TypeError", "monotonic_ns() takes no arguments (%d given)" % args.size())
+			return null
+		return DSLInteger.new(int(Time.get_ticks_usec() * 1000))
 
 	## 从模块注册表获取模块 [br]
 	## [param name] 模块名 [br]
@@ -10197,6 +10925,8 @@ class Interpreter:
 		var result = start
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			result = result.magic_mul([result, v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			if result == null:
 				return null
@@ -10384,20 +11114,67 @@ class Interpreter:
 			return null
 		return DSLInteger.new(start + step * (_rng_next() % count))
 
+	## 抽样函数的生成器参数校验 [br]
+	## 生成器是一次性迭代器且没有 len(), CPython 的抽样函数一律拒绝, 此处同样拒绝 [br]
+	## [param obj] 待检查的实参 [br]
+	## [returns] 是生成器时返回 true
+	func _rng_is_generator(obj) -> bool:
+		var raw = DSLObject._unwrap_dsl(obj)
+		return raw is DSLFunctionGenerator or raw is DSLGenerator
+
+	## 抽样函数的序列长度 (对应 CPython 的 len(population)) [br]
+	## 沿用内置 len() 的判定, 对无长度信息的对象返回 -1 [br]
+	## [param obj] 待测对象 [br]
+	## [returns] 长度, 无长度信息时为 -1
+	func _rng_len_of(obj) -> int:
+		var raw = DSLObject._unwrap_dsl(obj)
+		var res = builtin_len([raw] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if report.has_error:
+			report.clear_error()
+			return -1
+		if res is DSLInteger:
+			return res.value
+		return -1
+
+	## 抽样函数按整数下标取值 (对应 CPython 的 seq[i]) [br]
+	## 列表/元组取元素, 字符串取单字符, 字典按键取 (与 CPython 一致, 键非 0..n-1 时报 KeyError) [br]
+	## [param obj] 待索引对象 [br]
+	## [param idx] 下标 [br]
+	## [returns] 取到的元素, 失败时返回 null 并置 last_error
+	func _rng_index(obj, idx: int) -> DSLObject:
+		var raw = DSLObject._unwrap_dsl(obj)
+		if raw is DSLList or raw is DSLTuple:
+			return raw.items[idx]
+		if raw is DSLString:
+			return DSLString.new(raw.value[idx])
+		if raw is DSLDict or raw is DSLDefaultDict:
+			var d = raw if raw is DSLDict else raw.inner
+			var vkey = d._key_to_variant(DSLInteger.new(idx))
+			if vkey != null and d.dict.has(vkey):
+				return d.dict[vkey]
+			raise_exception("KeyError", str(idx))
+			return null
+		raise_exception("TypeError", "'%s' object is not subscriptable" % raw._type_name())
+		return null
+
 	## random.choice(seq)
 	func _rng_choice(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "choice() takes exactly one argument")
 			return null
-		var seq = args[0]
-		var raw = DSLObject._unwrap_dsl(seq)
-		if raw is DSLList or raw is DSLTuple:
-			if raw.items.size() == 0:
-				raise_exception("IndexError", "Cannot choose from an empty sequence")
-				return null
-			return raw.items[_rng_next() % raw.items.size()]
-		raise_exception("TypeError", "choice() argument must be a sequence")
-		return null
+		# 与 CPython 一致: choice 取 len(seq) 后按 seq[_randbelow(len)] 索引,
+		# 因此生成器因无 len 被拒、集合因不可下标被拒、字典按键取到下标对应的键
+		var n = _rng_len_of(args[0])
+		if n < 0:
+			raise_exception("TypeError", "object of type '%s' has no len()" % DSLObject._unwrap_dsl(args[0])._type_name())
+			return null
+		if n == 0:
+			raise_exception("IndexError", "Cannot choose from an empty sequence")
+			return null
+		var picked = _rng_index(args[0], _rng_next() % n)
+		if picked == null:
+			return null
+		return picked
 
 	## random.shuffle(seq)
 	func _rng_shuffle(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -10405,14 +11182,37 @@ class Interpreter:
 			raise_exception("TypeError", "shuffle() takes exactly one argument")
 			return null
 		var raw = DSLObject._unwrap_dsl(args[0])
-		if raw is DSLList:
-			for i in range(raw.items.size() - 1, 0, -1):
-				var j = _rng_next() % (i + 1)
+		var n = _rng_len_of(raw)
+		if n < 0:
+			raise_exception("TypeError", "object of type '%s' has no len()" % raw._type_name())
+			return null
+		# 与 CPython 一致: shuffle 需要可写序列, 元组/字符串/range 因不支持元素赋值被拒
+		if raw is DSLList and raw.is_range:
+			raise_exception("TypeError", "'range' object does not support item assignment")
+			return null
+		if not (raw is DSLList or raw is DSLDict or raw is DSLDefaultDict):
+			if raw is DSLSet or raw is DSLFrozenSet:
+				raise_exception("TypeError", "'%s' object is not subscriptable" % raw._type_name())
+				return null
+			raise_exception("TypeError", "'%s' object does not support item assignment" % raw._type_name())
+			return null
+		for i in range(n - 1, 0, -1):
+			var j = _rng_next() % (i + 1)
+			if raw is DSLList:
 				var tmp = raw.items[i]
 				raw.items[i] = raw.items[j]
 				raw.items[j] = tmp
-			return DSLNone.new()
-		raise_exception("TypeError", "shuffle() argument must be a list")
+			else:
+				var d = raw if raw is DSLDict else raw.inner
+				var ki = d._key_to_variant(DSLInteger.new(i))
+				var kj = d._key_to_variant(DSLInteger.new(j))
+				if ki == null or kj == null or not d.dict.has(ki) or not d.dict.has(kj):
+					raise_exception("KeyError", str(j))
+					return null
+				var tmp2 = d.dict[ki]
+				d.dict[ki] = d.dict[kj]
+				d.dict[kj] = tmp2
+		return DSLNone.new()
 		return null
 
 	## random.sample(population, k)
@@ -10429,7 +11229,8 @@ class Interpreter:
 			for i in range(raw.value.length()):
 				pool.append(DSLString.new(raw.value[i]))
 		else:
-			raise_exception("TypeError", "sample() population must be a sequence")
+			# CPython: sample 需要序列, 生成器/集合/字典/range 一律拒绝并提示 sorted(d)
+			raise_exception("TypeError", "Population must be a sequence.  For dicts or sets, use sorted(d).")
 			return null
 		if k < 0 or k > pool.size():
 			raise_exception("ValueError", "Sample larger than population or is negative")
@@ -10447,6 +11248,10 @@ class Interpreter:
 		if args.size() < 1 or args.size() > 3:
 			raise_exception("TypeError", "choices() takes from 1 to 3 positional arguments")
 			return null
+		if _rng_is_generator(args[0]):
+			# CPython: 抽样需要序列, 生成器没有 len() 而被拒绝
+			raise_exception("TypeError", "object of type 'generator' has no len()")
+			return null
 		var pool: Array[DSLObject] = []
 		var it = args[0]._dsl_iter()
 		if it == null:
@@ -10454,6 +11259,11 @@ class Interpreter:
 			return null
 		while it.has_next():
 			pool.append(it.next())
+			if it.suspended:
+				break
+		if it.suspended:
+			# 消费中途挂起: pool 只是半截, 交由语句重放而不是当作完整总体
+			return null
 		if pool.size() == 0:
 			raise_exception("IndexError", "Cannot choose from an empty population")
 			return null
@@ -10470,6 +11280,7 @@ class Interpreter:
 			k = int(_num_val_or(kwargs["k"], 1.0))
 		var cum: Array = []
 		if weights_obj != null and not (weights_obj is DSLNone):
+			# 权重只需可迭代 (CPython 对 weights 不做 len 检查, 生成器可接受)
 			var wt = weights_obj._dsl_iter()
 			if wt == null:
 				raise_exception("TypeError", "choices() weights must be a sequence")
@@ -10482,6 +11293,9 @@ class Interpreter:
 					return null
 				total += float(wv)
 				cum.append(total)
+			if wt.suspended:
+				# 消费中途挂起: cum 只是半截, 交由语句重放
+				return null
 			if cum.size() != pool.size():
 				raise_exception("ValueError", "The number of weights does not match the population")
 				return null
@@ -10545,6 +11359,8 @@ class Interpreter:
 			return [nums, false]
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			var nv = _num_val(v)
 			if nv == null:
 				raise_exception("TypeError", "statistics functions require numeric data")
@@ -10609,6 +11425,8 @@ class Interpreter:
 			return null
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			var key = DSLObject._unwrap_dsl(v)
 			var k = ""
 			if key is DSLInteger:
@@ -10736,6 +11554,8 @@ class Interpreter:
 			return null
 		while it.has_next():
 			items.append(it.next())
+			if it.suspended:
+				break
 		var acc: DSLObject = null
 		var start = 0
 		if args.size() == 3:
@@ -10787,6 +11607,8 @@ class Interpreter:
 				return null
 			while it.has_next():
 				result.items.append(it.next())
+				if it.suspended:
+					break
 		return result
 
 	## itertools.product(*iterables) - 笛卡尔积
@@ -10800,6 +11622,8 @@ class Interpreter:
 				return null
 			while it.has_next():
 				items.append(it.next())
+				if it.suspended:
+					break
 			pools.append(items)
 		var result = DSLList.new()
 		var idx: Array = []
@@ -10835,6 +11659,8 @@ class Interpreter:
 			return null
 		while it.has_next():
 			items.append(it.next())
+			if it.suspended:
+				break
 		var r = int(_num_val(args[1]))
 		var result = DSLList.new()
 		if r < 0 or r > items.size():
@@ -10867,6 +11693,8 @@ class Interpreter:
 			return null
 		while it.has_next():
 			items.append(it.next())
+			if it.suspended:
+				break
 		var r = items.size()
 		if args.size() == 2:
 			r = int(_num_val(args[1]))
@@ -10924,6 +11752,8 @@ class Interpreter:
 		var lower = max(start, 0)
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			if idx >= lower and idx < stop and (idx - start) % step == 0:
 				result.items.append(v)
 			idx += 1
@@ -10959,6 +11789,8 @@ class Interpreter:
 			return null
 		while it.has_next():
 			items.append(it.next())
+			if it.suspended:
+				break
 		if items.size() == 0:
 			return DSLList.new()
 		return DSLCycle.new(items)
@@ -10993,6 +11825,8 @@ class Interpreter:
 				return null
 			while it.has_next():
 				items.append(it.next())
+				if it.suspended:
+					break
 			pools.append(items)
 			if items.size() > max_len:
 				max_len = items.size()
@@ -11021,6 +11855,8 @@ class Interpreter:
 		var result = DSLList.new()
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			var r = pred.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			if r == null:
 				return null
@@ -11044,6 +11880,8 @@ class Interpreter:
 		var dropping = true
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			if dropping:
 				var r = pred.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if r == null:
@@ -11082,6 +11920,8 @@ class Interpreter:
 			result.items.append(acc)
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			if acc == null:
 				acc = v
 			elif func_obj == null:
@@ -11111,6 +11951,8 @@ class Interpreter:
 		var prev = it.next()
 		while it.has_next():
 			var cur = it.next()
+			if it.suspended:
+				break
 			var pair: Array[DSLObject] = [prev, cur]
 			result.items.append(DSLTuple.new(pair))
 			prev = cur
@@ -11139,6 +11981,8 @@ class Interpreter:
 		var have_group = false
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			var k: DSLObject = v
 			if key_func != null:
 				k = key_func.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
@@ -11173,6 +12017,8 @@ class Interpreter:
 		var result = DSLList.new()
 		while it.has_next():
 			var row = it.next()
+			if it.suspended:
+				break
 			var call_args: Array[DSLObject] = []
 			var row_it = row._dsl_iter()
 			if row_it == null:
@@ -11180,6 +12026,8 @@ class Interpreter:
 				return null
 			while row_it.has_next():
 				call_args.append(row_it.next())
+				if row_it.suspended:
+					break
 			var r = fn.magic_call(call_args, {} as Dictionary[String, DSLObject])
 			if r == null:
 				return null
@@ -11220,7 +12068,7 @@ class Interpreter:
 		var r = _call_magic_or_fallback(obj, dunder, [] as Array[DSLObject], fallback)
 		if r == null:
 			if obj.last_error != "":
-				raise_exception_from_last_error(obj.last_error)
+				raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 			else:
 				raise_exception("TypeError", "bad operand type for unary %s: '%s'" % [name, obj._type_name()])
 			return null
@@ -11435,6 +12283,9 @@ class Interpreter:
 			if it.next()._dsl_eq(args[1]):
 				return DSLInteger.new(idx)
 			idx += 1
+		if it.suspended:
+			# 消费中途挂起: 交由语句重放, 不能当作未找到
+			return null
 		raise_exception("ValueError", "sequence.index(x): x not in sequence")
 		return null
 
@@ -11507,6 +12358,8 @@ class Interpreter:
 			return null
 		while it.has_next():
 			var v = it.next()
+			if it.suspended:
+				break
 			var vkey = counter.inner._key_to_variant(v)
 			if vkey == null:
 				raise_exception("TypeError", "unhashable type in Counter()")
@@ -11549,6 +12402,11 @@ class Interpreter:
 		if report.has_error:
 			report.fatal_error(report.last_error)
 			report.has_error = false
+			# 未捕获错误已终止本次执行: 清除挂起标志并记录, 使宿主状态机进入终态而非反复恢复
+			_suspended = false
+			_suspend_reason = SuspendReason.NONE
+			_current_generator = null
+			_had_fatal_error = true
 		
 	## 在给定环境中执行语句块并捕获 return/break/continue 信号 [br]
 	## [param statements] 语句数组 [br]
@@ -11556,6 +12414,7 @@ class Interpreter:
 	func exec_block(statements: Array, env: DSLEnvironment) -> ExecResult:
 		var start_pc = 0
 		var resume_info = {}
+		var prev_sleeps_done = 0
 		
 		# 搜索整个 _exec_stack 寻找匹配帧 (嵌套调用时栈顶可能是内层帧)
 		var match_idx = -1
@@ -11565,6 +12424,7 @@ class Interpreter:
 				match_idx = j
 				start_pc = f.pc
 				resume_info = f.resume_info if f.has("resume_info") else {}
+				prev_sleeps_done = f.get("sleeps_done", 0)
 				break
 		
 		if match_idx >= 0:
@@ -11586,7 +12446,9 @@ class Interpreter:
 			"statements": statements,
 			"pc": 0,
 			"env": env,
-			"resume_info": resume_info
+			"resume_info": resume_info,
+			"sleeps_done": prev_sleeps_done,
+			"pass_open": false
 		}
 		_exec_stack.append(frame)
 		
@@ -11608,18 +12470,36 @@ class Interpreter:
 			# 否则会泄漏到后续语句 (例如让下一个 if 跳过条件求值)
 			if res != ExecResult.SUSPENDED:
 				frame.resume_info = {}
+				_clear_stmt_window(stmt)
+				_clear_gen_memo(stmt)
+				if _stmt_key(stmt) == _sleep_root_key:
+					_sleep_seq = 0
+					_sleep_skip = 0
+					_sleep_waited = 0
+					_sleep_root_key = 0
 			# 为直接 report.error 的运行时错误 (如 NameError) 附加行号
 			if report.has_error and report.last_error != "" and not report.last_error.contains("(line "):
 				report.last_error += " (line %d)" % _current_line
 			if res == ExecResult.SUSPENDED:
+				if _suspend_reason == SuspendReason.SLEEPING:
+					# 本轮已等待的睡眠转为「已确认等待」, 下一轮从序号 0 重新计数
+					_sleep_skip += _sleep_waited
+					_sleep_seq = 0
+					_sleep_waited = 0
 				# 保存下次恢复的位置
 				if _expr_evaluated:
-					# 表达式已求值, 跳过当前语句 (如 sleep(1))
+					# 表达式已求值, 跳过当前语句 (如独立语句形式的 sleep)
 					frame.pc = i
 					_expr_evaluated = false
 				else:
-					# 表达式未求值, 恢复时重新执行 (如嵌套函数调用挂起)
+					# 表达式未求值, 恢复时重新执行 (含嵌套调用的语句)
 					frame.pc = i - 1
+					# 仅程序挂起 (sleep/waiting) 需要重放窗口: 消费方会重新执行整条语句,
+					# 已产出元素从日志重读, 生成器按出现次序复用
+					# yield 挂起由生成器自身状态推进, 回退游标会导致元素重复
+					if _suspend_reason != SuspendReason.YIELD:
+						_reset_read_marks(stmt)
+						_gen_occur.erase(_stmt_key(stmt))
 				environment = prev_env
 				return ExecResult.SUSPENDED
 			if res == ExecResult.ERROR and last_exception != null:
@@ -11646,6 +12526,12 @@ class Interpreter:
 		if _current_generator != null:
 			_current_generator._yield_pos = 0
 			
+		# 语句级消费窗口: 记录当前语句标识 (睡眠计数按重放轮次累计, 见 _time_sleep)
+		_current_stmt_key = _stmt_key(stmt)
+		if _sleep_root_key == 0:
+			_sleep_root_key = _current_stmt_key
+		_needs_replay = false
+			
 		step_count += 1
 		if step_count > max_steps:
 			raise_exception("RuntimeError", "maximum step count exceeded")
@@ -11654,7 +12540,7 @@ class Interpreter:
 		if stmt is ExpressionStmt:
 			var val = evaluate(stmt.expression)
 			if _suspended:
-				_expr_evaluated = (val != null)
+				_expr_evaluated = (val != null) and not _needs_replay
 				return ExecResult.SUSPENDED
 			if val == null or report.has_error:
 				return ExecResult.ERROR
@@ -11678,7 +12564,7 @@ class Interpreter:
 			
 			var cond = evaluate(stmt.condition)
 			if _suspended:
-				_expr_evaluated = (cond != null)
+				_expr_evaluated = (cond != null) and not _needs_replay
 				return ExecResult.SUSPENDED
 			if cond == null or report.has_error:
 				return ExecResult.ERROR
@@ -11693,7 +12579,7 @@ class Interpreter:
 					var branch = stmt.elif_branches[branch_idx]
 					cond = evaluate(branch[0])
 					if _suspended:
-						_expr_evaluated = (cond != null)
+						_expr_evaluated = (cond != null) and not _needs_replay
 						return ExecResult.SUSPENDED
 					if cond == null or report.has_error:
 						return ExecResult.ERROR
@@ -11726,7 +12612,7 @@ class Interpreter:
 				if not skip_cond:
 					var cond = evaluate(stmt.condition)
 					if _suspended:
-						_expr_evaluated = (cond != null)
+						_expr_evaluated = (cond != null) and not _needs_replay
 						_exec_stack.back().resume_info = {"type": "while"}
 						return ExecResult.SUSPENDED
 					if cond == null or report.has_error:
@@ -11783,7 +12669,7 @@ class Interpreter:
 			else:
 				var iterable = evaluate(stmt.iterable)
 				if _suspended:
-					_expr_evaluated = (iterable != null)
+					_expr_evaluated = (iterable != null) and not _needs_replay
 					return ExecResult.SUSPENDED
 				if iterable == null or iterable is DSLNone:
 					raise_exception("RuntimeError", "iterable is null in for loop")
@@ -11792,6 +12678,10 @@ class Interpreter:
 				if iterator == null:
 					raise_exception_from_last_error(iterable.last_error if iterable.last_error else "TypeError: object is not iterable")
 					return ExecResult.RAISE
+				# 生成器体内部的 for: 迭代器不参与语句消费窗口
+				# 生成器自身保存的挂起状态已保证推进正确, 叠加窗口会在重放时重复产出
+				if _current_generator != null:
+					iterator.windowed = false
 			
 			var first_iter = true
 			while true:
@@ -11799,7 +12689,24 @@ class Interpreter:
 				if is_body_resume and first_iter:
 					is_body_resume = false
 				else:
+					# 即将推进迭代器: 清除上一轮遗留的 body_resume 标记,
+					# 使此处挂起时的重放重新推进 (而不是重跑 body 造成重复产出)
+					var adv_frame = _exec_stack.back() if _exec_stack.size() > 0 else null
+					if adv_frame != null and adv_frame is Dictionary:
+						adv_frame.resume_info = {"type": "for", "iterator": iterator, "body_resume": false}
 					if not iterator.has_next():
+						if iterator.suspended:
+							# 内层迭代器因程序挂起 (sleep) 中断, 而非耗尽
+							# 向上传播为程序挂起, 由语句重放机制接管续跑
+							iterator.suspended = false
+							_suspended = true
+							_suspend_reason = SuspendReason.SLEEPING
+							_needs_replay = true
+							return ExecResult.SUSPENDED
+						if report.has_error:
+							# 迭代器推进时抛出异常, 而非耗尽:
+							# 向上传播, 使外层 try/except 能捕获 (否则错误被本语句吞掉)
+							return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
 						break
 					var item = iterator.next()
 					if stmt.variables.size() == 1:
@@ -11868,7 +12775,7 @@ class Interpreter:
 		if stmt is ReturnStmt:
 			return_value = evaluate(stmt.value) if stmt.value else DSLNone.new()
 			if _suspended:
-				_expr_evaluated = (return_value != null)
+				_expr_evaluated = (return_value != null) and not _needs_replay
 				return ExecResult.SUSPENDED
 			if stmt.value and (return_value == null or report.has_error):
 				return ExecResult.ERROR
@@ -11904,7 +12811,7 @@ class Interpreter:
 		if stmt is AssertStmt:
 			var test_val = evaluate(stmt.test)
 			if _suspended:
-				_expr_evaluated = (test_val != null)
+				_expr_evaluated = (test_val != null) and not _needs_replay
 				return ExecResult.SUSPENDED
 			if test_val == null:
 				return ExecResult.ERROR
@@ -11937,7 +12844,7 @@ class Interpreter:
 						return ExecResult.ERROR
 					obj._dsl_delattr(target.name)
 					if obj.last_error != "":
-						raise_exception_from_last_error(obj.last_error)
+						raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 						return ExecResult.RAISE
 				elif target is GetItem:
 					var obj = evaluate(target.object)
@@ -11954,7 +12861,7 @@ class Interpreter:
 						return ExecResult.ERROR
 					obj._dsl_delitem(index)
 					if obj.last_error != "":
-						raise_exception_from_last_error(obj.last_error)
+						raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 						return ExecResult.RAISE
 			return ExecResult.NORMAL
 		
@@ -12252,6 +13159,8 @@ class Interpreter:
 				return null
 			while iter.has_next():
 				items.append(iter.next())
+				if iter.suspended:
+					break
 			var nullflag = assign_from_targets(expr.targets, items, environment)
 			return null if nullflag == null else val
 			
@@ -12267,7 +13176,7 @@ class Interpreter:
 				return null
 			obj._dsl_setitem(idx, val)
 			if obj.last_error != "":
-				raise_exception_from_last_error(obj.last_error)
+				raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 				return null
 			return val
 			
@@ -12407,39 +13316,10 @@ class Interpreter:
 				return evaluate(expr.false_expr)
 				
 		if expr is Call:
-			# 拦截 sleep 内置函数
-			if expr.callee_expr is Variable and expr.callee_expr.name == "sleep":
-				if _current_generator != null:
-					raise_exception("RuntimeError", "sleep() cannot be called inside a generator")
-					return null
-				if expr.arguments.size() != 1:
-					raise_exception("TypeError", "sleep() takes exactly 1 argument (%d given)" % expr.arguments.size())
-					return null
-				var sleep_val = evaluate(expr.arguments[0])
-				if _suspended:
-					return null
-				if sleep_val == null:
-					return null
-				var sleep_num = 0.0
-				if sleep_val is DSLInteger:
-					sleep_num = float(sleep_val.value)
-				elif sleep_val is DSLFloat:
-					sleep_num = sleep_val.value
-				else:
-					raise_exception("TypeError", "sleep() argument must be a number")
-					return null
-				if sleep_num < 0:
-					raise_exception("ValueError", "sleep 参数不能为负数")
-					return null
-				_suspended = true
-				_is_waiting = false
-				_suspend_reason = SuspendReason.SLEEPING
-				if owner != null:
-					owner.request_suspend_sleeping(sleep_num)
-				return DSLNone.new()
-			
+			_current_call_node = expr
 			var callee = evaluate(expr.callee_expr)
 			if callee == null:
+				_current_call_node = null
 				return null
 			var pos_args: Array[DSLObject] = []
 			for a in expr.arguments:
@@ -12458,6 +13338,8 @@ class Interpreter:
 					return null
 				while it.has_next():
 					pos_args.append(it.next())
+					if it.suspended:
+						break
 			var kw_dict: Dictionary[String, DSLObject] = {}
 			for kw in expr.keyword_args:
 				var val = evaluate(kw.value)
@@ -12476,6 +13358,7 @@ class Interpreter:
 				else:
 					raise_exception("TypeError", "argument after ** must be a mapping")
 					return null
+			_current_call_node = null
 			if callee is DSLMethod:
 				var result = callee.magic_call(pos_args, kw_dict)
 				if _suspended:
@@ -12490,19 +13373,34 @@ class Interpreter:
 				var result = callee.magic_call(pos_args, kw_dict)
 				if _suspended:
 					return null
+				if report.has_error:
+					# 构造/调用过程中抛出异常: 结果是半成品, 不能当作成功值返回,
+					# 否则实参求值会带着它继续 (如 print(list(gen)) 会多输出部分列表)
+					return null
 				return result
 			else:
 				var result = callee.magic_call(pos_args, kw_dict)
 				if _suspended:
-					return DSLNone.new()
+					# 消费中途挂起 (需重放) 返回 null, 独立调用 (已完成副作用) 返回 None 使语句被跳过
+					return null if _needs_replay else DSLNone.new()
 				if report.has_error:
 					return null
 				# Check for errors from builtin methods (which set last_error on the proto)
 				if callee is DSLBuiltinFunction:
 					var proto = callee.callback.get_object()
 					if proto is DSLObject and proto.last_error != "":
-						raise_exception_from_last_error(proto.last_error)
+						raise_exception_from_last_error(proto.last_error, proto.last_error_args)
 						proto.last_error = ""
+						return null
+					# 部分方法把错误记在接收者实例上 (如 dict.popitem / set.remove / set.pop):
+					# 同样须转为异常, 否则错误被吞掉、调用静默返回 None
+					var recv = callee.__self__
+					if recv is DSLObject and recv.last_error != "":
+						var recv_err = recv.last_error
+						var recv_args: Array[DSLObject] = recv.last_error_args
+						recv.last_error = ""
+						recv.last_error_args.clear()
+						raise_exception_from_last_error(recv_err, recv_args)
 						return null
 				return result
 			
@@ -12529,7 +13427,7 @@ class Interpreter:
 						return null
 				var result = obj._dsl_getitem(DSLSlice.new(start_val, stop_val, step_val))
 				if result == null:
-					raise_exception_from_last_error(obj.last_error)
+					raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 					return null
 				return result
 			else:
@@ -12538,7 +13436,7 @@ class Interpreter:
 					return null
 				var result = obj._dsl_getitem(idx)
 				if result == null:
-					raise_exception_from_last_error(obj.last_error)
+					raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 					return null
 				return result
 			
@@ -12548,7 +13446,7 @@ class Interpreter:
 				return null
 			var result = obj._dsl_getattribute(expr.name)
 			if obj.last_error != "":
-				raise_exception_from_last_error(obj.last_error)
+				raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 				return null
 			return result
 		
@@ -12561,7 +13459,7 @@ class Interpreter:
 				return null
 			obj._dsl_setattr(expr.name, val)
 			if obj.last_error != "":
-				raise_exception_from_last_error(obj.last_error)
+				raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 				return null
 			return val
 			
@@ -12656,7 +13554,9 @@ class Interpreter:
 			return result
 
 		if expr is GenComp:
-			return DSLGenerator.new(expr.elt_expr, expr.clauses, environment, self)
+			var gen_obj = DSLGenerator.new(expr.elt_expr, expr.clauses, environment, self)
+			gen_obj.interp = self
+			return _memo_generator(expr, gen_obj)
 
 		if expr is DictComp:
 			var result = DSLDict.new()
@@ -12763,9 +13663,19 @@ class Interpreter:
 			if sub_iter == null:
 				raise_exception_from_last_error(from_val.last_error if from_val.last_error != "" else "TypeError: object is not iterable")
 				return null
+			sub_iter.windowed = false
 			state = {"expr": expr, "iter": sub_iter, "val": from_val}
 			gen._yield_from_states.append(state)
 		var iter = state.iter
+		# 子迭代器直连推进 (不经过消费窗口): 其进度已由 _yield_from_states 保存,
+		# 若被语句重放回退游标会导致重复产出
+		if iter._read_pos < iter._log.size():
+			var buffered = iter._log[iter._read_pos]
+			iter._read_pos += 1
+			gen._yielded_value = buffered
+			_suspended = true
+			_suspend_reason = SuspendReason.YIELD
+			return null
 		if iter.has_next():
 			var item = iter.next()
 			gen._yielded_value = item
@@ -12792,10 +13702,17 @@ class Interpreter:
 			if it == null:
 				raise_exception("TypeError", "Value after * must be an iterable, not %s" % val._type_name())
 				return false
-			while it.has_next():
+			while true:
 				if report.has_error:
 					return false
+				if not it.has_next():
+					if it.suspended:
+						# 消费中途挂起: 交由语句重放, 不能带着部分元素当作已展开完成
+						return false
+					break
 				target.append(it.next())
+				if it.suspended:
+					return false
 			return true
 		var element = evaluate(e)
 		if element == null:
@@ -12814,23 +13731,41 @@ class Interpreter:
 		if idx >= clauses.size():
 			return emit.call()
 		var clause = clauses[idx]
+		var iterator = null
+		var prev_env = environment
+		environment = env
 		var iterable = evaluate(clause.iterable)
+		environment = prev_env
+		if _suspended:
+			return false
 		if iterable == null:
 			return false
-		var iterator = iterable._dsl_iter()
+		iterator = iterable._dsl_iter()
 		if iterator == null:
 			raise_exception_from_last_error(iterable.last_error if iterable.last_error != "" else "TypeError: object is not iterable")
 			return false
-		while iterator.has_next():
+		while true:
 			if report.has_error:
 				return false
+			if not iterator.has_next():
+				if iterator.suspended:
+					return false
+				return true
 			var item = iterator.next()
+			if iterator.suspended:
+				return false
 			var saved = _bind_comp_targets(clause.targets, item, env)
 			if saved == null:
 				return false
 			var cond_ok = true
 			for cond in clause.conditions:
+				var prev_cenv = environment
+				environment = env
 				var cond_result = evaluate(cond)
+				environment = prev_cenv
+				if _suspended:
+					_restore_comp_bindings(env, saved)
+					return false
 				if cond_result == null:
 					_restore_comp_bindings(env, saved)
 					return false
@@ -12838,11 +13773,86 @@ class Interpreter:
 					cond_ok = false
 					break
 			if cond_ok:
-				if not _eval_comp_clauses(clauses, idx + 1, env, emit):
+				var prev_ienv = environment
+				environment = env
+				var sub_ok = _eval_comp_clauses(clauses, idx + 1, env, emit)
+				environment = prev_ienv
+				if _suspended:
+					_restore_comp_bindings(env, saved)
+					return false
+				if not sub_ok:
 					_restore_comp_bindings(env, saved)
 					return false
 			_restore_comp_bindings(env, saved)
 		return true
+
+	## 语句节点标识 (消费窗口隔离用) [br]
+	## 按节点身份取值, 循环体同一节点重复执行时天然复用同一窗口 [br]
+	## [param stmt] 语句节点 [br]
+	## [returns] 标识整数
+	func _stmt_key(stmt) -> int:
+		if stmt == null:
+			return 0
+		return stmt.get_instance_id()
+
+	## 生成器创建记忆: 语句重放时按出现次序复用上次创建的生成器 [br]
+	## 否则重放会新建生成器, 丢掉已推进的进度 (导致重复等待/结果错乱) [br]
+	## [param node] 生成器来源表达式节点 [br]
+	## [param gen] 本次新建的生成器 [br]
+	## [returns] 本次应当使用的生成器 (重放轮为上次那个)
+	func _memo_generator(node, gen):
+		if node == null:
+			return gen
+		var skey = _sleep_root_key if _sleep_root_key != 0 else _current_stmt_key
+		var nkey = node.get_instance_id()
+		var occ_map = _gen_occur.get(skey)
+		if occ_map == null:
+			occ_map = {}
+			_gen_occur[skey] = occ_map
+		var occ = int(occ_map.get(nkey, 0))
+		occ_map[nkey] = occ + 1
+		var memo_map = _gen_memo.get(skey)
+		if memo_map == null:
+			memo_map = {}
+			_gen_memo[skey] = memo_map
+		var lst: Array = memo_map.get(nkey, [])
+		if occ < lst.size():
+			return lst[occ]
+		lst.append(gen)
+		memo_map[nkey] = lst
+		return gen
+
+	## 语句正常结束后清理该语句的生成器记忆 [br]
+	## [param stmt] 已完成的语句节点
+	func _clear_gen_memo(stmt) -> void:
+		var key = _sleep_root_key if _sleep_root_key != 0 else _stmt_key(stmt)
+		_gen_memo.erase(key)
+		_gen_occur.erase(key)
+
+	## 语句重放时回退消费窗口: 一次性迭代器的读取游标退回窗口起点, [br]
+	## 消费方重新调用 has_next()/next() 时会重读相同的元素序列 (无需自身感知挂起) [br]
+	## [param stmt] 被重放的语句节点
+	func _reset_read_marks(stmt) -> void:
+		var key = _sleep_root_key if _sleep_root_key != 0 else _stmt_key(stmt)
+		if not _stmt_iterators.has(key):
+			return
+		for it in _stmt_iterators[key]:
+			if it != null and it._win_start >= 0:
+				it._read_pos = it._win_start
+				# 清除上一轮的挂起残留: 从日志重读是正常的消费推进, 不是挂起
+				it.suspended = false
+
+	## 语句正常结束后清理消费窗口登记 [br]
+	## [param stmt] 已完成的语句节点
+	func _clear_stmt_window(stmt) -> void:
+		var key = _sleep_root_key if _sleep_root_key != 0 else _stmt_key(stmt)
+		if not _stmt_iterators.has(key):
+			return
+		for it in _stmt_iterators[key]:
+			if it != null:
+				it._win_start = -1
+				it._win_stmt = 0
+		_stmt_iterators.erase(key)
 
 	## 将迭代元素绑定到推导式子句的目标变量 [br]
 	## 单目标直接绑定, 多目标按序列顺序解包 [br]
@@ -13448,16 +14458,22 @@ class Interpreter:
 			gen.cur_class = function._defining_class
 			if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
 				gen.cur_self = args[0]
-			return gen
+			return _memo_generator(_current_call_node, gen)
 			
 		# 检查 _call_stack 是否有恢复信息 (嵌套函数调用挂起恢复)
 		var saved_env = null
 		var saved_pc = 0
+		var saved_env_taken = {}
 		for j in range(_call_stack.size() - 1, -1, -1):
 			var cs = _call_stack[j]
-			if cs.get("function") == function:
-				saved_env = cs.get("local_env")
+			if cs.get("function") == function and _args_match(cs.get("args", []), args):
+				# 同一函数同一实参可能有多个未完成帧 (递归): 只复用与本次调用「同层」的那个
+				var cand_env = cs.get("local_env")
+				if cand_env != null and saved_env_taken.has(cand_env):
+					continue
+				saved_env = cand_env
 				saved_pc = cs.get("return_pc", 0)
+				saved_env_taken[cand_env] = true
 				_call_stack.remove_at(j)
 				break
 		
@@ -13488,10 +14504,11 @@ class Interpreter:
 		if res == ExecResult.SUSPENDED:
 			# 压入函数调用栈帧
 			var return_pc = 0
-			# 从 _exec_stack 中搜索当前函数体的帧 (嵌套调用时栈顶可能是内层帧)
+			# 从 _exec_stack 中搜索本次调用的函数体帧: 按 (statements, env) 双重身份匹配,
+			# 递归时同名函数体存在多个帧, 只有 env 相同的那一个才是本次调用的帧
 			for j in range(_exec_stack.size() - 1, -1, -1):
 				var f = _exec_stack[j]
-				if f.statements == decl.body:
+				if f.statements == decl.body and f.env == exec_env:
 					return_pc = f.pc
 					break
 			_call_stack.append({
@@ -13499,6 +14516,7 @@ class Interpreter:
 				"return_env": prev_env,
 				"return_pc": return_pc,
 				"local_env": exec_env,
+				"args": args.duplicate(),
 			})
 			_suspended = true
 			return null
@@ -13841,6 +14859,8 @@ class Interpreter:
 				return null
 			while iter.has_next():
 				inner_items.append(iter.next())
+				if iter.suspended:
+					break
 			return assign_from_targets(target.targets, inner_items, env)
 		# StarredTarget 不会出现在这
 		return DSLNone.new()
@@ -13919,7 +14939,9 @@ class Interpreter:
 			while i > stop:
 				arr.append(DSLInteger.new(i))
 				i += step
-		return DSLList.new(arr)
+		var rng_list = DSLList.new(arr)
+		rng_list.is_range = true
+		return rng_list
 		
 	## print(*args, sep, end) - 输出到控制台
 	func builtin_print(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLNone:
@@ -14053,11 +15075,16 @@ class Interpreter:
 				raise_exception("TypeError", "min() arg is not iterable")
 				return null
 			if not iter.has_next():
+				if iter.suspended:
+					# 消费中途挂起: 交由语句重放, 不能当作空序列
+					return null
 				raise_exception("ValueError", "min() arg is an empty sequence")
 				return null
 			min_val = iter.next()
 			while iter.has_next():
 				var item = iter.next()
+				if iter.suspended:
+					break
 				var cmp = min_val.magic_lt([min_val, item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if cmp is DSLBool and not cmp.value:
 					min_val = item
@@ -14094,11 +15121,16 @@ class Interpreter:
 				raise_exception("TypeError", "max() arg is not iterable")
 				return null
 			if not iter.has_next():
+				if iter.suspended:
+					# 消费中途挂起: 交由语句重放, 不能当作空序列
+					return null
 				raise_exception("ValueError", "max() arg is an empty sequence")
 				return null
 			max_val = iter.next()
 			while iter.has_next():
 				var item = iter.next()
+				if iter.suspended:
+					break
 				var cmp = max_val.magic_gt([max_val, item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if cmp is DSLBool and not cmp.value:
 					max_val = item
@@ -14132,6 +15164,8 @@ class Interpreter:
 			return null
 		while iter.has_next():
 			var iv = iter.next()
+			if iter.suspended:
+				break
 			total = total.magic_add([total, iv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		return total
 	
@@ -14183,6 +15217,8 @@ class Interpreter:
 				return null
 			while iter.has_next():
 				items.append(iter.next())
+				if iter.suspended:
+					break
 		var reverse_val = false
 		if _kwargs.has("reverse"):
 			var rv = _kwargs["reverse"]
@@ -14288,6 +15324,8 @@ class Interpreter:
 			var zitems: Array[DSLObject] = []
 			while iter.has_next():
 				zitems.append(iter.next())
+				if iter.suspended:
+					break
 			lists.append(zitems)
 			if zitems.size() < min_len:
 				min_len = zitems.size()
@@ -14328,6 +15366,8 @@ class Interpreter:
 		if iter != null:
 			while iter.has_next():
 				var obj_item = iter.next()
+				if iter.suspended:
+					break
 				if obj_item._wrapped != null:
 					obj_item = obj_item._wrapped
 				if obj_item._dsl_bool():
@@ -14362,6 +15402,8 @@ class Interpreter:
 		if iter != null:
 			while iter.has_next():
 				var obj_item = iter.next()
+				if iter.suspended:
+					break
 				if obj_item._wrapped != null:
 					obj_item = obj_item._wrapped
 				if not obj_item._dsl_bool():
@@ -14565,7 +15607,7 @@ class Interpreter:
 		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
 		obj._dsl_setattr(name, args[2])
 		if obj.last_error != "":
-			raise_exception_from_last_error(obj.last_error)
+			raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 			obj.last_error = ""
 			return null
 		return DSLNone.new()
@@ -14580,7 +15622,7 @@ class Interpreter:
 		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
 		obj._dsl_delattr(name)
 		if obj.last_error != "":
-			raise_exception_from_last_error(obj.last_error)
+			raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 			obj.last_error = ""
 			return null
 		return DSLNone.new()
@@ -14601,6 +15643,8 @@ class Interpreter:
 			var items: Array[DSLObject] = []
 			while it.has_next():
 				items.append(it.next())
+				if it.suspended:
+					break
 			iter_lists.append(items)
 		var count = iter_lists[0].size()
 		if iter_lists.size() > 1:
@@ -14632,6 +15676,8 @@ class Interpreter:
 		var result = DSLList.new()
 		while it.has_next():
 			var item = it.next()
+			if it.suspended:
+				break
 			var keep = false
 			if fn == null or fn is DSLNone:
 				keep = item._dsl_bool()
@@ -14735,6 +15781,8 @@ class Interpreter:
 			return null
 		while it.has_next():
 			var k = it.next()
+			if it.suspended:
+				break
 			d._dsl_setitem(k, default_val)
 		return d
 	
@@ -14817,6 +15865,8 @@ class Interpreter:
 		var items: Array[DSLObject] = []
 		while internal_it.has_next():
 			items.append(internal_it.next())
+			if internal_it.suspended:
+				break
 		var it_obj = DSLList.new(items)
 		it_obj.iter_index = 0
 		return it_obj
@@ -14839,6 +15889,9 @@ class Interpreter:
 				return null
 			if iter.has_next():
 				return iter.next()
+			if iter.suspended:
+				# 消费中途挂起: 交由语句重放, 不能当作已耗尽
+				return null
 		if args.size() == 2:
 			return args[1]
 		if report.has_error:
@@ -14868,6 +15921,10 @@ class Interpreter:
 				return null
 			while it.has_next():
 				lst.items.append(it.next())
+				if it.suspended:
+					break
+				if it.suspended:
+					return null
 		return lst
 	
 	## dict(iterable) - 构造字典
@@ -14886,6 +15943,8 @@ class Interpreter:
 				return null
 			while it.has_next():
 				var pair = it.next()
+				if it.suspended:
+					break
 				if pair is DSLTuple and pair.items.size() == 2:
 					var k = pair.items[0]
 					var v = pair.items[1]
@@ -15091,6 +16150,8 @@ class Interpreter:
 				if it != null:
 					while it.has_next():
 						raw.items.append(it.next())
+						if it.suspended:
+							break
 			return raw
 		var result = DSLList.new()
 		if args.size() >= 2 and not args[1] is DSLNone:
@@ -15101,6 +16162,8 @@ class Interpreter:
 			if it != null:
 				while it.has_next():
 					result.items.append(it.next())
+					if it.suspended:
+						break
 		result.klass = cls
 		return result
 	
@@ -15124,6 +16187,10 @@ class Interpreter:
 				if it != null:
 					while it.has_next():
 						arr.append(it.next())
+						if it.suspended:
+							break
+						if it.suspended:
+							break
 			return DSLTuple.new(arr)
 		if args.size() >= 2 and not args[1] is DSLNone:
 			var arg = args[1]
@@ -15133,6 +16200,8 @@ class Interpreter:
 			if it != null:
 				while it.has_next():
 					arr.append(it.next())
+					if it.suspended:
+						break
 		var result = DSLTuple.new(arr)
 		result.klass = cls
 		return result
@@ -15187,6 +16256,8 @@ class Interpreter:
 					if it != null:
 						while it.has_next():
 							var pair = it.next()
+							if it.suspended:
+								break
 							var k = null
 							var v = null
 							if pair is DSLTuple and pair.items.size() == 2:
@@ -15211,6 +16282,8 @@ class Interpreter:
 				if it != null:
 					while it.has_next():
 						var pair = it.next()
+						if it.suspended:
+							break
 						var k = null
 						var v = null
 						if pair is DSLTuple and pair.items.size() == 2:
@@ -15264,6 +16337,8 @@ class Interpreter:
 				return null
 			while it.has_next():
 				var item = it.next()
+				if it.suspended:
+					break
 				if s._dsl_add(item) == null:
 					raise_exception_from_last_error(s.last_error)
 					return null
@@ -15282,6 +16357,8 @@ class Interpreter:
 				return null
 			while it.has_next():
 				var item = it.next()
+				if it.suspended:
+					break
 				if s._dsl_add(item) == null:
 					raise_exception_from_last_error(s.last_error)
 					return null
@@ -15325,6 +16402,8 @@ class Interpreter:
 			if it != null:
 				while it.has_next():
 					self_obj.items.append(it.next())
+					if it.suspended:
+						break
 		return DSLNone.new()
 	
 	## 内部 API: dict.__init__, 初始化字典 wrapper 的内部数据 [br]
@@ -15351,6 +16430,8 @@ class Interpreter:
 				if it != null:
 					while it.has_next():
 						var pair = it.next()
+						if it.suspended:
+							break
 						var k = null
 						var v = null
 						if pair is DSLTuple and pair.items.size() == 2:
@@ -15398,6 +16479,8 @@ class Interpreter:
 			if it != null:
 				while it.has_next():
 					self_obj.items.append(it.next())
+					if it.suspended:
+						break
 		return DSLNone.new()
 	
 	## 内部 API: 从 DSLInstance wrapper 中提取 _wrapped 字段 [br]
@@ -15571,9 +16654,6 @@ var state: State = State.IDLE
 func request_suspend_sleeping(value: float, on_resume: Callable = Callable()) -> void:
 	if state != State.RUNNING or interpreter == null:
 		return
-	if interpreter._current_generator != null:
-		interpreter.raise_exception("RuntimeError", "sleep() cannot be called inside a generator")
-		return
 	interpreter._suspended = true
 	interpreter._is_waiting = false
 	interpreter._suspend_reason = Interpreter.SuspendReason.SLEEPING
@@ -15592,9 +16672,6 @@ func request_suspend_sleeping(value: float, on_resume: Callable = Callable()) ->
 ## [param on_resume] 可选, 恢复执行前回调 (在 run() 被唤醒后调用)
 func request_suspend_waiting(on_resume: Callable = Callable()) -> void:
 	if state != State.RUNNING or interpreter == null:
-		return
-	if interpreter._current_generator != null:
-		interpreter.raise_exception("RuntimeError", "request_suspend_waiting() cannot be called inside a generator")
 		return
 	interpreter._suspended = true
 	interpreter._is_waiting = true
@@ -15731,7 +16808,10 @@ func run() -> State:
 	state = State.RUNNING
 	interpreter.interpret(statements)
 	
-	if interpreter != null and interpreter._suspended:
+	if interpreter != null and interpreter._had_fatal_error:
+		# 未捕获错误已终止执行: 明确进入 ERROR, 避免停留在挂起态被反复恢复
+		state = State.ERROR
+	elif interpreter != null and interpreter._suspended:
 		if interpreter._is_waiting:
 			state = State.SUSPENDED_WAITING
 		else:

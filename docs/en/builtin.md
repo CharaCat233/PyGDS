@@ -423,16 +423,7 @@ name = input("Enter name: ")
 > [!WARNING]
 > This method always raises an `EOFError` exception.
 
-### `sleep(seconds)`
-
-Mimics Python `time.sleep()`, suspends the current DSL script execution for the specified number of seconds, then automatically resumes
-
-- `seconds`: suspension duration (in seconds), must be a non-negative number
-
-```python
-sleep(1.5)  # Suspend for 1.5 seconds, then automatically resume
-sleep(0.0)  # Resume immediately (no delay)
-```
+> **Changed in v0.5.0-alpha.1**: `sleep()` has moved into the `time` module — use `time.sleep(seconds)` (see the `time` module section below). CPython has no built-in bare `sleep` either.
 
 ### `getattr(obj, name, default=None)`
 
@@ -574,6 +565,7 @@ random.gauss(0, 1)     # a float drawn from N(0, 1)
 ```
 
 > **Note**: PyGDS uses a built-in xorshift32 PRNG, whose value sequence differs from CPython's Mersenne Twister; however `seed()` guarantees reproducible sequences within PyGDS.
+> **Note**: the sampling functions follow CPython. `choice` / `shuffle` take `len(seq)` and index/assign by integer, so a generator raises `TypeError: object of type `generator` has no len()`, a set raises `not subscriptable`, and `shuffle` raises `does not support item assignment` for tuples/strings/`range`; `choice` accepts strings and `range`, and a dict is indexed by key (raising `KeyError` when the key is not in `0..n-1`). `sample` accepts only lists/tuples/strings. The `weights` argument of `choices` only needs to be iterable, so a generator is accepted.
 
 ### `statistics` Module
 
@@ -711,6 +703,48 @@ sorted(pairs, key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 
 > `itemgetter(k1, k2, ...)` / `attrgetter("a", "b")` return callables: a single argument returns one value, several arguments return a tuple of values; `attrgetter` accepts dotted `a.b` paths.
 > `length_hint(obj)` returns 0 when the object has no length information (it never raises).
+
+### `time` Module
+
+Time-related functionality, matching CPython's `time` module. `sleep` is a **cooperative suspension** (the host keeps running while suspended; the game is not blocked).
+
+```python
+import time
+from time import sleep
+
+# Cooperative sleep: suspends for the given seconds, then resumes automatically.
+# The return value is None, matching CPython.
+time.sleep(1.5)
+time.sleep(0)
+
+# Timestamps and monotonic clocks
+time.time()             # current Unix timestamp (seconds, float)
+time.time_ns()          # current Unix timestamp (nanoseconds, int)
+time.monotonic()        # monotonically increasing clock (seconds, unaffected by system clock changes)
+time.monotonic_ns()     # monotonically increasing clock (nanoseconds)
+time.perf_counter()     # performance counter (seconds)
+time.perf_counter_ns()  # performance counter (nanoseconds)
+```
+
+`time.sleep()` works inside comprehensions, generator expressions and generator function bodies (matching CPython):
+
+```python
+import time
+
+[time.sleep(0) for x in range(3)]                       # [None, None, None]
+[x for x in [1, 2, 3] if time.sleep(0)]                 # []
+list(time.sleep(0) for x in range(2))                   # [None, None]
+[v for v in (time.sleep(0) for x in range(2))]          # [None, None]
+
+def counter():
+    for i in range(3):
+        time.sleep(0)
+        yield i
+print(list(counter()))                                  # [0, 1, 2]
+```
+
+- A non-numeric argument raises `TypeError`; a negative one raises `ValueError` (messages match CPython)
+- Supported inside generator function bodies, comprehensions, and nested generators (a generator body iterating another generator), matching CPython
 
 ### `string` Module (String Constants)
 
