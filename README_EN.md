@@ -176,7 +176,7 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
-| P0-1 | Consuming a `sleep`-containing generator in an expression runs side effects repeatedly | Consuming a generator that contains `time.sleep()` inside an **expression** (`print(list(g()))` / `sum(g())` / `sorted(g())` / `max(g())` / `tuple(g())` / `[x for x in g()]` — anything other than a `for` statement) re-creates the generator object when the statement is replayed after suspension, so side effects in the generator body (`append` / `print` / accumulation) run more than once. When the yielded values depend on the mutated state, **the values themselves come out wrong** (`n += 1; yield n` yields `[4, 5]` instead of `[1, 2]`), and the number of real waits is too low. Consumption via a `for` statement is correct, and generators without `sleep` are unaffected. Recorded in the `[Unreleased]` section of `CHANGELOG` as the next release's fix |
+| P0-2 | An eager comprehension's element expression runs repeatedly when it has side effects | When the **element expression itself** of a list/set/dict comprehension has side effects and the iterable is a generator containing `sleep`, the element expression is re-evaluated on statement replay: `seen=[]; print([seen.append(v) or v for v in a()])` yields `seen: [0, 0, 1]` instead of `[0, 1]` (the same applies to side-effecting functions called from it). The printed values are correct, and generator expressions, `for` statements and side-effect-free element expressions are unaffected. See P0-2 in `tests/已知问题清单.md` |
 
 ### P1 — Clear Errors or Missing Features
 

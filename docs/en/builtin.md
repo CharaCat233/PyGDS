@@ -422,8 +422,8 @@ name = input("Enter name: ")
 
 > [!WARNING]
 > This method always raises an `EOFError` exception.
-
-> **Changed in v0.5.0-alpha.1**: `sleep()` has moved into the `time` module — use `time.sleep(seconds)` (see the `time` module section below). CPython has no built-in bare `sleep` either.
+>
+> **Changed in v0.5.0-alpha.2**: `sleep()` has moved into the `time` module — use `time.sleep(seconds)` (see the `time` module section below). CPython has no built-in bare `sleep` either.
 
 ### `getattr(obj, name, default=None)`
 
@@ -565,7 +565,7 @@ random.gauss(0, 1)     # a float drawn from N(0, 1)
 ```
 
 > **Note**: PyGDS uses a built-in xorshift32 PRNG, whose value sequence differs from CPython's Mersenne Twister; however `seed()` guarantees reproducible sequences within PyGDS.
-> **Note**: the sampling functions follow CPython. `choice` / `shuffle` take `len(seq)` and index/assign by integer, so a generator raises `TypeError: object of type `generator` has no len()`, a set raises `not subscriptable`, and `shuffle` raises `does not support item assignment` for tuples/strings/`range`; `choice` accepts strings and `range`, and a dict is indexed by key (raising `KeyError` when the key is not in `0..n-1`). `sample` accepts only lists/tuples/strings. The `weights` argument of `choices` only needs to be iterable, so a generator is accepted.
+> **Note**: the sampling functions follow CPython. `choice` / `shuffle` take `len(seq)` and index/assign by integer, so a generator raises `TypeError: object of type`generator`has no len()`, a set raises `not subscriptable`, and `shuffle` raises `does not support item assignment` for tuples/strings/`range`; `choice` accepts strings and `range`, and a dict is indexed by key (raising `KeyError` when the key is not in `0..n-1`). `sample` accepts only lists/tuples/strings. The `weights` argument of `choices` only needs to be iterable, so a generator is accepted.
 
 ### `statistics` Module
 

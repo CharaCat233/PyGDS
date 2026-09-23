@@ -81,11 +81,11 @@ func _run_all_tests() -> void:
 		# 与 CPython 的阻塞式 sleep 对应, 两侧最终都产出完整输出
 		dsl.run()
 		var pump_count = 0
-		while dsl.state == PyGDS.State.SUSPENDED_SLEEPING and pump_count < 2000:
+		while dsl.state == dsl.State.SUSPENDED_SLEEPING and pump_count < 2000:
 			pump_count += 1
-			dsl.state = PyGDS.State.RUNNING
+			dsl.state = dsl.State.RUNNING
 			dsl.run()
-		if pump_count >= 64:
+		if pump_count >= 2000:
 			printerr("  [WARN] %s: 挂起恢复超过 2000 次, 可能存在循环挂起" % test_name)
 		
 		var actual = dsl.print_output

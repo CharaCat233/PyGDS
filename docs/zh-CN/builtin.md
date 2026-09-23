@@ -422,8 +422,8 @@ name = input("Enter name: ")
 
 > [!WARNING]
 > 该方法始终抛出 `EOFError` 异常
-
-> **v0.5.0-alpha.1 变更**：`sleep()` 已迁移到 `time` 模块，见下文 [`time` 模块](#time-模块) 的 `time.sleep(seconds)`
+>
+> **v0.5.0-alpha.2 变更**：`sleep()` 已迁移到 `time` 模块，见下文 [`time` 模块](#time-模块) 的 `time.sleep(seconds)`
 
 ### `getattr(obj, name, default=None)`
 
@@ -566,8 +566,7 @@ random.randint(1, 6)   # 1..6 内
 ```
 
 > **注意**：PyGDS 使用内置 xorshift32 PRNG，数值序列与 CPython 的 Mersenne Twister **不同**；但 `seed()` 可保证在 PyGDS 内部复现相同序列
-> **说明**：抽样函数的参数类型规则与 CPython 一致——`choice` / `shuffle` 取 `len(seq)` 后按整数下标索引/赋值，因此生成器报 `TypeError: object of type `generator` has no len()`、集合报 `not subscriptable`、`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`，字典按键取（键非 `0..n-1` 时 `KeyError`）；`sample` 仅接受列表/元组/字符串；`choices` 的 `weights` 只需可迭代，可传生成器
-
+> **说明**：抽样函数的参数类型规则与 CPython 一致——`choice` / `shuffle` 取 `len(seq)` 后按整数下标索引/赋值，因此生成器报 `TypeError: object of type`generator`has no len()`、集合报 `not subscriptable`、`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`，字典按键取（键非 `0..n-1` 时 `KeyError`）；`sample` 仅接受列表/元组/字符串；`choices` 的 `weights` 只需可迭代，可传生成器
 
 ### `statistics` 模块
 

@@ -6394,6 +6394,10 @@ class DSLIterator:
 	var _log: Array = []
 	## 已消费位置 (一次性迭代器的读取游标)
 	var _read_pos: int = 0
+	## 已确认取走的最大位置 (高水位) [br]
+	## 语句重放会把 _read_pos 回退到窗口起点以便重读, 但 next() 是「消费」语义:
+	## 重放时必须从高水位继续驱动迭代器, 而不是把已交付过的值再交付一次
+	var _hi_pos: int = 0
 	## 当前消费窗口起点 (语句开始消费时的 _read_pos); 语句重放时游标回退到此 [br]
 	## 使消费方无需感知挂起: 重放时重新调用 has_next()/next() 会自动重读相同序列
 	var _win_start: int = -1
@@ -6745,6 +6749,9 @@ class DSLGeneratorIterator extends DSLIterator:
 			if it == null:
 				interp.raise_exception_from_last_error(iterable_val.last_error if iterable_val.last_error != "" else "TypeError: object is not iterable")
 				return false
+		# 本迭代器是生成器表达式内部状态的一部分: 其进度由帧栈保存,
+		# 外层语句重放时不得回退它的读取游标 (否则同一元素会被重复产出)
+		it.windowed = false
 		_frames.append({"clause": clause, "iterator": it, "bound": false, "saved": [], "phase": "start", "cond_idx": 0})
 		return true
 
@@ -6888,6 +6895,8 @@ class DSLFunctionGeneratorIterator extends DSLIterator:
 		if _read_pos < _log.size():
 			var buffered = _log[_read_pos]
 			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
 			return buffered
 		if done:
 			return null
@@ -6898,6 +6907,8 @@ class DSLFunctionGeneratorIterator extends DSLIterator:
 		if v == null:
 			return null
 		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
 		return v
 
 	## 推进一步生成器: 产出值记入日志; 挂起时置 suspended 由消费方传播 [br]
@@ -10315,7 +10326,17 @@ class Interpreter:
 		if secs < 0:
 			raise_exception("ValueError", "sleep length must be non-negative")
 			return null
-		# 语句重放时的睡眠去重:
+		# 生成器步内部的 sleep: 生成器对象会被复用, 其进度由自身挂起状态保证,
+		# 因此这里遇到的每个 sleep 都是「首次遇到」, 必须真正等待
+		# (若按重放序号跳过, 会把生成器后续元素的等待错误地吃掉)
+		if _current_generator != null:
+			_suspended = true
+			_is_waiting = false
+			_suspend_reason = SuspendReason.SLEEPING
+			if owner != null:
+				owner.request_suspend_sleeping(secs)
+			return get_none()
+		# 语句级重放时的睡眠去重 (仅适用于语句自身表达式内的 sleep):
 		# 同一轮重放内按遇到次序编号, 序号小于「已等待数」的睡眠立即返回 (已完成等待, 不重复等待)
 		# 其余睡眠真正发起等待, 并在挂起时把本轮已等待数累加进 _sleep_skip, 供后续轮次跳过
 		var sleep_idx = _sleep_seq
@@ -12470,8 +12491,12 @@ class Interpreter:
 			# 否则会泄漏到后续语句 (例如让下一个 if 跳过条件求值)
 			if res != ExecResult.SUSPENDED:
 				frame.resume_info = {}
-				_clear_stmt_window(stmt)
-				_clear_gen_memo(stmt)
+				# 消费窗口与生成器记忆都以「重放根语句」为键: 重放根语句执行期间,
+				# 其内部语句正常结束不得清空它们 (否则重放时生成器会被重新创建,
+				# 导致生成器体重复执行); 只有根语句自身完成才结束本轮
+				if _sleep_root_key == 0 or _stmt_key(stmt) == _sleep_root_key:
+					_clear_stmt_window(stmt)
+					_clear_gen_memo(stmt)
 				if _stmt_key(stmt) == _sleep_root_key:
 					_sleep_seq = 0
 					_sleep_skip = 0
@@ -12499,7 +12524,9 @@ class Interpreter:
 					# yield 挂起由生成器自身状态推进, 回退游标会导致元素重复
 					if _suspend_reason != SuspendReason.YIELD:
 						_reset_read_marks(stmt)
-						_gen_occur.erase(_stmt_key(stmt))
+						# 出现次序须按「重放根语句」的键归零 (与 _memo_generator 取值一致):
+						# 若按当前语句键清除, 生成器记忆会读到未归零的旧序号而错误换用新对象
+						_gen_occur.erase(_sleep_root_key if _sleep_root_key != 0 else _stmt_key(stmt))
 				environment = prev_env
 				return ExecResult.SUSPENDED
 			if res == ExecResult.ERROR and last_exception != null:
@@ -12678,10 +12705,10 @@ class Interpreter:
 				if iterator == null:
 					raise_exception_from_last_error(iterable.last_error if iterable.last_error else "TypeError: object is not iterable")
 					return ExecResult.RAISE
-				# 生成器体内部的 for: 迭代器不参与语句消费窗口
-				# 生成器自身保存的挂起状态已保证推进正确, 叠加窗口会在重放时重复产出
-				if _current_generator != null:
-					iterator.windowed = false
+				# for 语句的迭代器不参与语句消费窗口: 循环自身的进度由 resume_info
+				# 保存的迭代器对象与循环变量维护, 重放时由本分支重新推进;
+				# 若叠加窗口, 重放会把游标退回窗口起点, 使已交付的元素被再次产出
+				iterator.windowed = false
 			
 			var first_iter = true
 			while true:
@@ -13316,10 +13343,13 @@ class Interpreter:
 				return evaluate(expr.false_expr)
 				
 		if expr is Call:
+			# _current_call_node 在本 Call 求值期间保持为自身节点, 供 call_user_function 复用生成器对象;
+			# 求值结束后恢复调用方的节点 (嵌套调用互不干扰)
+			var prev_call_node = _current_call_node
 			_current_call_node = expr
 			var callee = evaluate(expr.callee_expr)
 			if callee == null:
-				_current_call_node = null
+				_current_call_node = prev_call_node
 				return null
 			var pos_args: Array[DSLObject] = []
 			for a in expr.arguments:
@@ -13358,51 +13388,9 @@ class Interpreter:
 				else:
 					raise_exception("TypeError", "argument after ** must be a mapping")
 					return null
-			_current_call_node = null
-			if callee is DSLMethod:
-				var result = callee.magic_call(pos_args, kw_dict)
-				if _suspended:
-					return null
-				return result
-			elif callee is DSLFunction:
-				var result = call_user_function(callee, pos_args, kw_dict)
-				if _suspended:
-					return null
-				return result
-			elif callee is DSLClass:
-				var result = callee.magic_call(pos_args, kw_dict)
-				if _suspended:
-					return null
-				if report.has_error:
-					# 构造/调用过程中抛出异常: 结果是半成品, 不能当作成功值返回,
-					# 否则实参求值会带着它继续 (如 print(list(gen)) 会多输出部分列表)
-					return null
-				return result
-			else:
-				var result = callee.magic_call(pos_args, kw_dict)
-				if _suspended:
-					# 消费中途挂起 (需重放) 返回 null, 独立调用 (已完成副作用) 返回 None 使语句被跳过
-					return null if _needs_replay else DSLNone.new()
-				if report.has_error:
-					return null
-				# Check for errors from builtin methods (which set last_error on the proto)
-				if callee is DSLBuiltinFunction:
-					var proto = callee.callback.get_object()
-					if proto is DSLObject and proto.last_error != "":
-						raise_exception_from_last_error(proto.last_error, proto.last_error_args)
-						proto.last_error = ""
-						return null
-					# 部分方法把错误记在接收者实例上 (如 dict.popitem / set.remove / set.pop):
-					# 同样须转为异常, 否则错误被吞掉、调用静默返回 None
-					var recv = callee.__self__
-					if recv is DSLObject and recv.last_error != "":
-						var recv_err = recv.last_error
-						var recv_args: Array[DSLObject] = recv.last_error_args
-						recv.last_error = ""
-						recv.last_error_args.clear()
-						raise_exception_from_last_error(recv_err, recv_args)
-						return null
-				return result
+			var call_result = _dispatch_call(callee, pos_args, kw_dict)
+			_current_call_node = prev_call_node
+			return call_result
 			
 		if expr is GetItem:
 			var obj = evaluate(expr.object)
@@ -13804,7 +13792,13 @@ class Interpreter:
 		if node == null:
 			return gen
 		var skey = _sleep_root_key if _sleep_root_key != 0 else _current_stmt_key
-		var nkey = node.get_instance_id()
+		# 记忆键除节点外还须带上「当前正在执行的生成器」:
+		# 同一节点在不同生成器实例体内求值属于不同的逻辑求值。
+		# 例如 [[y for y in b()] for _ in range(2)] 中, 外层推导式第二轮会新建 b,
+		# 新 b 体内调用 a() 必须得到新的 a, 而不能复用上轮已耗尽的 a
+		var nkey: String = str(node.get_instance_id())
+		if _current_generator != null:
+			nkey += "_" + str(_current_generator.get_instance_id())
 		var occ_map = _gen_occur.get(skey)
 		if occ_map == null:
 			occ_map = {}
@@ -14273,6 +14267,58 @@ class Interpreter:
 			if mant.ends_with("."):
 				mant = mant.substr(0, mant.length() - 1)
 		return mant + e_part
+
+	## 按被调用对象类型分派一次函数调用 [br]
+	## 从 evaluate 的 Call 分支抽出, 使 _current_call_node 的生命周期可在单一位置收束 [br]
+	## 调用期间 _current_call_node 保持为本次 Call 节点, 使 call_user_function 能复用生成器对象 [br]
+	## [param callee] 被调用对象 (方法/函数/类/内置等) [br]
+	## [param pos_args] 位置实参 [br]
+	## [param kw_dict] 关键字实参 [br]
+	## [returns] 调用结果; 挂起/出错时返回 null
+	func _dispatch_call(callee, pos_args: Array[DSLObject], kw_dict: Dictionary[String, DSLObject]) -> DSLObject:
+		if callee is DSLMethod:
+			var result = callee.magic_call(pos_args, kw_dict)
+			if _suspended:
+				return null
+			return result
+		if callee is DSLFunction:
+			var result = call_user_function(callee, pos_args, kw_dict)
+			if _suspended:
+				return null
+			return result
+		if callee is DSLClass:
+			var result = callee.magic_call(pos_args, kw_dict)
+			if _suspended:
+				return null
+			if report.has_error:
+				# 构造/调用过程中抛出异常: 结果是半成品, 不能当作成功值返回,
+				# 否则实参求值会带着它继续 (如 print(list(gen)) 会多输出部分列表)
+				return null
+			return result
+		var result = callee.magic_call(pos_args, kw_dict)
+		if _suspended:
+			# 消费中途挂起 (需重放) 返回 null, 独立调用 (已完成副作用) 返回 None 使语句被跳过
+			return null if _needs_replay else DSLNone.new()
+		if report.has_error:
+			return null
+		# Check for errors from builtin methods (which set last_error on the proto)
+		if callee is DSLBuiltinFunction:
+			var proto = callee.callback.get_object()
+			if proto is DSLObject and proto.last_error != "":
+				raise_exception_from_last_error(proto.last_error, proto.last_error_args)
+				proto.last_error = ""
+				return null
+			# 部分方法把错误记在接收者实例上 (如 dict.popitem / set.remove / set.pop):
+			# 同样须转为异常, 否则错误被吞掉、调用静默返回 None
+			var recv = callee.__self__
+			if recv is DSLObject and recv.last_error != "":
+				var recv_err = recv.last_error
+				var recv_args: Array[DSLObject] = recv.last_error_args
+				recv.last_error = ""
+				recv.last_error_args.clear()
+				raise_exception_from_last_error(recv_err, recv_args)
+				return null
+		return result
 
 	## 调用用户自定义函数 [br]
 	## [param function] DSLFunction 对象 [br]
@@ -15887,6 +15933,10 @@ class Interpreter:
 			if iter == null:
 				raise_exception("TypeError", "object is not an iterator")
 				return null
+			# next() 是消费语义: 语句重放时游标可能被回退到窗口起点,
+			# 此处推进到已确认取走的位置, 避免把交付过的值再交付一次
+			if iter._read_pos < iter._hi_pos:
+				iter._read_pos = iter._hi_pos
 			if iter.has_next():
 				return iter.next()
 			if iter.suspended:
