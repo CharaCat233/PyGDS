@@ -116,7 +116,7 @@ dsl.run()
 | 类定义 | ✅ 完整 | 含继承、方法覆写、实例属性 |
 | 静态方法 | ✅ 完整 | `@staticmethod` 装饰器 |
 | 类方法 | ✅ 完整 | `@classmethod` 装饰器 |
-| 异常处理 | ✅ 完整 | 含 `try`/`except`/`finally`/`raise`、自定义异常类 |
+| 异常处理 | ✅ 完整 | 含 `try`/`except`/`else`/`finally`/`raise`、自定义异常类 |
 | `is` / `is not` | ✅ 完整 | 身份运算符 |
 | `id()` | ✅ 完整 | 对象标识符 |
 | `global`/`nonlocal` | ✅ 完整 | 变量作用域声明 |
@@ -129,7 +129,7 @@ dsl.run()
 | 赋值表达式 (`:=`) | ✅ 完整 | `if (n := len(a)) > 5:`、`while chunk := read():`、推导式内绑定到外层作用域（Python 3.8+）；与 CPython 一致地拒绝「重绑定推导式循环变量」与「出现在推导式可迭代表达式内」两种写法 |
 | `slice` | ✅ 完整 | `slice(start, stop[, step])` 对象，可复用索引 `lst[slice(...)]` |
 | 增强赋值 | ✅ 完整 | `+=`, `-=`, `*=`, `/=` 等 |
-| 下标访问 | ✅ 完整 | `obj[key]` 含 `getitem`/`setitem` |
+| 下标访问 | ✅ 完整 | `obj[key]` 含 `getitem`/`setitem`；切片赋值/删除 `a[1:3] = [9]` / `del a[1:3]` |
 | 属性访问 | ✅ 完整 | `obj.attr` 含 `getattr`/`setattr` |
 | 方法类型系统 | ✅ 完整 | 六种类型严格对标 CPython |
 | Descriptor 协议 | ✅ 完整 | `__get__` 实现类级/实例级绑定 |
@@ -138,7 +138,7 @@ dsl.run()
 | f-string | ✅ 完整 | `f"value: {x:.2f}"`，含格式说明符、转换标志、`=` 调试符与嵌套格式宽度 |
 | lambda | ✅ 完整 | 匿名函数，支持默认参数与闭包 |
 | `super()` | ✅ 完整 | 单继承下调用父类方法/构造函数 |
-| `getattr`/`setattr`/`delattr` | ✅ 完整 | 内置反射函数 |
+| `getattr`/`setattr`/`delattr`/`hasattr` | ✅ 完整 | 内置反射函数 |
 | `map()`/`filter()` | ✅ 完整 | 内置函数式工具 |
 | 运行时错误行号 | ✅ 完整 | 未捕获异常附带 `(line N)` |
 | 数字字面量 | ✅ 完整 | `0x1F` / `0o17` / `0b101` / `1_000_000` / `1e5`；`int("ff", 16)` 按进制解析 |
@@ -181,11 +181,11 @@ dsl.run()
 
 ### P0 — 静默错值
 
-当前无已知的 P0 级问题，详见 `CHANGELOG` 对应版本节
+v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节
 
 ### P1 — 明确报错或功能缺失
 
-下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 **v0.5.0-alpha.3 ~ v0.5.0-alpha.5** 修复，详见 `CHANGELOG` 的对应版本节；此处仅保留仍未支持项
+下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
@@ -193,14 +193,22 @@ dsl.run()
 | P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
 | P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
 | P1-10 | `match` / `case` 结构化模式匹配不支持 | 延后至 v0.6.0 |
-| P1-13 | `yield` 恢复时前缀子表达式可能重复求值 | 已在 v0.5.0-alpha.3 修复常见形态（按节点 + 出现次序记忆），v0.5.0-alpha.4 修复同族迭代上限，v0.5.0-alpha.5 修复「同一语句内普通 `yield` 与 `yield from` 交替」的重复产出 |
+| P1-13 | `yield` 恢复时前缀子表达式可能重复求值 | 已在 v0.5.0-alpha.3 修复常见形态（按节点 + 出现次序记忆），v0.5.0-alpha.4 修复同族迭代上限，v0.5.0-alpha.5 修复「同一语句内普通 `yield` 与 `yield from` 交替」的重复产出。残留：同一语句内多个「结构等值」的调用仍会互相认错帧（取值与等待次数正确，副作用条数偏多），彻底解决需要表达式级续延 |
 
 ### P2 — 边缘差异
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
-| P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案已在 **v0.5.0-alpha.4** 对齐；语句尾部冗余 Token 的静默忽略已在 **v0.5.0-alpha.5** 修复（现报 `SyntaxError`）。其余解析期错误的措辞与行号格式仍可能不同 |
+| P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案与「语句尾部冗余 Token」已对齐；括号未闭合的文案已在 **v0.5.0-alpha.6** 对齐（`'(' was never closed`）。其余解析期错误的措辞与行号格式仍可能不同（如缺冒号、未结束字符串） |
+| P2-4 | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致 |
+
+### 平台限制
+
+| 限制 | 说明 |
+| :--- | :--- |
+| str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
+| `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号约 200 条（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
 
 ---
 

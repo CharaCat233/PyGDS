@@ -6,6 +6,48 @@
 
 当前无待发布条目。其余已知问题与功能缺口见 README 的「已知问题与限制」章节，或在仓库 `tests/已知问题清单.md` 查看带复现脚本的完整清单
 
+## [0.5.0-alpha.6] - 2026-09-24
+
+本版完成「可修复集 21 条」的清账（P0-3 ~ P0-12、P1-19 ~ P1-29），差分审计脚本（45 例）在可修复集上归零，剩余分歧全部为既定不对齐项（P2 类文案差异与 `random` / 哈希数值的稳定化差异）
+
+### 新增
+
+- **括号内换行（隐式续行）与反斜杠续行（P1-19）**：跨行的括号表达式、列表/字典/集合字面量、函数调用实参此前报 `Unexpected token '<newline>'`，现与 CPython 一致；行尾 `\` 吞掉换行继续同一逻辑行，`print(1, 2,)` 等调用实参尾随逗号也一并支持；括号未闭合到文件末尾时按 CPython 报 `SyntaxError: '(' was never closed`（文案对齐）
+- **`try` / `else` 子句（P1-21）**：`else` 体在 try 体正常结束时执行（`return` / `break` / `continue` 跳出时不执行）；else 体抛出的异常不被同一 try 的 `except` 捕获；`finally` 与挂起恢复（`try_stage` 新增 `"else"` 阶段）均正确组合
+- **用户类 `__getitem__` / `__setitem__` / `__delitem__`（P1-24）**：此前报 `'C' object is not subscriptable`（或在解析期拒绝 `C()[1] = 'x'`），现在三个下标协议均桥接到用户方法（与 `__len__` 同一桥接模式），方法内 `raise` 的异常正确传播；`D()[2] = 1` 等以「调用结果」为目标的下标赋值也正确解析
+- **用户类 `__int__` / `__float__`（P1-25）**：`int(C())` / `float(C())` 此前报 `TypeError`，现在按 CPython 调用用户方法并校验返回类型（`__int__` 返回非 int 报 `__int__ returned non-int (type X)`）；顺带支持 `__index__`
+- **真正的序列迭代器（P0-12 / P1-28）**：`iter()` 对 list / tuple / str / range / dict / set 返回一等迭代器对象——持有原容器引用（活动视图，`lst.append(3)` 后迭代能取到新元素）、耗尽后再迭代为空、`iter(it)` 返回自身；类型名与 CPython 对齐（`list_iterator` / `tuple_iterator` / `str_ascii_iterator`（纯 ASCII 字符串）/ `str_iterator` / `range_iterator` / `dict_keyiterator` / `set_iterator`，均已注册供 `type()` 与 `isinstance` 判定），`repr` 为 `<list_iterator object>` 形式
+- **`hasattr` 内置函数（P1-29）**：按 try-getattr 语义实现，属性不存在返回 `False`；非 `AttributeError` 的错误原样传播不吞掉。同时修正类对象属性查找失败的行为——`getattr(cls, name)` 此前静默返回 `None`，现在按 CPython 报 `AttributeError: type object 'X' has no attribute 'Y'`（`getattr` 的默认值参数不受影响）
+
+### 修复
+
+- **嵌套容器的相等判定失效（P0-3，回归修复）**：涉及「容器套容器」的相等、成员判定、`index` / `count` / `remove` 全部失效且不报错（`[[1]] == [[1]]` 得 `False`、`(2, 'b') in [(1, 'a'), (2, 'b')]` 得 `False`）。这是 v0.5.0 线内唯一的严重性退步：v0.4.0 / alpha.2 此处报 `RuntimeError`（大声失败），alpha.3 为接入用户类 `__eq__` 时改为静默错值。现给 `DSLList` / `DSLTuple` / `DSLDict` 补齐 `_dsl_eq`（逐元素递归值比较，字典按键集合与对应值比较）
+- **负数整除与取模语义错误（P0-4）**：Godot 对 int 的 `/` 向零截断、`%` 符号跟随被除数（C 语义），导致 `-7 // 2` 得 `-3`、`-7 % 2` 得 `-1`。现按 CPython 规则修正：整数 `//` 向负无穷取整、整数 `%` 符号跟随除数、float 的 `%` 改用 `a - b * floor(a / b)`、`divmod` 复用修正后的两者；`bool` 作为 `int` 子类同步修正。大整数（`-(2**62)` 量级）不丢精度
+- **字面量转义序列未解码（P0-5）**：`\xNN` / `\NNN` / `\uNNNN` / `\UXXXXXXXX` / `\N{名称}` 此前原样保留（`len('\x41')` 得 4）。现全部解码；`\a` `\b` `\f` `\v` 补齐；字符串内反斜杠续行（`\` + 换行）生效；非法转义（`\xZZ` / `\x4` / `\u12`）报 `SyntaxError`；未识别转义（`\8` / `\p`）按 CPython 原样保留。bytes 语义与 CPython 一致：`b'\u4e2d'` / `b'\N{...}'` 原样保留、`b'\400'` 等八进制溢出截断为单字节、`b'\x00'` 支持 NUL 字节。`\N{名称}` 支持内置名称表（ASCII 全名与常用符号约 200 条；Godot 无 Unicode 名称库，表外名称报 `SyntaxError`，支持范围已在文档如实标注）。受 Godot 的 String 无法保存 NUL 的平台限制，str 字面量解码出 NUL 时报 `SyntaxError`（明确报错优于静默替换字符），bytes 侧不受影响
+- **`sorted` / `min` / `max` 对元组与列表元素静默错序（P0-6 / P1-26）**：`DSLTuple` / `DSLList` 未实现 `magic_lt` 等，比较失败被静默当作 false，排序退化为原序。现实现字典序比较（首个不等元素定序、前缀短者更小），`list` 与 `tuple` 互比按 CPython 报 `TypeError`；`sorted` / `list.sort` / `min` / `max` 的比较失败改为**抛出 `TypeError`**（不再静默返回），错误文案跟随外层运算符
+- **`min` / `max` 忽略 `key` 参数（P0-7）**：`max([1,2,3], key=lambda x: -x)` 此前得 `3`，现在按 CPython 用 key 值比较、返回原对象（每个候选只求值一次 key，并列时保留先出现者）；`min` / `max` 的多参数形式同样支持 `key`
+- **`del` 的切片目标静默不生效（P0-8 / P1-22）**：`del a[1:3]` 此前既不删除也不报错。现支持切片删除（含 `del a[::2]` 扩展切片、负索引、越界区间）与**切片赋值**（`a[1:3] = [9]` 长度可变替换；扩展切片要求等长，否则报 `ValueError: attempt to assign sequence of size N to extended slice of size M`；右侧非可迭代报 `TypeError: must assign iterable to extended slice`；步长为 0 报 `ValueError: slice step cannot be zero`）；`del` 的未支持下标类型改为明确报 `TypeError`（不再静默通过）
+- **`repr(None)` 返回 `<NoneType object>`（P0-9）**：现返回 `None`（`DSLNone` 补 `magic_repr`）；顺带补齐 `None` 的相等判定——`list.remove(x)` 等内置方法返回的 `None` 与 `None` 字面量按值相等（此前不同 `DSLNone` 实例引用比较为不等）
+- **`chr()` 与 `%c` 越界不报错（P0-10）**：越界码点此前静默产出替换字符（或返回 `None`）。现按 CPython 校验：`chr()` 越界报 `ValueError: chr() arg not in range(0x110000)`，`%c` 越界报 `OverflowError: %c arg not in range(0x110000)`
+- **`format` 千位分隔符被静默忽略（P0-11）**：`'{:,}'.format(1234567)` 此前不做分组。现实现 CPython 分组规则：十进制每 3 位；`_` 用于二进制/八进制/十六进制按 4 位分组；`,` 与 `_` 同时出现报 `ValueError: Cannot specify both ',' and '_'.`；`,` 与 `x/X/o/b` 同用报 `Cannot specify ',' with 'x'.`；与宽度/对齐/符号/`#` 前缀正确组合；f-string 的格式说明符（`f"{x:,}"`）同步支持
+- **`None` 不能作字典键（P1-27）**：`{None: 1}` 此前报 `TypeError: unhashable type: NoneType`。现补 `DSLNone` 键编码（与集合键的 `"n"` 约定一致）；字符串键内部编码加 `s:` 前缀以与哨兵值区分（`{None: 1} == {'n': 1}` 正确为 `False`）
+- **单行复合语句只支持表达式语句（P1-20）**：`if True: pass`、`def f(): return 1`、`class C: pass`、`try: pass`、`if True: import math` 等此前报 `Unexpected token`，现单行体支持全部语句类型
+- **生成器表达式元素为元组时解析失败（P1-23）**：`list((x, y) for x in range(2))` 此前报 `SyntaxError: invalid syntax`，现正确解析（`for` 前的元组不再被拒绝）；同时按 CPython 规则收窄裸 genexpr 实参——`f(1, x for x in it)` / `f(x for x in it, 1)` 报 `SyntaxError: Generator expression must be parenthesized`
+- **`dict(**kwargs)` 忽略关键字实参**：`dict(**{'x': 5})` 此前返回空字典（`api_dict_new` 未处理 kwargs），现正确并入；`dict` 子类（如 `Counter(**{...})`）同步修复
+
+### 变更
+
+- **`sorted` / `list.sort` / `min` / `max` 的比较失败从静默改为报错**：此前元素不可比较（如 `[1, 'a']`）时排序静默返回原序、`min` / `max` 静默返回取决于输入顺序的结果；现在统一抛 `TypeError: '<' not supported between instances of 'X' and 'Y'`。此前依赖「比较失败即跳过」的代码会开始报错——这正是「要么正确，要么明确报错」立场的落实
+- **类对象的 `repr` 对用户类带模块前缀**：`print(C)` 现输出 `<class '__main__.C'>`（此前 `<class 'C'>`），与 CPython 一致；内建类型（`int` 等）不变
+- **类对象属性查找失败改为报 `AttributeError`**：`getattr(cls, 'nope')` 此前静默返回 `None`，现在抛 `AttributeError`（`getattr` 的默认值形式不受影响）
+- **字典键的内部编码调整**：字符串键在内部以 `s:` 前缀存储（配合 None 键的引入）；对脚本层不可见，键的顺序、取值、遍历行为均不变
+
+### 测试
+
+- 新增 18 个行为一致性测试：`lang_line_cont`（括号内换行/反斜杠续行/尾随逗号）/ `err_paren_unclosed`（括号未闭合）/ `lang_nested_eq`（嵌套容器相等）/ `lang_seq_compare`（字典序比较与 min/max key、排序报错）/ `lang_floordiv_mod`（负数整除取模与 divmod）/ `lang_escape`（str/bytes 转义解码与原始字符串）/ `lang_slice_assign`（切片赋值删除）/ `lang_one_line_stmt`（单行复合语句）/ `lang_try_else`（try/else）/ `lang_genexpr_tuple`（genexpr 元组元素）/ `lang_dunder_item`（下标协议）/ `lang_dunder_conv`（int/float 转换协议）/ `lang_iter_type`（真迭代器与类型名）/ `lang_none_key`（None 字典键）/ `lang_hasattr`（hasattr）/ `lang_repr_none`（repr(None)）/ `lang_chr_range`（chr/%c 越界）/ `lang_fmt_thousands`（千位分隔符），并入 `expected.json`（共 176 个用例全部通过，既有条目零变更），挂起测试 22 个用例通过
+- 差分审计（`tests/mk_audit_cases.py` 生成 45 例 + `tests/diff_one.py` 比对）：可修复集 21 条全部分歧归零，剩余 3 条均为既定不对齐项（缺冒号与未结束字符串的解析期文案属 P2-2；`hash(None)` 数值属 PyGDS 稳定哈希与 CPython 进程相关哈希的既定差异）
+- `test.py` 的期望值生成修正：此前只要 stderr 有输出就以其最后一行覆盖期望值，导致带 `SyntaxWarning` 的合法脚本（转义测试）期望值被警告文本污染；现仅在脚本以非零状态退出（解析失败）时取 stderr
+
 ## [0.5.0-alpha.5] - 2026-09-23
 
 本版修复 `[0.5.0-alpha.3]` 记录的 P0-2（最后一个 P0 级问题），并清理排查中发现的同族缺陷

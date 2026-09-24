@@ -116,7 +116,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Class Definitions | ✅ Full | Inheritance, method overrides, instance attributes |
 | Static Methods | ✅ Full | `@staticmethod` decorator |
 | Class Methods | ✅ Full | `@classmethod` decorator |
-| Exception Handling | ✅ Full | `try`/`except`/`finally`/`raise`, custom exception classes |
+| Exception Handling | ✅ Full | `try`/`except`/`else`/`finally`/`raise` with custom exception classes |
 | `is` / `is not` | ✅ Full | Identity operators |
 | `id()` | ✅ Full | Object identifiers |
 | `global`/`nonlocal` | ✅ Full | Variable scope declarations |
@@ -129,7 +129,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Assignment expressions (`:=`) | ✅ Full | `if (n := len(a)) > 5:`, `while chunk := read():`, binds to the enclosing scope inside comprehensions (Python 3.8+); matching CPython, both "rebinding a comprehension iteration variable" and "appearing in a comprehension iterable expression" are rejected |
 | `slice` | ✅ Full | `slice(start, stop[, step])` object, reusable indexing `lst[slice(...)]` |
 | Augmented Assignment | ✅ Full | `+=`, `-=`, `*=`, `/=`, etc. |
-| Subscript Access | ✅ Full | `obj[key]` with `getitem`/`setitem` |
+| Subscript Access | ✅ Full | `obj[key]` with `getitem`/`setitem`; slice assignment/deletion `a[1:3] = [9]` / `del a[1:3]` |
 | Attribute Access | ✅ Full | `obj.attr` with `getattr`/`setattr` |
 | Method Type System | ✅ Full | 7 types strictly matching CPython |
 | Descriptor Protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
@@ -138,7 +138,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers, conversion flags, `=` debug specifier and nested format widths |
 | lambda | ✅ Full | Anonymous functions with default arguments and closures |
 | `super()` | ✅ Full | Call parent methods/constructors under single inheritance |
-| `getattr`/`setattr`/`delattr` | ✅ Full | Built-in reflection functions |
+| `getattr`/`setattr`/`delattr`/`hasattr` | ✅ Full | Built-in reflection functions |
 | `map()`/`filter()` | ✅ Full | Built-in functional tools |
 | Runtime error line numbers | ✅ Full | Uncaught exceptions include `(line N)` |
 | Number literals | ✅ Full | `0x1F` / `0o17` / `0b101` / `1_000_000` / `1e5`; `int("ff", 16)` parses in a base |
@@ -181,11 +181,11 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 ### P0 — Silent Wrong Values
 
-No known P0 issues remain (see the corresponding `CHANGELOG` sections).
+The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`
 
 ### P1 — Clear Errors or Missing Features
 
-Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in **v0.5.0-alpha.3 to v0.5.0-alpha.5** (see the corresponding sections of `CHANGELOG`); only the still-unsupported ones are listed here.
+Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3 to v0.5.0-alpha.5; P1-19 to P1-29 found by the same audit (implicit line continuation inside brackets, one-line compound statements, `try`/`else`, slice assignment, genexpr tuple elements, user-class subscript and conversion protocols, sequence ordering comparisons, `None` as a dict key, the `iter()` type name, and `hasattr`) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
@@ -193,14 +193,22 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in **v0.5.0-alpha
 | P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
 | P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`). As reserved words, misuse of `async` / `await` now raises `SyntaxError` matching CPython |
 | P1-10 | `match` / `case` structural pattern matching unsupported | Deferred to v0.6.0 |
-| P1-13 | `yield` resumption may re-evaluate prefix subexpressions | Common forms fixed in v0.5.0-alpha.3 (memoised by node + occurrence); the iteration-cap issue of the same family was fixed in v0.5.0-alpha.4, and repeated yields when a plain `yield` and a `yield from` alternate in one statement were fixed in v0.5.0-alpha.5 |
+| P1-13 | `yield` resumption may re-evaluate prefix subexpressions | Common forms fixed in v0.5.0-alpha.3 (memoised by node + occurrence); the iteration-cap issue of the same family was fixed in v0.5.0-alpha.4, and repeated yields when a plain `yield` and a `yield from` alternate in one statement were fixed in v0.5.0-alpha.5. Remaining: several structurally equal calls in one statement can still be mistaken for each other (values and wait counts are correct; only the side-effect count is too high), which needs expression-level continuations to resolve fully |
 
 ### P2 — Edge Differences
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
 | P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
-| P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` were aligned with CPython in **v0.5.0-alpha.4**; trailing redundant tokens were silently ignored and now raise `SyntaxError` as of **v0.5.0-alpha.5**. Wording and line-number formatting of other parse-time errors may still differ |
+| P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` and for trailing redundant tokens are aligned; the unclosed-bracket message was aligned in **v0.5.0-alpha.6** (`'(' was never closed`). Wording and line-number formatting of other parse-time errors may still differ (e.g. a missing colon, an unterminated string) |
+| P2-4 | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match |
+
+### Platform Limitations
+
+| Limitation | Details |
+| :--- | :--- |
+| str literals cannot contain NUL | Godot's String cannot store U+0000 (it would be replaced with U+FFFD), so `'\x00'` / `'\0'` str escapes raise `SyntaxError` at decode time; bytes are unaffected (`b'\x00'` works) |
+| `\N{...}` supports only the built-in name table | Godot has no Unicode name database; PyGDS ships about 200 names covering printable ASCII full names and common symbols (e.g. `\N{BULLET}',`\N{LATIN CAPITAL LETTER A}'). Names outside the table raise `SyntaxError: unknown Unicode character name` matching CPython's behaviour for unknown names |
 
 ---
 

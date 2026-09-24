@@ -1,6 +1,6 @@
 # Exception System
 
-PyGDS implements an exception handling mechanism highly consistent with Python, including `raise`, `try/except`, exception inheritance hierarchy, and custom exception classes.
+PyGDS implements an exception handling mechanism highly consistent with Python, including `raise`, `try/except/else/finally`, exception inheritance hierarchy, and custom exception classes.
 
 ---
 

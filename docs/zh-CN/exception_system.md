@@ -1,6 +1,6 @@
 # 异常系统
 
-PyGDS 实现了与 Python 高度一致的异常处理机制，包括 `raise`、`try/except`、异常继承体系以及自定义异常类
+PyGDS 实现了与 Python 高度一致的异常处理机制，包括 `raise`、`try/except/else/finally`、异常继承体系以及自定义异常类
 
 ---
 

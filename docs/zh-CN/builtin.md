@@ -319,10 +319,14 @@ list(enumerate(["a", "b"]))  # [(0, "a"), (1, "b")]
 
 ### `iter(iterable)`
 
-对应 Python `iter()`，返回对象的迭代器
+对应 Python `iter()`，返回对象的迭代器。对 `list` / `tuple` / `str` / `range` / `dict` / `set` 返回真正的一等迭代器对象（类型名为 `list_iterator` / `tuple_iterator` / `str_ascii_iterator`（纯 ASCII 字符串）/ `str_iterator` / `range_iterator` / `dict_keyiterator` / `set_iterator`），持有原容器引用（活动视图，迭代期间容器追加的元素可见）、耗尽后再迭代为空、`iter(it)` 返回自身
 
 ```python
 it = iter([1, 2, 3])
+lst = [1, 2]
+it2 = iter(lst)
+lst.append(3)
+print(list(it2))                # [1, 2, 3] (活动视图)
 ```
 
 ### `zip(*iterables)`
@@ -449,6 +453,21 @@ getattr(p, "x")                 # 42
 getattr(p, "missing", "N/A")    # "N/A"
 getattr(p, "missing")           # AttributeError
 getattr([], "append")           # 获取绑定方法 (可调用)
+```
+
+### `hasattr(obj, name)`
+
+对应 Python `hasattr()`，判断对象是否有给定属性（属性不存在返回 `False`；`__getattr__` 内抛出的非 `AttributeError` 异常会原样传播）
+
+```python
+class Point:
+    pass
+
+p = Point()
+p.x = 1
+print(hasattr(p, "x"))          # True
+print(hasattr(p, "y"))          # False
+print(hasattr(int, "nope"))     # False
 ```
 
 ### `setattr(obj, name, value)`

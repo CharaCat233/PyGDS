@@ -23,10 +23,13 @@ for py_file in sorted(TEST_DIR.glob("*.py")):
     )
     expected = proc.stdout
 
-    syntax_error_msg_ls = proc.stderr.strip().split("\n")
-    if syntax_error_msg_ls:
-        syntax_error_msg = syntax_error_msg_ls[-1]
-        expected = syntax_error_msg + "\n" if syntax_error_msg else expected
+    # 仅在脚本解析失败 (非零退出) 时以 stderr 最后一行作为期望值;
+    # 运行成功但带 SyntaxWarning 等 stderr 输出的脚本仍以 stdout 为准
+    if proc.returncode != 0:
+        syntax_error_msg_ls = proc.stderr.strip().split("\n")
+        if syntax_error_msg_ls:
+            syntax_error_msg = syntax_error_msg_ls[-1]
+            expected = syntax_error_msg + "\n" if syntax_error_msg else expected
 
     # 规范化对象 repr: Python 输出 "<__main__.OnlyStr object at 0x...>",
     # 其中内存地址每次运行都不同, 无法在 expected.json 中复现

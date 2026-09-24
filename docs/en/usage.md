@@ -213,6 +213,33 @@ a, b, c = [1, 2, 3]
 first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
 ```
 
+### String Literals and Escape Sequences
+
+String and bytes literals support the full escape set: `\n` `\t` `\r` `\a` `\b` `\f` `\v` `\\` `\'` `\"`, hex `\xNN`, octal `\NNN` (1-3 digits), Unicode `\uNNNN` / `\UXXXXXXXX` and named escapes `\N{NAME}` (built-in name table: printable ASCII full names and common symbols, e.g. `\N{BULLET}` `\N{LATIN CAPITAL LETTER A}`). `r"..."` raw strings skip decoding entirely
+
+```python
+print(len(\x41))             # 1
+print(\u4e2d)                # 中
+print(len(b\x00))            # 1 (bytes support NUL)
+```
+
+Invalid escapes (e.g. `\xZZ`, `\u12`) raise `SyntaxError`; unrecognized escapes (e.g. `\8`) are kept verbatim as in CPython. str literals cannot contain NUL (`\x00` raises `SyntaxError`, a Godot String platform limitation); bytes are unaffected
+
+### Line Continuation
+
+A newline inside brackets (`()` / `[]` / `{}`) is an implicit continuation; a trailing backslash `\` also joins lines, and trailing commas in call arguments are allowed:
+
+```python
+x = (1 +
+     2)             # 3
+y = [
+    1,
+    2,
+]                   # [1, 2]
+s = 1 + \
+    2               # 3
+```
+
 ### Number Literals
 
 Hexadecimal, octal, binary, underscore-separated and scientific notation are supported:
@@ -352,6 +379,18 @@ Supported conversions: `%s` `%r` `%d` `%i` `%u` `%f` `%F` `%e` `%E` `%g` `%G` `%
 "{:>8}".format("hi")                # "      hi"
 "{0:04d}".format(42)                # "0042"
 "{{{}}}".format(5)                  # "{5}"
+```
+
+### Slice Assignment and Deletion
+
+Lists support variable-length slice assignment and deletion (extended slices require equal length when step is not 1):
+
+```python
+a = [1, 2, 3, 4]
+a[1:3] = [9]        # [1, 9, 4]
+a[::2] = [7, 8]     # [7, 9, 8, 4]
+del a[1:3]          # [7, 4]
+del a[::2]          # [4]
 ```
 
 ### String Interpolation (f-string)

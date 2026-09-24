@@ -451,6 +451,21 @@ getattr(p, "missing")           # AttributeError
 getattr([], "append")           # gets a bound method (callable)
 ```
 
+### `hasattr(obj, name)`
+
+Python `hasattr()`: returns whether the object has the given attribute (`False` when missing; non-`AttributeError` exceptions raised inside `__getattr__` propagate unchanged)
+
+```python
+class Point:
+    pass
+
+p = Point()
+p.x = 1
+print(hasattr(p, "x"))          # True
+print(hasattr(p, "y"))          # False
+print(hasattr(int, "nope"))     # False
+```
+
 ### `setattr(obj, name, value)`
 
 Corresponds to Python `setattr()`, setting an attribute of an object
