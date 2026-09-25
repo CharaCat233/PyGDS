@@ -1,5 +1,5 @@
 # 生成器 yield 子表达式与嵌套调用的交互测试
-# 对应 v0.5.0-alpha.4 的 P1-16:
+#   场景:
 # yield 语句中的嵌套用户函数调用不得重置生成器的 yield 位置计数,
 # 否则该语句会被反复重放直至触达步数上限 (RuntimeError: maximum step count exceeded)
 

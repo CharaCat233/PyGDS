@@ -1,5 +1,4 @@
 # yield from 委托与 yield 恢复期子表达式记忆测试
-# 对应 v0.5.0-alpha.3 的 P1-13 与 P1-14
 
 # === send 转发到 yield from 子生成器 (PEP 380) ===
 def inner():

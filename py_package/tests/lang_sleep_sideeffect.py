@@ -1,5 +1,5 @@
 # 消费含 sleep 的生成器时的副作用与取值测试 (与 CPython 一致)
-# 覆盖此前「表达式级消费会重复执行生成器体」的缺陷
+# 表达式级消费生成器时, 生成器体不得重复执行
 
 import time
 from itertools import islice

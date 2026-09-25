@@ -1,4 +1,4 @@
-# Fix: chr() 与 %c 越界明确报错
+# chr() 与 %c 越界明确报错
 
 print(chr(65), chr(True), chr(97))
 try:

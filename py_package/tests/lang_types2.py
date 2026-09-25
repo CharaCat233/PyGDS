@@ -1,5 +1,4 @@
 # 类型行为补全测试: bytes / range / dict 视图
-# 对应 v0.5.0-alpha.3 的 P1-6 与 P1-11
 
 # === bytes 是独立类型 ===
 b = b"xy"

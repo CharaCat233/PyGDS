@@ -1,5 +1,4 @@
 # 用户类协议测试: __eq__ / __hash__ / 迭代协议 / 多重赋值目标
-# 对应 v0.5.0-alpha.3 的 P1-1 ~ P1-4
 
 # === __eq__ 参与容器操作 (in / remove / index / count) ===
 class A:

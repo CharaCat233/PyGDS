@@ -1,5 +1,5 @@
 # 序列拼接与重复的类型规则
-# 对应 v0.5.0-alpha.5: str/list/tuple/bytes 的 + 与 * 严格按 CPython 类型规则
+# str/list/tuple/bytes 的 + 与 * 严格按 CPython 类型规则
 
 
 def concat(a, b):

@@ -1,5 +1,4 @@
 # 异常层次与状态隔离测试
-# 对应 v0.5.0-alpha.5:
 #   - 内置异常继承关系 (ArithmeticError / LookupError 等父类可捕获子类)
 #   - 捕获异常后不得污染后续执行 (None 单例类型、后续 except 匹配)
 

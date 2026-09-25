@@ -28,7 +28,7 @@ except ValueError as e:
     print("caught:", e)
 
 
-# 已经正确的消费函数不应回归
+# 已经正确的消费函数保持原行为
 def bad_iter2():
     yield 1
     raise ValueError("mid2")

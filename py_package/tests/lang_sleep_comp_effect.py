@@ -1,6 +1,6 @@
 import time
 
-# eager 推导式元素表达式的副作用只执行一次 (P0-2)
+# eager 推导式元素表达式的副作用只执行一次
 # 迭代源含 sleep 时, 语句会整体重放; 推导式必须只产出尚未产出的元素
 
 
@@ -45,7 +45,7 @@ seen7 = []
 print([v for v in a() if seen7.append(v) or v == 99])
 print("seen7:", seen7)
 
-# 无副作用的推导式取值不受影响 (回归护栏)
+# 无副作用的推导式取值不受影响
 print([v * 10 for v in a()])
 print([v for v in a() if v % 2 == 0])
 print({v: v * 2 for v in a()})

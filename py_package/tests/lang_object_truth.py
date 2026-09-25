@@ -1,5 +1,4 @@
 # 用户类真值判定测试: __bool__ / __len__ 参与 bool() 与真值语境
-# 对应 v0.5.0-alpha.4 的 P1-17
 
 # === __bool__ 决定真值 ===
 class F:
@@ -66,7 +65,7 @@ class Plain:
 
 print("plain:", bool(Plain()))
 
-# === 内置类型的真值不受影响 (回归护栏) ===
+# === 内置类型的真值不受影响 ===
 print("builtin:", bool([]), bool([0]), bool(""), bool("x"))
 print("builtin2:", bool({}), bool({1: 2}), bool(set()), bool(0), bool(1))
 print("builtin3:", bool(()), bool((1,)), bool(frozenset()), bool(b""), bool(b"x"))
