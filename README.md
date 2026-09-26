@@ -156,8 +156,11 @@ dsl.run()
 | `match`/`case` 模式匹配 | ✅ 完整 | 软关键字；字面量 / 捕获 / 通配 / 序列（含星号与无括号序列）/ 映射（含 `**rest`）/ 类（`__match_args__` 与内建类型单位置绑定）/ 或 / `as` / 守卫 / 嵌套全部支持，编译期检查与 CPython 对齐 |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
 | `async`/`await` | ❌ 不支持 | 仅作为保留关键字识别：`await` 的位置与 `async for` / `async with` / `async` 误用会按 CPython 报对应 `SyntaxError` |
+| `raise ... from` 异常链 | ✅ 完整 | `__cause__` 与 `__suppress_context__` 字段可读，`from None` 置抑制标记，裸异常类与 `from` 异常类自动无参实例化；隐式 `__context__` 链与未捕获输出的链式回溯打印未实现 |
+| `__name__` / `__file__` | ✅ 完整 | `__name__` 恒为 `"__main__"`（可重新赋值），入口守卫可用；`__file__` 默认空串，宿主经 `set_script_path()` 在 `run()` 前注入 |
+| 泛型类型参数与 `type` 别名 | ✅ 语法接受 | `class C[T]` / `def f[T](x)` / `type X = int`（PEP 695）按语法接受并忽略类型语义；别名名不绑定到值 |
 | 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套（含嵌套生成器内 `time.sleep()`）、`yield from` 的 `send` / `throw` 完整委托（PEP 380，子生成器优先捕获）、闭包跨 `yield` 保持 |
-| 装饰器 | ⚠️ 部分 | `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter） |
+| 装饰器 | ✅ 完整 | 任意可调用表达式装饰器（自写 / 带参工厂 / 堆叠，应用于函数、方法与类），加 `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter）五种内建形式 |
 | `with` 语句 | ❌ 不支持 | — |
 | 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator/time） |
 
@@ -187,7 +190,7 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 
 ### P1 — 明确报错或功能缺失
 
-下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节
+下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**；P1-33（`raise ... from` 异常链）、P1-34（任意装饰器与带参装饰器）、P1-35（`__name__`）、P1-39（泛型类型参数语法）已在 v0.6.0-alpha.3 修复，详见 `CHANGELOG` 的对应版本节
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
@@ -202,6 +205,7 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
 | P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案与「语句尾部冗余 Token」已对齐；括号未闭合的文案已在 **v0.5.0-alpha.6** 对齐（`'(' was never closed`）。其余解析期错误的措辞与行号格式仍可能不同（如缺冒号、未结束字符串） |
 | P2-4 | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致 |
+| P2-17 | 内建装饰器形式与返回包装函数的装饰器组合时包装语义不保留 | `@staticmethod` / `@classmethod` / `@property` 与任意装饰器组合时，若装饰器返回包装函数替换原函数，静态方法 / 类方法 / property 的包装语义丢失（如 `c.f(3)` 会向包装函数传入 `self`）；装饰器返回原函数的注册类场景不受影响 |
 
 ### 平台限制
 

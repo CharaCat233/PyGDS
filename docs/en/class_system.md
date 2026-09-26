@@ -368,13 +368,15 @@ class DSLProperty extends DSLObject:
 
 ### Parser Handling
 
-The Parser's `decorated_declaration()` method recognizes three decorator syntaxes:
+The Parser's `decorated_declaration()` method recognizes the five built-in decorator syntaxes:
 
 | Decorator Syntax | `method_type` | Handling |
 | :--- | :--- | :--- |
 | `@property` | 3 | Create a `DSLProperty` instance, store in `methods[name]` |
 | `@name.setter` | 4 | Call `.setter(func_obj)` on the existing `DSLProperty` |
 | `@name.deleter` | 5 | Call `.deleter(func_obj)` on the existing `DSLProperty` |
+
+Beyond the built-in forms, `decorated_declaration()` also accepts arbitrary expressions as decorators (stored in the node's `decorators` array) and supports decorating `class` definitions; a built-in form may appear at most once and can be combined with arbitrary decorators
 
 ### Usage Example
 
@@ -409,6 +411,26 @@ print(c.area)       # ~314.159 — computed property
 ro = Circle(42)
 ro.area = 100       # AttributeError: can't set attribute
 ```
+
+---
+
+## Arbitrary Decorators
+
+### Decorator Parsing
+
+`decorated_declaration()` collects consecutive `@` lines in source order: the five built-in forms `@classmethod` / `@staticmethod` / `@property` / `@name.setter` / `@name.deleter` are recorded into `method_type` (handled by the existing fast path), while any other expression is stored into the node's `decorators` array (held by both `FunctionStmt` and `ClassStmt`)
+
+### Decorator Application
+
+The interpreter's `_apply_decorators()` runs after the function / class object is created: it first evaluates all decorator expressions in source order, then invokes them starting from the one closest to the definition, and the final return value replaces the original binding. Three application sites:
+
+| Site | Timing |
+| :--- | :--- |
+| Top-level / statement-position `def` | After the `DSLFunction` is created and its default values are set |
+| Class-body methods | After `methods[name]` is established (for property / setter / deleter the decorated object is the `DSLProperty`) |
+| `class` definitions | After the `DSLClass` is created and bound into the environment |
+
+Decorator expressions are evaluated through the `evaluate()` channel, so a `time.sleep` suspension inside them returns `SUSPENDED` upward for statement replay; class-body methods pass the unbound `DSLFunction` to the decorator. When a decorator returns a wrapper function that replaces the original, the static-method / class-method / property wrapping carried by `method_type` is not preserved
 
 ---
 

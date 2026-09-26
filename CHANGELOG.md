@@ -2,6 +2,39 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.6.0-alpha.3] - 2026-09-27
+
+本版实现已知问题清单中已排期的四项轻量语法补齐（P1-33 异常链、P1-34 任意装饰器、P1-35 `__name__`、P1-39 泛型类型参数语法），并修复 `raise` 路径与调用分派上的连带缺陷
+
+### 新增
+
+- **`raise ... from` 异常链（P1-33）**：`raise 表达式 from 因果表达式` 解析与执行，因果值存入异常实例的 `__cause__` 字段（wrapper 实例存 `fields`，裸 DSLException 存专有字段），`__suppress_context__` 随显式 `from` 置 `True`（`from None` 时 `__cause__` 为 `None`），无 `from` 时两者默认 `None` / `False`；因果值须为异常实例 / 异常类 / `None`，否则报 `TypeError: exception causes must derive from BaseException`；隐式 `__context__` 链与未捕获输出的链式回溯打印未实现（文档如实标注）
+- **任意装饰器与带参装饰器（P1-34）**：`@` 后接受任意可调用表达式（自写装饰器、带参工厂、属性链等），并支持装饰 `class` 定义；`@classmethod` / `@staticmethod` / `@property` / `@name.setter` / `@name.deleter` 五种内建形式保留 `method_type` 快速路径，可与任意装饰器组合（内建形式最多一次）；装饰器表达式先按源码顺序全部求值、再从最贴近定义者依次应用（CPython 顺序），最终返回值替换原绑定；顶层 `def`、类体方法与 `class` 三个应用点全覆盖，装饰器表达式内 `time.sleep` 挂起经语句重放正常推进
+- **`__name__` / `__file__` 脚本级全局名（P1-35）**：解释器启动时注入 `__name__ = "__main__"`（可重新赋值，入口守卫 `if __name__ == "__main__":` 可用）与 `__file__`（默认空串）；新增宿主 API `set_script_path(path)`，在 `run()` 前设置脚本路径
+- **泛型类型参数语法与 `type` 别名（P1-39）**：`class C[T, U]:` / `def f[T](x):` / `type X = int`（PEP 695）按语法接受并忽略类型语义；类型参数可带绑定注解与默认值（均只解析不求值），`type` 别名语句解析为 no-op（别名名不绑定，右侧表达式不求值）
+
+### 修复
+
+- **裸异常类 raise 报错**：`raise ValueError`（类不带括号）此前报 `TypeError: exceptions must derive from Exception`，现按 CPython 无参实例化后抛出；`raise GeneratorExit()` 等不继承 `Exception` 的已注册异常（`BaseException` 系）同样可正常抛出与捕获
+- **不可调用对象调用静默丢失**：`5()` / 用户实例未定义 `__call__` 时调用此前静默终止脚本（无报错无输出），现按 CPython 报 `TypeError: 'int' object is not callable`（可被 try/except 捕获）
+- **`raise` 表达式求值挂起被跳过重放**：`raise f()`（`f` 内含 `sleep`）此前以 RAISE 结果提前返回，语句恢复时按整体重放兜底；现按挂起语义返回 `SUSPENDED` 交回语句重放，与 `match` 主题求值等语句一致
+
+### 破坏性变更 (Breaking Changes)
+
+无（`match = 1` 式的既有用法与五种内建装饰器形式的行为均不变；`@unknown` 此前报 `Unknown decorator`，现按任意表达式解析，不可调用时报 `TypeError`）
+
+### 测试
+
+- 新增 5 个测试并入 `expected.json`（共 220 个用例全部通过，既有条目 `expected` 零变更）：行为类 `lang_raise_from`（`__cause__` / `__suppress_context__` 全形态 / 裸类 / `BaseException` 系 / 因果校验）、`lang_name_main`（`__name__` 取值与重赋值 / 入口守卫 / 函数与类内访问）、`lang_decorator`（自写 / 带参 / 堆叠与求值顺序 / 类与方法装饰器 / 内建组合 / 不可调用装饰器 / 挂起）、`lang_generic_syntax`（泛型类与函数 / 绑定注解 / `type` 别名 / 注解位置使用）；错误类 `err_raise_from_missing`（`raise from` 缺主表达式文案对齐）
+- 挂起测试 22 个用例通过；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md` 新增「装饰器」「泛型类型参数语法与 `type` 别名」「`raise ... from` 异常链」「`__name__` 与 `__file__`」四节（示例双侧实测）
+- `docs/zh-CN/exception_system.md` 与 `docs/en/exception_system.md` 更新 `raise` 执行流程（裸类实例化 / from 子句 / 因果校验），新增 `raise ... from` 异常链小节
+- `docs/zh-CN/class_system.md` 与 `docs/en/class_system.md` 更新装饰器解析说明，新增「任意装饰器」章节（解析 / 应用时机 / 挂起与限制）
+- README 与 README_EN 兼容矩阵更新装饰器行并新增异常链 / `__name__` / 泛型行，「已知问题与限制」章节标注 P1-33 / P1-34 / P1-35 / P1-39 已修复，新增 P2-17（内建装饰器形式与返回包装函数的装饰器组合时包装语义不保留）
+
 ## [0.6.0-alpha.2] - 2026-09-26
 
 本版实现已知问题清单中 P2-9 ~ P2-15 全部条目（type 身份语义、`dir()` 内置实例、`float.hex()`、字典视图实时性、match 模式错误文案、异常对象 `args`/`str`/`repr`、元组下标），并在收尾扫描中修复若干连带发现的问题

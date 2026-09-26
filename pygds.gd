@@ -1708,6 +1708,8 @@ class FunctionStmt extends Stmt:
 	var method_type: int = 0
 	## 是否为生成器函数 (函数体含 yield, 定义时由解析器检测)
 	var is_generator: bool = false
+	## 任意装饰器表达式数组 (源码顺序, 最外层在前; @classmethod 等内建形式不存于此, 走 method_type)
+	var decorators: Array = []
 	## 构造函数定义 [br]
 	## [param n] 函数名 [br]
 	## [param p] 参数列表 [br]
@@ -1726,6 +1728,8 @@ class ClassStmt extends Stmt:
 	var superclass: Expr
 	## 类体语句列表 (一系列 FunctionStmt 或其他语句)
 	var body: Array[Stmt]
+	## 任意装饰器表达式数组 (源码顺序, 最外层在前)
+	var decorators: Array = []
 	## 构造类定义 [br]
 	## [param n] 类名 [br]
 	## [param s] 基类表达式, 可为 null [br]
@@ -1872,14 +1876,19 @@ class ExceptClause:
 		body = b
 
 ## raise 语句 [br]
-## 抛出异常, 可选携带异常表达式, 无表达式时表示重新抛出当前异常 (re-raise)
+## 抛出异常, 可选携带异常表达式, 无表达式时表示重新抛出当前异常 (re-raise), [br]
+## 可选 from 子句指定因果异常 (存入实例的 __cause__ 字段)
 class RaiseStmt extends Stmt:
 	## 抛出的异常表达式, 可为 null (表示 re-raise)
 	var expression: Expr
+	## from 子句的因果表达式, 可为 null (无 from 子句)
+	var cause_expr: Expr
 	## 构造 raise 语句 [br]
-	## [param e] 异常表达式, 可为 null
-	func _init(e):
+	## [param e] 异常表达式, 可为 null [br]
+	## [param c] from 子句表达式, 可为 null
+	func _init(e, c = null):
 		expression = e
+		cause_expr = c
 
 ## match 语句 (结构化模式匹配) [br]
 ## match 与 case 是软关键字, 不进入 Lexer.keywords, 由解析器按上下文识别
@@ -3166,6 +3175,10 @@ class DSLException extends DSLObject:
 	var error_type: String
 	## 额外的异常参数
 	var args: Array[DSLObject] = []
+	## raise ... from 存入的因果异常 (无 from 时为 null, 经 __cause__ 读出为 None)
+	var cause = null
+	## 显式 from 子句 (含 from None) 置位的上下文抑制标记
+	var suppress_context: bool = false
 	
 	## 构造异常对象 [br]
 	## [param p_msg] 错误消息 [br]
@@ -3196,6 +3209,10 @@ class DSLException extends DSLObject:
 	func _dsl_getattribute(attr_name: String) -> DSLObject:
 		if attr_name == "args":
 			return DSLTuple.new(args)
+		if attr_name == "__cause__":
+			return cause if cause != null else DSLBuiltinFunction._wrap_static(null)
+		if attr_name == "__suppress_context__":
+			return DSLBuiltinFunction._wrap_static(suppress_context)
 		return super._dsl_getattribute(attr_name)
 
 	func magic_repr(args_ary: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -10790,6 +10807,8 @@ class Parser:
 			return raise_statement()
 		if match_types([TokenType.ASYNC]):
 			return async_declaration()
+		if check(TokenType.IDENTIFIER) and peek().lexeme == "type" and _looks_like_type_alias():
+			return type_alias_statement()
 		if check(TokenType.IDENTIFIER) and peek().lexeme == "match" and _looks_like_match_statement():
 			return match_statement()
 		return expression_statement()
@@ -10813,56 +10832,76 @@ class Parser:
 		report.error("SyntaxError: invalid syntax")
 		return null
 		
-	## 解析带装饰器的声明 (@classmethod / @staticmethod / @property / @name.setter) [br]
-	## 装饰器必须紧接在 def 之前, 用于标记方法的类型 [br]
-	## [returns] 解析出的 FunctionStmt 节点 (已设置 method_type), 出错时返回 null
+	## 解析带装饰器的声明 (def 或 class) [br]
+	## @ 行可以是任意表达式 (源码顺序最外层在前); @classmethod / @staticmethod / @property / [br]
+	## @name.setter / @name.deleter 五种内建形式记入 method_type 快速路径, 其余存入 decorators [br]
+	## 首个 @ 已由语句分发消费, 其余 @ 行在本函数内消费 [br]
+	## [returns] 解析出的 FunctionStmt 或 ClassStmt 节点, 出错时返回 null
 	func decorated_declaration():
-		var decorator_lexeme = peek().lexeme
 		var method_type = 0
 		var property_name = ""
-		
-		if decorator_lexeme == "classmethod":
-			method_type = 1
-		elif decorator_lexeme == "staticmethod":
-			method_type = 2
-		elif decorator_lexeme == "property":
-			method_type = 3
-		else:
-			var name_tok = advance()
-			if match_types([TokenType.DOT]):
-				var attr_tok = consume(TokenType.IDENTIFIER, "Expected 'setter' or 'deleter'")
-				if attr_tok == null:
+		var decorators: Array = []
+		var saw_builtin = false
+		var first_decorator = true
+		while first_decorator or match_types([TokenType.AT]):
+			first_decorator = false
+			if report.has_error:
+				return null
+			var tok = peek()
+			var builtin_type = 0
+			var prop_name = ""
+			if tok.type == TokenType.IDENTIFIER:
+				if tok.lexeme == "classmethod":
+					builtin_type = 1
+				elif tok.lexeme == "staticmethod":
+					builtin_type = 2
+				elif tok.lexeme == "property":
+					builtin_type = 3
+				elif current + 2 < tokens.size() and tokens[current + 1].type == TokenType.DOT:
+					var attr = tokens[current + 2]
+					if attr.type == TokenType.IDENTIFIER and (attr.lexeme == "setter" or attr.lexeme == "deleter"):
+						builtin_type = 4 if attr.lexeme == "setter" else 5
+						prop_name = tok.lexeme
+			if builtin_type > 0:
+				# 内建形式最多出现一次: 其包装语义 (staticmethod 标记 / property 描述符)
+				# 由 method_type 快速路径承担, 无法与第二个内建形式叠加
+				if saw_builtin:
+					report.error("SyntaxError: invalid decorator order")
 					return null
-				if attr_tok.lexeme == "setter":
-					method_type = 4
-					property_name = name_tok.lexeme
-				elif attr_tok.lexeme == "deleter":
-					method_type = 5
-					property_name = name_tok.lexeme
+				if builtin_type >= 4:
+					advance()
+					advance()
+					advance()
+					property_name = prop_name
 				else:
-					report.error("Unknown decorator: @%s.%s at line %d" % [name_tok.lexeme, attr_tok.lexeme, name_tok.line])
-					return null
+					advance()
+				method_type = builtin_type
+				saw_builtin = true
 			else:
-				report.error("Unknown decorator: @%s at line %d" % [name_tok.lexeme, name_tok.line])
+				var expr = simple_expression()
+				if expr == null or report.has_error:
+					return null
+				decorators.append(expr)
+			_expect_statement_end()
+			skip_newlines()
+		
+		if match_types([TokenType.DEF]):
+			var func_stmt = function_declaration()
+			if func_stmt == null:
 				return null
-		
-		if method_type <= 3:
-			var name_tok = consume(TokenType.IDENTIFIER, "Expected decorator name")
-			if name_tok == null:
+			func_stmt.method_type = method_type
+			func_stmt.decorators = decorators
+			if property_name != "":
+				func_stmt.set_meta("_property_name", property_name)
+			return func_stmt
+		if match_types([TokenType.CLASS]):
+			var class_stmt = class_declaration()
+			if class_stmt == null:
 				return null
-		
-		skip_newlines()
-		if not match_types([TokenType.DEF]):
-			report.error("Decorator must be followed by a function definition")
-			return null
-		
-		var func_stmt = function_declaration()
-		if func_stmt == null:
-			return null
-		func_stmt.method_type = method_type
-		if property_name != "":
-			func_stmt.set_meta("_property_name", property_name)
-		return func_stmt
+			class_stmt.decorators = decorators
+			return class_stmt
+		report.error("SyntaxError: invalid syntax")
+		return null
 		
 	## 解析函数定义语句 [br]
 	## 支持完整的 Python 函数签名: 位置参数, 仅位置参数 (/), *args, 关键字参数 (*), **kwargs, 默认值, 返回类型注解 [br]
@@ -10872,6 +10911,11 @@ class Parser:
 		if name_tok == null:
 			return null
 		var name = name_tok.lexeme
+		
+		# 可选泛型类型参数列表 [T, U]: 仅接受语法, 不做类型语义
+		if check(TokenType.LBRACKET):
+			if not _parse_type_params():
+				return null
 		
 		var lparen = consume(TokenType.LPAREN, "Expected '('")
 		if lparen == null:
@@ -10993,6 +11037,10 @@ class Parser:
 		var name_tok = consume(TokenType.IDENTIFIER, "Expected class name")
 		if name_tok == null:
 			return null
+		# 可选泛型类型参数列表 [T, U]: 仅接受语法, 不做类型语义
+		if check(TokenType.LBRACKET):
+			if not _parse_type_params():
+				return null
 		var superclass = null
 		if match_types([TokenType.LPAREN]):
 			# 基类表达式 例如 Foo(Base)
@@ -11003,6 +11051,30 @@ class Parser:
 			return null
 		var body = block()
 		return ClassStmt.new(name_tok.lexeme, superclass, body)
+	
+	## 解析并丢弃泛型类型参数列表 [T, U] (PEP 695 语法) [br]
+	## 每个参数为名字, 可带绑定注解 (: 表达式) 与默认值 (= 表达式), 均只解析不求值 [br]
+	## [returns] 解析成功返回 true
+	func _parse_type_params() -> bool:
+		advance()
+		if check(TokenType.RBRACKET):
+			report.error("Expected type parameter name")
+			return false
+		while not check(TokenType.RBRACKET) and not is_at_end():
+			if report.has_error:
+				return false
+			if not check(TokenType.IDENTIFIER):
+				report.error("Expected type parameter name")
+				return false
+			advance()
+			if match_types([TokenType.COLON]):
+				skip_type_annotation()
+			if match_types([TokenType.EQUAL]):
+				simple_expression()
+			if not match_types([TokenType.COMMA]):
+				break
+		var rbracket = _consume_bracket_close(TokenType.RBRACKET, "Expected ']'")
+		return rbracket != null
 	
 	## 解析 return 语句, 可选的返回值表达式 [br]
 	## [returns] 解析出的 ReturnStmt 节点
@@ -11207,6 +11279,50 @@ class Parser:
 				seen_token = true
 			j += 1
 		return false
+
+	## 前瞻判断当前语句是否为 PEP 695 type 别名语句 [br]
+	## type 是普通标识符, 仅当其后为「别名名 (可选 [T] 类型参数段) + =」时按别名语句处理, [br]
+	## 覆盖 `type = 1` / `type(x)` / `type[X]` 等表达式用法 [br]
+	## [returns] 是 type 别名语句时返回 true
+	func _looks_like_type_alias() -> bool:
+		if current + 1 >= tokens.size() or tokens[current + 1].type != TokenType.IDENTIFIER:
+			return false
+		var j = current + 2
+		if j < tokens.size() and tokens[j].type == TokenType.LBRACKET:
+			var depth = 0
+			while j < tokens.size():
+				var t = tokens[j]
+				if t.type == TokenType.LBRACKET:
+					depth += 1
+				elif t.type == TokenType.RBRACKET:
+					depth -= 1
+					if depth == 0:
+						break
+				j += 1
+			j += 1
+		return j < tokens.size() and tokens[j].type == TokenType.EQUAL
+
+	## 解析 PEP 695 type 别名语句 (type X = 表达式 / type X[T] = 表达式) [br]
+	## 仅接受语法: 别名名不绑定到任何值, 右侧表达式只解析不求值 [br]
+	## (类型注解在 PyGDS 中一律忽略, 因此别名不可用不影响注解位置的使用) [br]
+	## [returns] 解析出的 PassStmt 占位节点, 出错时返回 null
+	func type_alias_statement():
+		advance()
+		var name_tok = consume(TokenType.IDENTIFIER, "Expected type alias name")
+		if name_tok == null:
+			return null
+		if check(TokenType.LBRACKET):
+			if not _parse_type_params():
+				return null
+		if not match_types([TokenType.EQUAL]):
+			report.error("Expected '=' in type alias statement")
+			return null
+		var value = simple_expression()
+		if value == null or report.has_error:
+			return null
+		_expect_statement_end()
+		skip_newlines()
+		return PassStmt.new()
 
 	## 解析 match 语句 [br]
 	## 主题表达式支持元组形式 (match 1, 2:), 头部之后必须换行缩进并至少有一个 case 子句 [br]
@@ -11888,12 +12004,28 @@ class Parser:
 		return stmts
 	
 	## 解析 raise 语句 [br]
+	## 支持可选 from 子句: raise 表达式 from 因果表达式, 因果值存入异常的 __cause__ [br]
 	## [returns] 解析出的 RaiseStmt 节点
 	func raise_statement():
 		var expr = null
 		if not is_at_end() and not check(TokenType.NEWLINE):
+			if check(TokenType.FROM):
+				report.error("SyntaxError: invalid syntax")
+				return null
 			expr = simple_expression()
-		return RaiseStmt.new(expr)
+			if report.has_error:
+				return null
+		var cause = null
+		if match_types([TokenType.FROM]):
+			if expr == null:
+				report.error("SyntaxError: invalid syntax")
+				return null
+			cause = simple_expression()
+			if report.has_error:
+				return null
+		_expect_statement_end()
+		skip_newlines()
+		return RaiseStmt.new(expr, cause)
 		
 	## 解析冒号后的代码块, 支持缩进块和单行语句 [br]
 	## 如果下个 Token 是 NEWLINE, 则读取 INDENT 缩进块直到 DEDENT [br]
@@ -13830,14 +13962,18 @@ class Interpreter:
 	
 	## 构造解释器实例 [br]
 	## [param p_reporter] 控制台报告器 [br]
-	## [param p_api] 外部 API 函数注册
-	func _init(p_reporter: ConsoleReport, p_api: Dictionary[String, Callable] = {}):
+	## [param p_api] 外部 API 函数注册 [br]
+	## [param p_file] 脚本路径 (宿主可设置, 注入 __file__, 空串表示未知)
+	func _init(p_reporter: ConsoleReport, p_api: Dictionary[String, Callable] = {}, p_file: String = ""):
 		report = p_reporter
 		active = self
 		api_funcs = p_api
 		globals = DSLEnvironment.new(report)
 		environment = globals
 		register_builtins()
+		# 脚本级全局名: __main__ 对应单脚本运行模型, __file__ 由宿主注入 (无路径时空串)
+		globals.define("__name__", DSLString.new("__main__"))
+		globals.define("__file__", DSLString.new(p_file))
 	
 	## 比对两次调用的实参是否一致 (按对象身份) [br]
 	## 用于判断保存的挂起帧能否被当前调用复用: 参数不同说明是另一次调用, 不能复用旧环境 [br]
@@ -14017,12 +14153,31 @@ class Interpreter:
 	func _is_registered_exception_instance(exc) -> bool:
 		if exc.klass == null:
 			return false
-		var c = exc.klass
+		return _is_registered_exception_class(exc.klass)
+
+	## 判断类是否在异常继承体系中 (沿基类链核对注册表) [br]
+	## [param cls] 待判断的类 [br]
+	## [returns] 是已注册异常类 (含其子类) 时返回 true
+	func _is_registered_exception_class(cls: DSLClass) -> bool:
+		var c = cls
 		while c != null:
 			if exception_hierarchy.has(c.name):
 				return true
 			c = c.superclass
 		return false
+
+	## 将 from 子句的因果异常存入异常实例 [br]
+	## 实例 wrapper 存入 fields (自动可经属性访问), 裸 DSLException 存入专有字段 [br]
+	## 显式 from (含 from None) 同时置位 __suppress_context__ [br]
+	## [param exc] 异常对象 [br]
+	## [param cause_val] 因果异常实例
+	func _store_exception_cause(exc, cause_val):
+		if exc is DSLException:
+			exc.cause = cause_val
+			exc.suppress_context = true
+			return
+		exc.fields["__cause__"] = cause_val
+		exc.fields["__suppress_context__"] = _wrap(true)
 		
 	## 尝试调用实例类的 magic 方法, 失败时回退 fallback [br]
 	## 用户魔术方法内部挂起 (sleep) 时返回 null 并把挂起标志向上传播, [br]
@@ -14186,6 +14341,9 @@ class Interpreter:
 		var exc = DSLException.new(msg, wrapper.klass.name, pos_args)
 		wrapper._wrapped = exc
 		wrapper.fields["args"] = DSLTuple.new(pos_args)
+		# 因果链默认值: 无 from 时 __cause__ 为 None, __suppress_context__ 为 False
+		wrapper.fields["__cause__"] = _wrap(null)
+		wrapper.fields["__suppress_context__"] = _wrap(false)
 		return DSLNone.new()
 
 	## 按 CPython 语义计算异常的 str() 结果 [br]
@@ -17419,6 +17577,15 @@ class Interpreter:
 						func_obj.default_values.append(val)
 					else:
 						func_obj.default_values.append(null)
+			if not stmt.decorators.is_empty():
+				var dec_val = _apply_decorators(stmt.decorators, func_obj)
+				if _suspended:
+					return ExecResult.SUSPENDED
+				if dec_val == null or report.has_error:
+					if report.has_error:
+						return ExecResult.RAISE
+					return ExecResult.ERROR
+				environment.set_val(stmt.name, dec_val)
 			return ExecResult.NORMAL
 			
 		if stmt is ClassStmt:
@@ -17524,8 +17691,20 @@ class Interpreter:
 		if stmt is RaiseStmt:
 			if stmt.expression != null:
 				var exc = evaluate(stmt.expression)
+				if _suspended:
+					_expr_evaluated = (exc != null) and not _needs_replay
+					return ExecResult.SUSPENDED
 				if exc == null:
 					return ExecResult.RAISE
+				# 裸异常类形式按无参实例化处理
+				if exc is DSLClass and _is_registered_exception_class(exc):
+					var inst = exc.magic_call([] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+					if _suspended:
+						_expr_evaluated = false
+						return ExecResult.SUSPENDED
+					if inst == null or report.has_error:
+						return ExecResult.RAISE
+					exc = inst
 				var is_valid = false
 				var err_type = ""
 				var err_msg = ""
@@ -17534,8 +17713,8 @@ class Interpreter:
 					err_type = exc.error_type
 					err_msg = exc.message
 				elif exc.fields != null:
-					var exc_type = globals.get_val("Exception")
-					if exc_type is DSLClass and exc._is_subclass_of_klass(exc_type):
+					var exc_type = globals.get_val_safe("Exception")
+					if (exc_type is DSLClass and exc._is_subclass_of_klass(exc_type)) or _is_registered_exception_instance(exc):
 						is_valid = true
 						err_type = exc._type_name()
 						if exc._wrapped != null and exc._wrapped is DSLException:
@@ -17543,6 +17722,25 @@ class Interpreter:
 						elif exc.fields.has("args") and exc.fields["args"] is DSLTuple and exc.fields["args"].items.size() > 0:
 							err_msg = exc.fields["args"].items[0]._dsl_str()
 				if is_valid:
+					if stmt.cause_expr != null:
+						var cause_val = evaluate(stmt.cause_expr)
+						if _suspended:
+							_expr_evaluated = false
+							return ExecResult.SUSPENDED
+						if cause_val == null:
+							return ExecResult.RAISE
+						if cause_val is DSLClass and _is_registered_exception_class(cause_val):
+							var cinst = cause_val.magic_call([] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+							if _suspended:
+								_expr_evaluated = false
+								return ExecResult.SUSPENDED
+							if cinst == null or report.has_error:
+								return ExecResult.RAISE
+							cause_val = cinst
+						if not (cause_val is DSLNone or cause_val is DSLException or (cause_val.fields != null and _is_registered_exception_instance(cause_val))):
+							raise_exception("TypeError", "exception causes must derive from BaseException")
+							return ExecResult.RAISE
+						_store_exception_cause(exc, cause_val)
 					last_exception = exc
 					report.error(err_type + ": " + err_msg)
 				else:
@@ -19225,6 +19423,38 @@ class Interpreter:
 	## [param pos_args] 位置实参 [br]
 	## [param kw_dict] 关键字实参 [br]
 	## [returns] 调用结果, 挂起/出错时返回 null
+	## 应用装饰器, 返回最终替换值 [br]
+	## 装饰器表达式先按源码顺序全部求值, 再按最贴近定义者先应用的顺序调用 [br]
+	## [param decorators] 装饰器表达式数组 (源码顺序, 最外层在前) [br]
+	## [param value] 被装饰对象 [br]
+	## [returns] 最终对象, 挂起或出错时返回 null (调用方检查 _suspended 与 report.has_error)
+	func _apply_decorators(decorators: Array, value):
+		var decs: Array[DSLObject] = []
+		for e in decorators:
+			var d = evaluate(e)
+			if _suspended:
+				_expr_evaluated = false
+				return null
+			if d == null:
+				return null
+			decs.append(d)
+		var cur = value
+		var i = decs.size() - 1
+		while i >= 0:
+			if not decs[i]._dsl_is_callable():
+				raise_exception("TypeError", "'%s' object is not callable" % decs[i]._type_name())
+				return null
+			var call_args: Array[DSLObject] = [cur]
+			var result = _dispatch_call(decs[i], call_args, {} as Dictionary[String, DSLObject])
+			if _suspended:
+				_expr_evaluated = false
+				return null
+			if result == null:
+				return null
+			cur = result
+			i -= 1
+		return cur
+
 	func _dispatch_call(callee, pos_args: Array[DSLObject], kw_dict: Dictionary[String, DSLObject]) -> DSLObject:
 		if callee is DSLMethod:
 			var result = callee.magic_call(pos_args, kw_dict)
@@ -19270,6 +19500,14 @@ class Interpreter:
 				recv.last_error_args.clear()
 				raise_exception_from_last_error(recv_err, recv_args)
 				return null
+		# 其余可调用对象调用失败时错误记在自身 last_error 上, 须转为异常否则静默丢失
+		if result == null and callee.last_error != "":
+			var callee_err = callee.last_error
+			var callee_err_args: Array[DSLObject] = callee.last_error_args
+			callee.last_error = ""
+			callee.last_error_args.clear()
+			raise_exception_from_last_error(callee_err, callee_err_args)
+			return null
 		return result
 
 	## 调用用户自定义函数 [br]
@@ -19587,6 +19825,7 @@ class Interpreter:
 		class_obj.module_prefix = "__main__."
 		for body_stmt in stmt.body:
 			if body_stmt is FunctionStmt:
+				var target_name = body_stmt.name
 				if body_stmt.method_type == 3:
 					# @property getter
 					var func_obj = DSLFunction.new(body_stmt, environment)
@@ -19600,6 +19839,7 @@ class Interpreter:
 					func_obj._cls_interp = self
 					func_obj._defining_class = class_obj
 					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
+					target_name = prop_name
 					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
 						(methods[prop_name] as DSLProperty).setter(func_obj)
 					else:
@@ -19613,6 +19853,7 @@ class Interpreter:
 					func_obj._cls_interp = self
 					func_obj._defining_class = class_obj
 					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
+					target_name = prop_name
 					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
 						(methods[prop_name] as DSLProperty).deleter(func_obj)
 					else:
@@ -19625,6 +19866,13 @@ class Interpreter:
 					func_obj._cls_interp = self
 					func_obj._defining_class = class_obj
 					methods[body_stmt.name] = func_obj
+				if not body_stmt.decorators.is_empty():
+					var dec_val = _apply_decorators(body_stmt.decorators, methods[target_name])
+					if _suspended:
+						return ExecResult.SUSPENDED
+					if dec_val == null:
+						return ExecResult.RAISE if report.has_error else ExecResult.ERROR
+					methods[target_name] = dec_val
 			elif body_stmt is ExpressionStmt and body_stmt.expression is Assign:
 				var assign = body_stmt.expression as Assign
 				var val = evaluate(assign.value)
@@ -19635,6 +19883,13 @@ class Interpreter:
 		class_obj.class_attrs = class_attrs
 		class_obj.klass = globals.get_val_safe("type")
 		environment.define(stmt.name, class_obj)
+		if not stmt.decorators.is_empty():
+			var dec_val = _apply_decorators(stmt.decorators, class_obj)
+			if _suspended:
+				return ExecResult.SUSPENDED
+			if dec_val == null:
+				return ExecResult.RAISE if report.has_error else ExecResult.ERROR
+			environment.set_val(stmt.name, dec_val)
 		return ExecResult.NORMAL
 
 	## 向 preamble 中定义的内置类型类注入对应的方法描述 [br]
@@ -22196,6 +22451,8 @@ var _waiting_resume_callback: Callable = Callable()
 
 ## 最大执行步数 (传入 Interpreter)
 var _config_max_steps: int = 50000
+## 脚本路径 (注入 __file__, 空串表示未知)
+var _script_path: String = ""
 ## 外部 API 函数注册 名称 -> Callable 的映射
 var api_functions: Dictionary[String, Callable] = {}
 
@@ -22288,6 +22545,12 @@ func register_api(api: Dictionary):
 ## 注册单个外部 API 函数
 func register_api_pair(api_name: String, callable: Callable) -> void:
 	api_functions[api_name] = callable
+
+## 设置脚本路径 [br]
+## 路径会注入为脚本级全局名 __file__ (须在 run() 之前设置), 空串表示未知 [br]
+## [param path] 脚本路径
+func set_script_path(path: String) -> void:
+	_script_path = path
 
 ## 设置预设代码 [br]
 ## 预设代码会在用户代码之前执行, 用户代码可直接使用其中定义的变量, 函数, 导入等 [br]
@@ -22382,7 +22645,7 @@ func run() -> State:
 			_waiting_resume_callback = Callable()
 	
 	if state == State.IDLE:
-		interpreter = Interpreter.new(report, api_functions)
+		interpreter = Interpreter.new(report, api_functions, _script_path)
 		interpreter.owner = self
 		interpreter.max_steps = _config_max_steps
 	

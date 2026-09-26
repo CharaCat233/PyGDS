@@ -221,22 +221,30 @@ When the interpreter executes a `raise` statement, it goes through the following
 ```gdscript
 if stmt is RaiseStmt:
     if stmt.expression != null:
-        var exc = evaluate(stmt.expression)       # 1. Evaluate the raise expression
+        var exc = evaluate(stmt.expression)       # 1. Evaluate the raise expression (returns SUSPENDED on suspension)
         if exc == null:
             return ExecResult.RAISE                # Evaluation failed, propagate upward
+
+        # 2. Bare exception class form is instantiated with no arguments
+        if exc is DSLClass and _is_registered_exception_class(exc):
+            var inst = exc.magic_call([], {})
+            if inst == null or report.has_error:
+                return ExecResult.RAISE
+            exc = inst
 
         var is_valid = false
         var err_type = ""
         var err_msg = ""
 
         if exc is DSLException:
-            is_valid = true                        # 2a. Raw DSLException
+            is_valid = true                        # 3a. Raw DSLException
             err_type = exc.error_type
             err_msg = exc.message
         elif exc.fields != null:
-            var exc_type = globals.get_val("Exception")
-            if exc_type is DSLClass and exc._is_subclass_of_klass(exc_type):
-                is_valid = true                    # 2b. DSLObject that inherits from Exception
+            var exc_type = globals.get_val_safe("Exception")
+            if (exc_type is DSLClass and exc._is_subclass_of_klass(exc_type)) \
+                or _is_registered_exception_instance(exc):
+                is_valid = true                    # 3b. DSLObject that inherits from Exception
                 err_type = exc._type_name()
                 if exc._wrapped is DSLException:
                     err_msg = exc._wrapped.message
@@ -245,11 +253,14 @@ if stmt is RaiseStmt:
                     err_msg = exc.fields["args"].items[0]._dsl_str()
 
         if is_valid:
-            last_exception = exc                   # 3. Set last_exception
-            report.error(err_type + ": " + err_msg) # 4. Report the error
+            # 4. from clause: evaluate the cause expression and store it into __cause__
+            #    via _store_exception_cause (a failed check raises
+            #    TypeError: exception causes must derive from BaseException)
+            last_exception = exc                   # 5. Set last_exception
+            report.error(err_type + ": " + err_msg) # 6. Report the error
         else:
             raise_exception("TypeError", "exceptions must derive from Exception")
-        return ExecResult.RAISE                    # 5. Return RAISE status
+        return ExecResult.RAISE                    # 7. Return RAISE status
 ```
 
 ### Flow Diagram
@@ -262,20 +273,37 @@ raise SomeError("msg")
    → DSLClass("SomeError").magic_call → DSLObject
         │
         ▼
-2. Validate exception type legality
-   ├── Is it a DSLObject that inherits from Exception? → Valid
+2. Bare exception class form? → Instantiated with no arguments
+        │
+        ▼
+3. Validate exception type legality
+   ├── Is it a DSLObject inheriting from Exception / a registered exception class? → Valid
    └── No → raise TypeError("exceptions must derive from Exception")
         │
         ▼
-3. Set Interpreter.last_exception = exc
+4. Has a from clause? → evaluate(cause) → _store_exception_cause(exc, cause)
         │
         ▼
-4. report.error(error_type + ": " + message)
+5. Set Interpreter.last_exception = exc
         │
         ▼
-5. Return ExecResult.RAISE
+6. report.error(error_type + ": " + message)
+        │
+        ▼
+7. Return ExecResult.RAISE
    → exec_block detects RAISE → propagates upward through the call stack
 ```
+
+### `raise ... from` Exception Chaining
+
+For `raise X from Y`, the cause exception is stored into the exception instance by `_store_exception_cause`:
+
+- Instance wrappers (instances of built-in or user exception classes): `fields["__cause__"] = Y`, `fields["__suppress_context__"] = True`, readable automatically through attribute access
+- Bare `DSLException` (internal paths such as generator `throw` injection): stored into the instance fields `cause` / `suppress_context`; `_dsl_getattribute` returns them for `__cause__` / `__suppress_context__`
+- `from None`: `__cause__` is `None` and `__suppress_context__` is `True` (CPython semantics: an explicit `from` of any value sets the suppression flag)
+- A class used after `from` is instantiated with no arguments first, then stored; `__cause__` can be reassigned by user code
+
+Without a `from` clause, `__cause__` defaults to `None` and `__suppress_context__` to `False` (default fields written by `_exception_init`). The implicit `__context__` chain and chained traceback printing for uncaught errors are not implemented
 
 ### `raise` Re-raising
 
@@ -619,3 +647,7 @@ try:
 except ValueError as e:
     print("outer caught:", e)        # outer caught: ValueError: inner
 ```
+
+## `except*` Exception Groups — Not Implemented
+
+The `except*` syntax and `ExceptionGroup` / `BaseExceptionGroup` (Python 3.11) are **not implemented** in PyGDS. The feature requires a dedicated ExceptionGroup runtime subsystem (group splitting, sub-group matching and propagation, `eg.group` / `eg.subgroup` attributes), while PyGDS has no asyncio / TaskGroup ecosystem and limited practical use cases; accepting the syntax without correct semantics would violate the "either correct or an explicit error" principle. Writing `except*` currently raises an explicit `SyntaxError` (`Unexpected token '*'`), and constructing `ExceptionGroup` literally raises `NameError`.

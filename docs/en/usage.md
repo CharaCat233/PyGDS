@@ -640,6 +640,122 @@ config("localhost", port=8080, debug=True, timeout=30)
 # localhost 8080 {"debug": True, "timeout": 30}
 ```
 
+### Decorators
+
+The expression after `@` may be any callable (self-written decorators, parameterised decorator factories, attribute chains, etc.), and decorators also work on `class` definitions. Decorators take effect in CPython's order: the expressions are evaluated first in source order, then applied starting from the one closest to the definition, and the final return value replaces the original binding
+
+```python
+def trace(fn):
+    def wrapper(x):
+        print("before")
+        r = fn(x)
+        print("after")
+        return r
+    return wrapper
+
+@trace
+def double(x):
+    return x * 2
+
+print(double(4))    # before / after / 8
+```
+
+Parameterised decorators (factory form) and stacked decorators:
+
+```python
+LOG = []
+
+def tag(t):
+    def deco(fn):
+        LOG.append("tag " + t)
+        return fn
+    return deco
+
+@tag("a")
+def calc(v):
+    return v + 1
+
+print(calc(1))    # 2
+print(LOG)        # ['tag a']
+
+EVENTS = []
+
+def factory(name):
+    EVENTS.append("make " + name)
+    def deco(fn):
+        EVENTS.append("apply " + name)
+        return fn
+    return deco
+
+@factory("a")
+@factory("b")
+def run():
+    pass
+
+print(EVENTS)     # ['make a', 'make b', 'apply b', 'apply a']
+```
+
+Class decorators are applied after the class object is created and their return value replaces the class binding; method decorators receive the unbound function object:
+
+```python
+def add_id(cls):
+    cls.id = 100
+    return cls
+
+@add_id
+class Widget:
+    name = "w"
+
+print(Widget.name, Widget.id)    # w 100
+
+REG = []
+
+def collect(fn):
+    REG.append("collected")
+    return fn
+
+class Service:
+    @collect
+    def run(self):
+        return "run"
+
+    @staticmethod
+    @collect
+    def ping():
+        return "ping"
+
+print(REG)                       # ['collected', 'collected']
+print(Service().run(), Service.ping())    # run ping
+```
+
+The five built-in forms `@staticmethod` / `@classmethod` / `@property` / `@name.setter` / `@name.deleter` are handled by the method-type fast path and can be combined with arbitrary decorators (`@staticmethod` on top with a custom decorator below, and so on). Note: when a decorator returns a wrapper function that replaces the original, the static-method / class-method / property wrapping of the built-in form is not preserved (CPython re-wraps into a `staticmethod` object etc.); scenarios dominated by registry-style decorators that return the original function are unaffected
+
+Decorator expressions run through the evaluation channel, so `time.sleep` suspensions inside them resume normally
+
+### Generic Type Parameter Syntax (Python 3.12+) and `type` Aliases
+
+The `[T, U]` type parameter list after a class or function name (PEP 695) is accepted as syntax and ignored; no type semantics are applied. Each type parameter may carry a bound annotation (`: expression`) and a default (`= expression`, Python 3.13+), both parsed but never evaluated. The `type` alias statement is likewise syntax-only: the alias name is not bound to any value (referencing it later raises `NameError`), and the right-hand expression is parsed but not evaluated — since type annotations are always ignored in PyGDS, using an alias in annotation position is unaffected
+
+```python
+class Box[T]:
+    def __init__(self, v):
+        self.value = v
+
+b = Box(7)
+print(b.value)      # 7
+
+def first[T](items):
+    return items[0]
+
+print(first([1, 2]))    # 1
+
+type Matrix = list
+def scale(v: Matrix, k):
+    return v[0] * k
+
+print(scale([3, 4], 2))    # 6
+```
+
 ### lambda Anonymous Functions
 
 Supports Python `lambda` expressions; they behave like ordinary functions (callable, usable as `key`/function arguments for `sort`/`map`/`filter`)
@@ -714,6 +830,19 @@ sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')
 ```
 
 > **Note**: only built-in modules are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
+
+### `__name__` and `__file__`
+
+At startup the interpreter injects script-level globals into the global scope: `__name__` is always `"__main__"` (single-script execution model, reassignable); `__file__` defaults to an empty string and the host can inject the actual path via `set_script_path(path)` before `run()`. The `if __name__ == "__main__":` entry guard works
+
+```python
+print(__name__)                 # __main__
+
+if __name__ == "__main__":
+    print("entry guard")        # entry guard
+
+print(isinstance(__file__, str))    # True
+```
 
 ### global / nonlocal
 
@@ -997,6 +1126,30 @@ else:
 finally:
     print("cleanup")
 ```
+
+### raise ... from Exception Chaining
+
+`raise expression from cause-expression` stores the cause exception in the exception instance's `__cause__` field; with `from None` the `__cause__` is `None`. Whatever the `from` value (including `None`), `__suppress_context__` is set to `True`. An exception raised without a `from` clause has `__cause__` `None` and `__suppress_context__` `False`. The cause expression, like the raise expression itself, runs through the evaluation channel, so `time.sleep` suspensions inside it resume normally. Raising an exception class (without parentheses) instantiates it with no arguments; a class used after `from` is likewise instantiated automatically
+
+```python
+try:
+    raise ValueError("root cause")
+except ValueError as err:
+    try:
+        raise TypeError("outer") from err
+    except TypeError as e:
+        print(e.__cause__ is err)        # True
+        print(str(e.__cause__))          # root cause
+        print(e.__suppress_context__)    # True
+
+try:
+    raise KeyError("k") from None
+except KeyError as e2:
+    print(e2.__cause__)                  # None
+    print(e2.__suppress_context__)       # True
+```
+
+A cause that is not an exception instance (or exception class / `None`) raises `TypeError: exception causes must derive from BaseException`. Note: the implicit `__context__` chain (the automatic "During handling..." chain) and chained traceback printing for uncaught errors are not implemented; the `__cause__` field itself is available
 
 ### Custom Classes and Magic Methods
 

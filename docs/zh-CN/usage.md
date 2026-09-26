@@ -638,6 +638,122 @@ config("localhost", port=8080, debug=True, timeout=30)
 # localhost 8080 {"debug": True, "timeout": 30}
 ```
 
+### 装饰器
+
+`@` 后可以是任意可调用对象的表达式（自写装饰器、带参装饰器工厂、属性访问链等），也可以用于 `class` 定义。装饰器按 CPython 的顺序生效：表达式先按源码顺序求值，再从最贴近定义者开始依次应用，最终以返回值替换原绑定
+
+```python
+def trace(fn):
+    def wrapper(x):
+        print("before")
+        r = fn(x)
+        print("after")
+        return r
+    return wrapper
+
+@trace
+def double(x):
+    return x * 2
+
+print(double(4))    # before / after / 8
+```
+
+带参数的装饰器（工厂形式）与堆叠装饰器：
+
+```python
+LOG = []
+
+def tag(t):
+    def deco(fn):
+        LOG.append("tag " + t)
+        return fn
+    return deco
+
+@tag("a")
+def calc(v):
+    return v + 1
+
+print(calc(1))    # 2
+print(LOG)        # ['tag a']
+
+EVENTS = []
+
+def factory(name):
+    EVENTS.append("make " + name)
+    def deco(fn):
+        EVENTS.append("apply " + name)
+        return fn
+    return deco
+
+@factory("a")
+@factory("b")
+def run():
+    pass
+
+print(EVENTS)     # ['make a', 'make b', 'apply b', 'apply a']
+```
+
+类装饰器在类对象创建后应用，返回值替换类绑定；方法装饰器收到的是未绑定的函数对象：
+
+```python
+def add_id(cls):
+    cls.id = 100
+    return cls
+
+@add_id
+class Widget:
+    name = "w"
+
+print(Widget.name, Widget.id)    # w 100
+
+REG = []
+
+def collect(fn):
+    REG.append("collected")
+    return fn
+
+class Service:
+    @collect
+    def run(self):
+        return "run"
+
+    @staticmethod
+    @collect
+    def ping():
+        return "ping"
+
+print(REG)                       # ['collected', 'collected']
+print(Service().run(), Service.ping())    # run ping
+```
+
+`@staticmethod` / `@classmethod` / `@property` / `@name.setter` / `@name.deleter` 五种内建形式按方法类型快速路径处理，可与任意装饰器组合（`@staticmethod` 在上、自写装饰器在下等）。注意：当装饰器返回包装函数替换原函数时，内建形式的静态方法 / 类方法 / property 包装语义不保留（CPython 会重新包装为 `staticmethod` 等对象），以返回原函数的注册类装饰器为主的使用场景不受影响
+
+装饰器表达式经求值通道执行，其内部的 `time.sleep` 挂起可正常推进
+
+### 泛型类型参数语法（Python 3.12+）与 `type` 别名
+
+类与函数名后的 `[T, U]` 类型参数列表（PEP 695）按语法接受并忽略，不做类型语义；每个类型参数可带绑定注解（`: 表达式`）与默认值（`= 表达式`，Python 3.13+），均只解析不求值。`type` 别名语句同样仅接受语法：别名名不绑定到任何值（后续访问该名字会报 `NameError`），右侧表达式只解析不求值——由于类型注解在 PyGDS 中一律忽略，注解位置使用别名不受影响
+
+```python
+class Box[T]:
+    def __init__(self, v):
+        self.value = v
+
+b = Box(7)
+print(b.value)      # 7
+
+def first[T](items):
+    return items[0]
+
+print(first([1, 2]))    # 1
+
+type Matrix = list
+def scale(v: Matrix, k):
+    return v[0] * k
+
+print(scale([3, 4], 2))    # 6
+```
+
 ### lambda 匿名函数
 
 支持 Python 的 `lambda` 表达式，行为与普通函数一致（可调用、可作 `sort`/`map`/`filter` 的 `key`/函数参数）
@@ -712,6 +828,19 @@ sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')
 ```
 
 > **注意**：目前仅支持内置模块，不支持导入用户编写的 `.py` 文件，模块详情见 [内置模块文档](./builtin.md)
+
+### `__name__` 与 `__file__`
+
+解释器启动时向全局作用域注入脚本级全局名：`__name__` 恒为 `"__main__"`（单脚本运行模型，可重新赋值）；`__file__` 默认为空串，宿主可在 `run()` 之前通过 `set_script_path(path)` 注入实际路径。`if __name__ == "__main__":` 入口守卫可用
+
+```python
+print(__name__)                 # __main__
+
+if __name__ == "__main__":
+    print("entry guard")        # entry guard
+
+print(isinstance(__file__, str))    # True
+```
 
 ### global / nonlocal
 
@@ -994,6 +1123,30 @@ else:
 finally:
     print("cleanup")
 ```
+
+### raise ... from 异常链
+
+`raise 表达式 from 因果表达式` 把因果异常存入异常实例的 `__cause__` 字段，`from None` 时 `__cause__` 为 `None`；无论 `from` 何值（含 `None`），`__suppress_context__` 均置为 `True`。无 `from` 子句的异常 `__cause__` 为 `None`、`__suppress_context__` 为 `False`。因果表达式与 raise 表达式一样经求值通道执行，内部的 `time.sleep` 挂起可正常推进。raise 一个异常类（不带括号）时按无参实例化处理，`from` 一个异常类时同样自动实例化
+
+```python
+try:
+    raise ValueError("root cause")
+except ValueError as err:
+    try:
+        raise TypeError("outer") from err
+    except TypeError as e:
+        print(e.__cause__ is err)        # True
+        print(str(e.__cause__))          # root cause
+        print(e.__suppress_context__)    # True
+
+try:
+    raise KeyError("k") from None
+except KeyError as e2:
+    print(e2.__cause__)                  # None
+    print(e2.__suppress_context__)       # True
+```
+
+因果值不是异常实例（或异常类 / `None`）时报 `TypeError: exception causes must derive from BaseException`。注意：隐式 `__context__` 链（捕获后自动串联的「During handling...」链）与未捕获输出的链式回溯打印未实现，`__cause__` 字段本身可用
 
 ### 自定义类与魔法方法
 

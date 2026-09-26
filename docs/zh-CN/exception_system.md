@@ -221,22 +221,30 @@ print(e.args)     # ("bad type",)
 ```gdscript
 if stmt is RaiseStmt:
     if stmt.expression != null:
-        var exc = evaluate(stmt.expression)       # 1. 求值 raise 表达式
+        var exc = evaluate(stmt.expression)       # 1. 求值 raise 表达式 (挂起时返回 SUSPENDED)
         if exc == null:
             return ExecResult.RAISE                # 求值失败, 向上传播
+
+        # 2. 裸异常类形式按无参实例化处理
+        if exc is DSLClass and _is_registered_exception_class(exc):
+            var inst = exc.magic_call([], {})
+            if inst == null or report.has_error:
+                return ExecResult.RAISE
+            exc = inst
 
         var is_valid = false
         var err_type = ""
         var err_msg = ""
 
         if exc is DSLException:
-            is_valid = true                        # 2a. 原始 DSLException
+            is_valid = true                        # 3a. 原始 DSLException
             err_type = exc.error_type
             err_msg = exc.message
         elif exc.fields != null:
-            var exc_type = globals.get_val("Exception")
-            if exc_type is DSLClass and exc._is_subclass_of_klass(exc_type):
-                is_valid = true                    # 2b. DSLObject 且继承自 Exception
+            var exc_type = globals.get_val_safe("Exception")
+            if (exc_type is DSLClass and exc._is_subclass_of_klass(exc_type)) \
+                or _is_registered_exception_instance(exc):
+                is_valid = true                    # 3b. DSLObject 且继承自 Exception
                 err_type = exc._type_name()
                 if exc._wrapped is DSLException:
                     err_msg = exc._wrapped.message
@@ -245,11 +253,13 @@ if stmt is RaiseStmt:
                     err_msg = exc.fields["args"].items[0]._dsl_str()
 
         if is_valid:
-            last_exception = exc                   # 3. 设置 last_exception
-            report.error(err_type + ": " + err_msg) # 4. 报告错误
+            # 4. from 子句: 求值因果表达式并经 _store_exception_cause 存入 __cause__
+            #    (校验失败报 TypeError: exception causes must derive from BaseException)
+            last_exception = exc                   # 5. 设置 last_exception
+            report.error(err_type + ": " + err_msg) # 6. 报告错误
         else:
             raise_exception("TypeError", "exceptions must derive from Exception")
-        return ExecResult.RAISE                    # 5. 返回 RAISE 状态
+        return ExecResult.RAISE                    # 7. 返回 RAISE 状态
 ```
 
 ### 流程图
@@ -262,20 +272,37 @@ raise SomeError("msg")
    → DSLClass("SomeError").magic_call → DSLObject
         │
         ▼
-2. 验证异常类型合法性
-   ├── 是 DSLObject 且继承自 Exception？ → 合法
+2. 裸异常类形式? → 无参实例化为异常实例
+        │
+        ▼
+3. 验证异常类型合法性
+   ├── 是 DSLObject 且继承自 Exception / 已注册异常类？ → 合法
    └── 否 → raise TypeError("exceptions must derive from Exception")
         │
         ▼
-3. 设置 Interpreter.last_exception = exc
+4. 有 from 子句? → evaluate(cause) → _store_exception_cause(exc, cause)
         │
         ▼
-4. report.error(error_type + ": " + message)
+5. 设置 Interpreter.last_exception = exc
         │
         ▼
-5. 返回 ExecResult.RAISE
+6. report.error(error_type + ": " + message)
+        │
+        ▼
+7. 返回 ExecResult.RAISE
    → exec_block 检测到 RAISE → 向调用栈上方传播
 ```
+
+### `raise ... from` 异常链
+
+`raise X from Y` 的因果异常由 `_store_exception_cause` 存入异常实例：
+
+- 实例 wrapper（内建异常或用户异常类的实例）：`fields["__cause__"] = Y`、`fields["__suppress_context__"] = True`，经属性访问自动可读
+- 裸 `DSLException`（生成器 `throw` 注入等内部路径）：存入实例字段 `cause` / `suppress_context`，`_dsl_getattribute` 对 `__cause__` / `__suppress_context__` 返回对应值
+- `from None`：`__cause__` 为 `None`，`__suppress_context__` 为 `True`（CPython 语义：显式 `from` 任何值都置位抑制标记）
+- `from` 一个异常类时先无参实例化再存入；`__cause__` 可被用户代码重新赋值
+
+无 `from` 子句时 `__cause__` 默认为 `None`、`__suppress_context__` 默认为 `False`（`_exception_init` 写入默认字段）。隐式 `__context__` 链与未捕获输出的链式回溯打印未实现
 
 ### `raise` 重新抛出
 
@@ -619,3 +646,7 @@ try:
 except ValueError as e:
     print("outer caught:", e)        # outer caught: ValueError: inner
 ```
+
+## `except*` 异常组 — 暂不实现
+
+`except*` 语法与 `ExceptionGroup` / `BaseExceptionGroup`（Python 3.11）在 PyGDS 中**暂不实现**。该特性需要独立的 ExceptionGroup 运行时子系统（异常分组拆分、子组匹配与传播、`eg.group` / `eg.subgroup` 属性），而 PyGDS 没有 asyncio / TaskGroup 生态，实际使用场景有限；仅做语法接受而无正确语义违背「要么正确，要么明确报错」的原则。当前书写 `except*` 会明确报 `SyntaxError`（`Unexpected token '*'`），字面构造 `ExceptionGroup` 报 `NameError`。

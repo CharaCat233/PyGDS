@@ -368,13 +368,15 @@ class DSLProperty extends DSLObject:
 
 ### Parser 处理
 
-Parser 的 `decorated_declaration()` 方法识别三种装饰器语法
+Parser 的 `decorated_declaration()` 方法识别五种内建装饰器语法
 
 | 装饰器语法 | `method_type` | 处理方式 |
 | :--- | :--- | :--- |
 | `@property` | 3 | 创建 `DSLProperty` 实例，存入 `methods[name]` |
 | `@name.setter` | 4 | 在已有 `DSLProperty` 上调用 `.setter(func_obj)` |
 | `@name.deleter` | 5 | 在已有 `DSLProperty` 上调用 `.deleter(func_obj)` |
+
+除内建形式外，`decorated_declaration()` 也接受任意表达式作为装饰器（存入节点的 `decorators` 数组），并支持装饰 `class` 定义；内建形式最多出现一次，可与任意装饰器组合
 
 ### 使用示例
 
@@ -409,6 +411,26 @@ print(c.area)       # ~314.159 — 计算属性
 ro = Circle(42)
 ro.area = 100       # AttributeError: can't set attribute
 ```
+
+---
+
+## 任意装饰器
+
+### 装饰器解析
+
+`decorated_declaration()` 按源码顺序收集连续的 `@` 行：`@classmethod` / `@staticmethod` / `@property` / `@name.setter` / `@name.deleter` 五种内建形式记入 `method_type`（走既有快速路径），其余表达式存入节点的 `decorators` 数组（`FunctionStmt` 与 `ClassStmt` 均持有该字段）
+
+### 装饰器应用
+
+解释器的 `_apply_decorators()` 在函数 / 类对象创建后执行：先把装饰器表达式按源码顺序全部求值，再从最贴近定义者开始依次调用，最终返回值替换原绑定。三个应用点：
+
+| 位置 | 时机 |
+| :--- | :--- |
+| 顶层 / 语句位置的 `def` | `DSLFunction` 创建并设置默认值之后 |
+| 类体方法 | `methods[name]` 建立之后（property / setter / deleter 场景下装饰的是 `DSLProperty` 对象） |
+| `class` 定义 | `DSLClass` 创建并绑定到环境之后 |
+
+装饰器表达式经 `evaluate()` 通道求值，内部的 `time.sleep` 挂起向上返回 `SUSPENDED` 交回语句重放；装饰对象为类体方法时传入的是未绑定的 `DSLFunction`。当装饰器返回包装函数替换原对象时，`method_type` 承载的静态方法 / 类方法 / property 包装语义不保留
 
 ---
 
