@@ -483,6 +483,8 @@ for item in [1, 2, 3]:
     print(item)
 
 # for 循环 (字典键)
+# 注意: 迭代期间对字典增删键报 RuntimeError: dictionary changed size during iteration
+# (既有键的值替换不受影响)
 for key in {"a": 1, "b": 2}:
     print(key, d[key])
 
@@ -911,6 +913,23 @@ c = a + b
 print(c)                        # Vec(15, 30)
 print(a == b)                   # False
 print(c == Vec(15, 30))         # True
+```
+
+#### 排序比较方法（`__lt__` / `__gt__`）
+
+定义了 `__lt__`（或 `__gt__`）的用户类实例可直接参与 `sorted` / `list.sort` / `min` / `max`：元素比较走用户方法（另一侧未定义时按 CPython 反射语义尝试对方的比较方法），`sorted(..., reverse=True)` 与 CPython 一致按交换操作数的 `__lt__` 比较，无需定义 `__gt__`
+
+```python
+class P:
+    def __init__(self, v):
+        self.v = v
+    def __lt__(self, other):
+        return self.v < other.v
+
+a = [P(2), P(1)]
+a.sort()
+print([p.v for p in a])         # [1, 2]
+print(min([P(2), P(1)]).v)      # 1
 ```
 
 ### 自定义异常类

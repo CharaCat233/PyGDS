@@ -102,6 +102,16 @@ dict(x=10, y=20)         # {"x": 10, "y": 20}
 - 无参时返回 `()`
 - 返回类型：`tuple` (DSLTuple)
 
+### `bytes(obj=0)`
+
+对应 Python `bytes` 类型构造函数，`b"..."` 字面量之外的字节串构造方式
+
+- `bytes(3)`：3 个零字节
+- `bytes([104, 105])`：可迭代对象，元素为 0-255 的整数（越界报 `ValueError`）
+- `bytes("hi", "utf-8")`：字符串按编码转字节串
+- `bytes(b"hi")`：拷贝
+- 返回类型：`bytes` (DSLBytes)
+
 ---
 
 ## 内置函数
@@ -188,14 +198,17 @@ len(range(1000000))      # 1000000 (不展开)
 
 对应 Python `type()`，返回对象的类型对象
 
-- 无参时返回 `"<class 'NoneType'>"` 字符串
-- 对于有 klass 的对象，返回其所属的 DSLClass（类型对象）
-- 对于内置值对象，尝试从全局作用域查找类型类
+- 对于内置值对象，返回对应的类型类（从内置类型表查找）
+- 对用户类（类对象本身），返回 `type` 类型类
+- 三参数形式 `type(name, bases, dict)` 动态创建类
 
 ```python
-type(42)                 # <class 'int'> (返回 DSLClass)
-type("hello")            # <class 'str'> (返回 DSLClass)
-type(type)               # <class 'type'> (返回 DSLClass)
+type(42)                 # <class 'int'>
+type("hello")            # <class 'str'>
+class C:
+    pass
+type(C)                  # <class 'type'>
+type(C()).__name__       # "C"
 ```
 
 ### `id(obj)`
@@ -319,7 +332,7 @@ list(enumerate(["a", "b"]))  # [(0, "a"), (1, "b")]
 
 ### `iter(iterable)`
 
-对应 Python `iter()`，返回对象的迭代器。对 `list` / `tuple` / `str` / `range` / `dict` / `set` 返回真正的一等迭代器对象（类型名为 `list_iterator` / `tuple_iterator` / `str_ascii_iterator`（纯 ASCII 字符串）/ `str_iterator` / `range_iterator` / `dict_keyiterator` / `set_iterator`），持有原容器引用（活动视图，迭代期间容器追加的元素可见）、耗尽后再迭代为空、`iter(it)` 返回自身
+对应 Python `iter()`，返回对象的迭代器。对 `list` / `tuple` / `str` / `range` / `dict` / `set` 返回真正的一等迭代器对象（类型名为 `list_iterator` / `tuple_iterator` / `str_ascii_iterator`（纯 ASCII 字符串）/ `str_iterator` / `range_iterator` / `dict_keyiterator` / `dict_valueiterator` / `dict_itemiterator` / `set_iterator`），持有原容器引用（活动视图，迭代期间容器追加的元素可见）、耗尽后再迭代为空、`iter(it)` 返回自身；`iter(生成器)` 返回生成器自身（耗尽后不可重复消费）；`iter(d)` 迭代期间对字典增删键报 `RuntimeError: dictionary changed size during iteration`（既有键的值替换不触发）。这些类型名不是内建名（与 CPython 一致，经 `type(x).__name__` 查看）
 
 ```python
 it = iter([1, 2, 3])
@@ -327,6 +340,11 @@ lst = [1, 2]
 it2 = iter(lst)
 lst.append(3)
 print(list(it2))                # [1, 2, 3] (活动视图)
+
+def g():
+    yield 1
+it3 = iter(g())
+print(list(it3), list(it3))     # [1] [] (生成器耗尽后不可重复消费)
 ```
 
 ### `zip(*iterables)`
@@ -395,6 +413,17 @@ oct(8)                   # "0o10"
 bin(3)                   # "0b11"
 ```
 
+### `format(value, spec="")`
+
+对应 Python `format()`，按格式说明符把值转为字符串，与 f-string 及 `str.format` 的格式说明符语法一致
+
+```python
+format(255, "x")         # "ff"
+format(1234567, ",")     # "1,234,567" (千位分隔)
+format(3.14, ".1f")      # "3.1"
+format(42)               # "42" (无说明符等价于 str)
+```
+
 ### `isinstance(obj, classinfo)`
 
 对应 Python `isinstance()`，检查对象是否为指定类型或其子类的实例
@@ -431,8 +460,6 @@ name = input("Enter name: ")
 
 > [!WARNING]
 > 该方法始终抛出 `EOFError` 异常
->
-> **v0.5.0-alpha.1 变更**：`sleep()` 已迁移到 `time` 模块，见下文 [`time` 模块](#time-模块) 的 `time.sleep(seconds)`
 
 ### `getattr(obj, name, default=None)`
 
@@ -492,6 +519,22 @@ p = Point()
 setattr(p, "y", 5)
 delattr(p, "y")
 getattr(p, "y", "gone")         # "gone"
+```
+
+### `dir(obj)`
+
+对应 Python `dir()`，按字母序列出对象可访问的属性与方法名
+
+- 用户类实例：实例属性 + 类方法 + 类属性（含继承链）
+- 类对象：类方法与类属性；模块：模块成员
+- 已知限制：内置类型字面量实例（如 `[]`）暂返回空列表
+
+```python
+class C:
+    def greet(self):
+        return "hi"
+
+dir(C)                   # ["greet", ...] (排序后的名字列表)
 ```
 
 ### `map(func, iterable, ...)`

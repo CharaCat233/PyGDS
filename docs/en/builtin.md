@@ -102,6 +102,16 @@ Corresponds to the Python `tuple` type constructor.
 - Returns `()` when called with no arguments.
 - Return type: `tuple` (DSLTuple)
 
+### `bytes(obj=0)`
+
+Corresponds to the Python `bytes` type constructor, the way to build byte strings beyond `b"..."` literals.
+
+- `bytes(3)`: three zero bytes.
+- `bytes([104, 105])`: an iterable of integers in 0-255 (out-of-range raises `ValueError`).
+- `bytes("hi", "utf-8")`: encodes a string into bytes.
+- `bytes(b"hi")`: copies an existing bytes.
+- Return type: `bytes` (DSLBytes)
+
 ---
 
 ## Built-in Functions
@@ -188,14 +198,17 @@ len(range(1000000))      # 1000000 (not materialised)
 
 Corresponds to Python `type()`, returning the type object of the given object.
 
-- When called with no arguments, returns the string `"<class 'NoneType'>"`.
-- For objects that have a klass, returns their associated DSLClass (type object).
-- For built-in value objects, attempts to look up the type class from the global scope.
+- For built-in value objects, returns the corresponding type class (looked up from the built-in type table).
+- For user classes (the class object itself), returns the `type` type class.
+- The three-argument form `type(name, bases, dict)` creates a class dynamically.
 
 ```python
-type(42)                 # <class 'int'> (returns DSLClass)
-type("hello")            # <class 'str'> (returns DSLClass)
-type(type)               # <class 'type'> (returns DSLClass)
+type(42)                 # <class 'int'>
+type("hello")            # <class 'str'>
+class C:
+    pass
+type(C)                  # <class 'type'>
+type(C()).__name__       # "C"
 ```
 
 ### `id(obj)`
@@ -319,10 +332,19 @@ list(enumerate(["a", "b"]))  # [(0, "a"), (1, "b")]
 
 ### `iter(iterable)`
 
-Corresponds to Python `iter()`, returning an iterator for the object.
+Corresponds to Python `iter()`, returning an iterator for the object. For `list` / `tuple` / `str` / `range` / `dict` / `set` it returns a true first-class iterator object (with type names `list_iterator` / `tuple_iterator` / `str_ascii_iterator` (pure-ASCII strings) / `str_iterator` / `range_iterator` / `dict_keyiterator` / `dict_valueiterator` / `dict_itemiterator` / `set_iterator`), holding a reference to the original container (a live view: elements appended during iteration are visible), empty on re-iteration after exhaustion, and `iter(it)` returns itself; `iter(generator)` returns the generator itself (it cannot be consumed again once exhausted); adding or removing keys on a dictionary while `iter(d)` is iterating raises `RuntimeError: dictionary changed size during iteration` (replacing the value of an existing key does not). These type names are not built-in names (consistent with CPython; inspect them via `type(x).__name__`)
 
 ```python
 it = iter([1, 2, 3])
+lst = [1, 2]
+it2 = iter(lst)
+lst.append(3)
+print(list(it2))                # [1, 2, 3] (live view)
+
+def g():
+    yield 1
+it3 = iter(g())
+print(list(it3), list(it3))     # [1] [] (a generator cannot be consumed again once exhausted)
 ```
 
 ### `zip(*iterables)`
@@ -391,6 +413,17 @@ Corresponds to Python `bin()`, converting an integer to a binary string.
 bin(3)                   # "0b11"
 ```
 
+### `format(value, spec="")`
+
+Corresponds to Python `format()`, converting a value to a string according to a format specifier, using the same specifier syntax as f-strings and `str.format`.
+
+```python
+format(255, "x")         # "ff"
+format(1234567, ",")     # "1,234,567" (thousands separator)
+format(3.14, ".1f")      # "3.1"
+format(42)               # "42" (no specifier is equivalent to str)
+```
+
 ### `isinstance(obj, classinfo)`
 
 Corresponds to Python `isinstance()`, checking whether an object is an instance of a specified type or its subclass.
@@ -427,8 +460,6 @@ name = input("Enter name: ")
 
 > [!WARNING]
 > This method always raises an `EOFError` exception.
->
-> **Changed in v0.5.0-alpha.1**: `sleep()` has moved into the `time` module — use `time.sleep(seconds)` (see the `time` module section below). CPython has no built-in bare `sleep` either.
 
 ### `getattr(obj, name, default=None)`
 
@@ -488,6 +519,22 @@ p = Point()
 setattr(p, "y", 5)
 delattr(p, "y")
 getattr(p, "y", "gone")         # "gone"
+```
+
+### `dir(obj)`
+
+Corresponds to Python `dir()`, listing the accessible attribute and method names of an object in alphabetical order.
+
+- User class instances: instance attributes + class methods + class attributes (including the inheritance chain).
+- Class objects: class methods and class attributes; modules: module members.
+- Known limitation: built-in type literal instances (such as `[]`) currently return an empty list.
+
+```python
+class C:
+    def greet(self):
+        return "hi"
+
+dir(C)                   # ["greet", ...] (sorted name list)
 ```
 
 ### `map(func, iterable, ...)`

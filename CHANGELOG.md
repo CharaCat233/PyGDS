@@ -6,6 +6,44 @@
 
 当前无待发布条目。其余已知问题与功能缺口见 README 的「已知问题与限制」章节，或在仓库 `tests/已知问题清单.md` 查看带复现脚本的完整清单
 
+## [0.5.0-alpha.8] - 2026-09-26
+
+本版修复 alpha.7 排查发现的 6 项已知问题，并通过收尾扫描补齐一批内建函数与方法缺口
+
+### 修复
+
+- **`iter(生成器)` 返回快照列表（P1-30）**：`it = iter(g())` 此前把生成器驱动完成并快照为列表（可重复消费），现在返回生成器自身（`iter(gen) is gen`，耗尽后不可重复消费）；`itertools.repeat` / `count` / `cycle` 等无限对象改为一等迭代器包装（绝不走快照分支）；`defaultdict` 与 `d.items()` 接入对应迭代器类型；迭代器的驱动状态在 `iter()` 调用时定格
+- **排序不支持用户类 `__lt__` / `__gt__`（P1-31）**：`[P(2), P(1)].sort()` 此前报 `TypeError`。现排序与 `min` / `max` 的元素比较统一走与二元运算符相同的分派（用户比较方法优先、不可用时试反射比较、再回退内置比较）。CPython 富比较语义对齐：`sorted(reverse=True)` 按交换操作数的 `__lt__` 比较（不要求 `__gt__`）、只有 `__lt__` 或只有 `__gt__` 的类都能通过反射参与排序、`max` 缺 `__gt__` 时反射到 `__lt__`；比较方法体内抛出的异常按原类型传播（可被 try/except 捕获），不再被通用文案遮蔽；比较方法内的 `sleep` 经语句重放正确推进（每处比较各等待一次）
+- **迭代字典时增删键不报错（P2-6）**：`it = iter(d)` 后增删字典键再消费，此前静默继续（或取到新键）。现按 CPython 报 `RuntimeError: dictionary changed size during iteration`，可被 try/except 捕获；既有键的值替换不触发；推导式、`sum` / `sorted` / `tuple` / `set` / `dict` / `next` 等全部消费路径统一传播。实现采用迭代器尺寸快照检查 + 解释器异常通道（上一轮的 `error_msg` 轮询方案已废弃）
+- **`type(用户类)` 返回 `<class 'object'>`（P2-8）**：现返回 `<class 'type'>`；`type` / `dict_items` 类型类补全注册。顺带把 `dict_keys` / `dict_values` / `dict_items` 类型类从全局命名空间收敛到内置类型表（与迭代器类型一致，`isinstance(x, dict_keys)` 按 CPython 报 `NameError`，这些类型名不再是内建名）
+- **迭代器类型类暴露在全局命名空间（P2-7）**：`list_iterator` / `dict_keyiterator` / `repeat` / `count` / `cycle` 等类型类此前注册进全局命名空间（`isinstance(it, list_iterator)` 可直接用），现仅注册进内置类型表供 `type()` 返回与 `isinstance` 的类型名解析；全局命名空间与 CPython 一致（脚本若以这些名字定义变量不再被覆盖）
+- **`iter()` 对部分容器的类型名（P2-5）**：`type(iter(defaultdict(int))).__name__` 现为 `dict_keyiterator`（此前 `list`）；`d.items()` 返回独立的 `dict_items` 视图类型（此前是快照列表），`type(iter(d.items())).__name__` 为 `dict_itemiterator`，支持 `len()` / 成员判定 / `repr`（`dict_items([...])`）与集合语义相等比较
+- **`list(1)` 等不可迭代实参静默返回空**：`list(1)` / `tuple(1)` / `dict(1)` 此前静默返回空容器。现按 CPython 报 `TypeError: 'int' object is not iterable`（`list` / `tuple` / `dict` 三个构造器统一修正，`set` / `frozenset` 原本已报错）
+- **嵌套用户调用内的挂起被跳过重放**：排序比较函数内 `sleep` 等场景中，挂起发生在内建方法内部嵌套的用户调用里时，调用结果被误当作「独立调用已完成」返回 None，语句恢复时被跳过重放，得到半成品结果（排序未生效）。现按「调用栈是否留有嵌套帧」判定：嵌套调用内的挂起必须整句重放
+
+### 新增
+
+- **`bytes()` 构造函数与 bytes 方法族**：`bytes` 类型此前仅支持 `b'...'` 字面量，`bytes(3)` 报 `NameError`。现支持 `bytes(整数)`（零填充）、`bytes(可迭代)`（0-255，越界报 `ValueError`）、`bytes(str, encoding)`、`bytes(bytes)`（拷贝）；方法族补齐 `decode` / `hex` / `upper` / `lower` / `title` / `strip` / `lstrip` / `rstrip` / `split` / `replace` / `find` / `index` / `count` / `startswith` / `endswith` / `join` / `center` / `ljust` / `rjust`（`bytes` 字面量实例的方法查找同步接通）
+- **`format()` 内建**：`format(value, spec)` 此前缺失（`NameError`）。现复用 `str.format` 的格式说明符驱动，支持宽度 / 对齐 / 分组（`,` / `_`）/ 精度 / 进制等全部既有 spec
+- **`dir()` 内建**：列出对象属性（用户类实例含实例属性与方法、类对象含类方法与类属性、模块含成员），结果排序；内置类型字面量实例暂返回空列表（已知限制，见已知问题清单 P2-10）
+- **int 方法**：`bit_length` / `bit_count` / `to_bytes(length, byteorder, signed=False)` / `from_bytes(bytes, byteorder, signed=False)`（越界按 CPython 报 `OverflowError`，负数转无符号报 `can't convert negative int to unsigned`）；**float 方法**：`is_integer` / `as_integer_ratio`（Infinity / NaN 按 CPython 报 `OverflowError`）；**str 方法**：`encode`（UTF-8）/ `format_map(mapping)`
+
+### 变更
+
+- **集合方法接受任意可迭代**：`union` / `intersection` / `difference` / `symmetric_difference` / `issubset` / `issuperset` / `isdisjoint` 此前要求实参为 set（否则报 `TypeError`），现与 CPython 一致接受任意可迭代（`{1, 2}.union([9])`）；新增原地更新族 `update` / `intersection_update` / `difference_update` / `symmetric_difference_update`
+- **`dict_items` 视图相等按集合语义**：`d1.items() == d2.items()` 此前恒为 `False`（引用比较），现与顺序无关逐对比较（`dict_keys` 同语义）；`!=` 同步支持
+
+### 破坏性变更 (Breaking Changes)
+
+- **全局命名空间移除迭代器与 `dict` 视图类型名**：`list_iterator` / `dict_keyiterator` / `dict_keys` / `dict_values` 等名字不再是内建名（`isinstance(it, list_iterator)` 现报 `NameError`，与 CPython 一致）。此前以这些名字定义变量的脚本不再被覆盖，此前依赖这些内建名的脚本需要改用 `type(x).__name__` 比较
+- **集合运算方法对非可迭代的实参**：`{1}.union(5)` 报错文案从 `union() argument must be a set` 变为 `'int' object is not iterable`
+- **此前静默通过的错误现在报错**：`list(1)` / `tuple(1)` / `dict(1)` 等不可迭代实参从返回空容器改为报 `TypeError`
+
+### 测试
+
+- 新增 7 个行为一致性测试：`lang_iter_gen`（生成器 iter 语义）、`lang_iter_view`（`dict_items` 视图与类型名）、`err_dict_mutate`（字典迭代中增删键的 RuntimeError 可捕获）、`lang_user_sort`（用户类排序 / 反射 / min-max / 混合类型错误）、`lang_bytes_methods`（bytes 构造与方法族）、`lang_num_methods`（int/float 方法与 `format()`）、`edge_set_iterable`（集合可迭代实参与原地更新族），并入 `expected.json`（共 184 个用例全部通过，既有条目 `expected` 零变更），挂起测试 22 个用例通过
+- 差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
 ## [0.5.0-alpha.7] - 2026-09-25
 
 本版修复 P1-13（语句重放时并列调用的副作用重复执行），并按新的注释规范完成全量注释规范化

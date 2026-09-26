@@ -480,6 +480,9 @@ for item in [1, 2, 3]:
     print(item)
 
 # for loop (dictionary keys)
+# Note: adding or removing dictionary keys during iteration raises
+# RuntimeError: dictionary changed size during iteration
+# (replacing the value of an existing key is not affected)
 for key in {"a": 1, "b": 2}:
     print(key, d[key])
 
@@ -908,6 +911,23 @@ c = a + b
 print(c)                        # Vec(15, 30)
 print(a == b)                   # False
 print(c == Vec(15, 30))         # True
+```
+
+#### Ordering comparison methods (`__lt__` / `__gt__`)
+
+User class instances defining `__lt__` (or `__gt__`) can participate directly in `sorted` / `list.sort` / `min` / `max`: element comparisons dispatch to the user method (falling back to the reflection comparison method of the other side per CPython semantics when one side is undefined), and `sorted(..., reverse=True)` compares with swapped operands via `__lt__` exactly as CPython does, so `__gt__` is not required
+
+```python
+class P:
+    def __init__(self, v):
+        self.v = v
+    def __lt__(self, other):
+        return self.v < other.v
+
+a = [P(2), P(1)]
+a.sort()
+print([p.v for p in a])         # [1, 2]
+print(min([P(2), P(1)]).v)      # 1
 ```
 
 ### Custom Exception Classes

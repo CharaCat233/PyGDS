@@ -101,7 +101,7 @@ class DSLString extends DSLObject:
 
 ### DSLBytes — 字节串类型
 
-对应 Python `bytes`，由 `b"..."` / `rb"..."` 字面量创建（不可变）
+对应 Python `bytes`，由 `b"..."` / `rb"..."` 字面量或 `bytes()` 构造函数创建（不可变）
 
 ```gdscript
 class DSLBytes extends DSLObject:
@@ -381,6 +381,10 @@ lst[slice(4, 0, -1)]        # 负步长反向
 
 PyGDS 为不同集合类型提供了专门的迭代器实现
 
+### DSLSeqIterator
+
+`iter()` 对 list / tuple / str / range / dict / set 等返回的一等迭代器对象（对应 CPython 的 `list_iterator` / `tuple_iterator` / `str_iterator` / `range_iterator` / `dict_keyiterator` / `set_iterator` 等）：持有原容器引用（活动视图），内部驱动器在 `iter()` 调用时创建并复用（保证耗尽后再迭代为空）；`iter(it)` 返回自身。这些类型类仅注册进内置类型表（供 `type()` 返回），不是内建名
+
 ### DSLListIterator
 
 供 `DSLList` 和 `DSLTuple` 使用
@@ -401,7 +405,7 @@ class DSLListIterator extends DSLIterator:
 
 ### DSLDictKeyIterator
 
-迭代字典的键，并将内部存储的 `Variant` 键自动包装回 `DSLObject`
+迭代字典的键，并将内部存储的 `Variant` 键自动包装回 `DSLObject`；创建时记录键数快照，迭代期间对字典增删键时报 `RuntimeError: dictionary changed size during iteration`（既有键的值替换不触发）
 
 ```gdscript
 class DSLDictKeyIterator extends DSLIterator:
@@ -423,6 +427,76 @@ class DSLDictKeyIterator extends DSLIterator:
 无限迭代器，`itertools` 的 `repeat`/`cycle`/`count` 返回无限对象，其 `_dsl_iter()` 产出无限迭代器（`DSLRepeatIterator`/`DSLCycleIterator`/`DSLCountIterator`），`has_next()` 恒为 `true`，需配合 `islice`/`takewhile` 等惰性消费
 
 ## 内置类型方法
+
+### int 方法
+
+#### `int.bit_length()` → `int`
+
+返回整数的二进制表示位数（不含符号与前导零）
+
+```python
+# Python: int.bit_length()
+(255).bit_length()                  # 8
+(5).bit_length()                    # 3
+```
+
+#### `int.bit_count()` → `int`
+
+返回整数的二进制表示中 1 的个数
+
+```python
+# Python: int.bit_count()
+(7).bit_count()                     # 3
+```
+
+#### `int.to_bytes(length, byteorder, signed=False)` → `bytes`
+
+按指定长度与字节序（`"big"` / `"little"`）转为字节串；值放不下报 `OverflowError: int too big to convert`，负数转无符号报 `OverflowError: can't convert negative int to unsigned`
+
+```python
+# Python: int.to_bytes(length, byteorder)
+(16706).to_bytes(2, "big")          # b'AB'
+```
+
+#### `int.hex()` → `str`
+
+返回整数的十六进制字符串（带 `0x` 前缀，负数带 `-`）
+
+```python
+(255).hex()                         # "0xff"
+```
+
+#### `int.from_bytes(bytes, byteorder, signed=False)` → `int`
+
+类方法：按指定字节序把字节串转为整数
+
+```python
+# Python: int.from_bytes(bytes, byteorder)
+int.from_bytes(b'AB', "big")         # 16706
+int.from_bytes(b'AB', "little")      # 16961
+```
+
+### float 方法
+
+#### `float.is_integer()` → `bool`
+
+浮点值是否为整数
+
+```python
+# Python: float.is_integer()
+(2.0).is_integer()                  # True
+(1.5).is_integer()                  # False
+```
+
+#### `float.as_integer_ratio()` → `tuple`
+
+返回精确的分数表示 `(分子, 分母)`；Infinity / NaN 报 `OverflowError`
+
+```python
+# Python: float.as_integer_ratio()
+(2.0).as_integer_ratio()            # (2, 1)
+(0.5).as_integer_ratio()            # (1, 2)
+```
 
 ### str 方法
 
@@ -664,7 +738,117 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 **转换标志**：`!r`（repr）、`!s`（str）、`!a`（ascii）；转义花括号 `{{` / `}}`
 
+#### `str.encode(encoding="utf-8")` → `bytes`
+
+按编码把字符串转为字节串（支持 UTF-8）
+
+```python
+# Python: str.encode(encoding)
+"hi".encode()                       # b'hi'
+```
+
+#### `str.format_map(mapping)` → `str`
+
+与 `str.format` 相同，但通过映射对象提供命名占位符的值
+
+```python
+# Python: str.format_map(mapping)
+"{x}".format_map({"x": 42})         # "42"
+```
+
 ---
+
+### bytes 方法
+
+操作对象为字节串，涉及「子序列」的参数均接受 bytes；下标与区间语义与 str 对应方法一致
+
+#### `bytes.decode(encoding="utf-8")` → `str`
+
+按编码把字节串转为字符串
+
+```python
+# Python: bytes.decode(encoding)
+b'hi'.decode()                      # "hi"
+```
+
+#### `bytes.hex(sep="")` → `str`
+
+返回小写十六进制字符串；可选 `sep` 作为字节间分隔符
+
+```python
+# Python: bytes.hex(sep)
+b'AB'.hex()                         # "4142"
+b'AB'.hex(" ")                      # "41 42"
+```
+
+#### `bytes.upper()` / `bytes.lower()` / `bytes.title()` → `bytes`
+
+ASCII 大写 / 小写 / 词首大写
+
+```python
+b'abc'.upper()                      # b'ABC'
+b'ABC'.lower()                      # b'abc'
+b'ab c'.title()                     # b'Ab C'
+```
+
+#### `bytes.strip(chars=None)` / `bytes.lstrip(chars=None)` / `bytes.rstrip(chars=None)` → `bytes`
+
+去除首尾（或单侧）字节，缺省去除 ASCII 空白（空格、制表、换行等），`chars` 可指定字节集合
+
+```python
+b'  hi  '.strip()                   # b'hi'
+b'xxhixx'.strip(b'x')               # b'hi'
+```
+
+#### `bytes.split(sep=None, maxsplit=-1)` → `list[bytes]`
+
+按 `sep`（bytes）分割，缺省按连续 ASCII 空白分割
+
+```python
+b'a,b,c'.split(b',')                # [b'a', b'b', b'c']
+b'a b  c'.split()                   # [b'a', b'b', b'c']
+```
+
+#### `bytes.replace(old, new, count=-1)` → `bytes`
+
+替换子序列，`count` 限制替换次数
+
+```python
+b'aaa'.replace(b'a', b'b')          # b'bbb'
+```
+
+#### `bytes.find(sub, start=0, end=...)` → `int` / `bytes.index(...)` → `int`
+
+查找子序列首个下标；`find` 找不到返回 -1，`index` 报 `ValueError`；`bytes.count(sub)` 统计出现次数
+
+```python
+b'hello'.find(b'll')                # 2
+b'hello'.count(b'l')                # 2
+```
+
+#### `bytes.startswith(prefix)` / `bytes.endswith(suffix)` → `bool`
+
+```python
+b'abc'.startswith(b'ab')            # True
+```
+
+#### `bytes.join(iterable)` → `bytes`
+
+以自身为分隔符连接 bytes 可迭代对象
+
+```python
+b'-'.join([b'a', b'b'])             # b'a-b'
+```
+
+#### `bytes.center(width, fillchar=b' ')` / `bytes.ljust(...)` / `bytes.rjust(...)` → `bytes`
+
+宽度对齐（居中 / 左对齐 / 右对齐），`fillchar` 为填充字节
+
+```python
+b'hi'.center(4)                     # b' hi '
+b'hi'.ljust(4)                      # b'hi  '
+b'hi'.rjust(4)                      # b'  hi'
+```
 
 ### list 方法
 
@@ -820,11 +1004,15 @@ d = {"a": 1, "b": 2}; d.keys()      # dict_keys(["a", "b"])
 d = {"a": 1, "b": 2}; d.values()    # dict_values([1, 2])
 ```
 
-#### `dict.items()` → `list[tuple]`
+#### `dict.items()` → `view`
+
+返回 `dict_items` 视图对象，支持 `len()`、成员判定（`(k, v) in d.items()`）、迭代与 `repr`（`dict_items([...])`）；视图相等按集合语义（与顺序无关）
 
 ```python
 # Python: dict.items()
-d = {"a": 1, "b": 2}; d.items()     # [("a", 1), ("b", 2)]
+d = {"a": 1, "b": 2}; d.items()     # dict_items([('a', 1), ('b', 2)])
+('a', 1) in d.items()               # True
+len(d.items())                      # 2
 ```
 
 ---
@@ -893,9 +1081,12 @@ s = {1, 2}; s.copy()          # {1, 2} (浅拷贝)
 
 #### `set.union(other)` → `set`
 
+`other` 可为任意可迭代对象（集合运算方法族同此约定）
+
 ```python
 # Python: set.union(other)
 {1, 2}.union({2, 3})          # {1, 2, 3} (同 a | b)
+{1, 2}.union([9])             # {1, 2, 9}
 ```
 
 #### `set.intersection(other)` → `set`
@@ -903,6 +1094,7 @@ s = {1, 2}; s.copy()          # {1, 2} (浅拷贝)
 ```python
 # Python: set.intersection(other)
 {1, 2}.intersection({2, 3})   # {2} (同 a & b)
+{1, 2}.intersection([1, 3])   # {1}
 ```
 
 #### `set.difference(other)` → `set`
@@ -938,6 +1130,39 @@ s = {1, 2}; s.copy()          # {1, 2} (浅拷贝)
 ```python
 # Python: set.issuperset(other)
 {1, 2, 3}.issuperset({1})     # True (同 a >= b)
+```
+
+#### `set.update(other)` → `None`
+
+并集并入自身；`other` 可为任意可迭代对象（原地更新族同此约定）
+
+```python
+# Python: set.update(other)
+st = {1, 2}; st.update([3])   # {1, 2, 3}
+```
+
+#### `set.intersection_update(other)` → `None`
+
+保留同时出现在 `other` 中的元素
+
+```python
+st = {1, 2}; st.intersection_update({2, 3})   # {2}
+```
+
+#### `set.difference_update(other)` → `None`
+
+移除 `other` 中出现的元素
+
+```python
+st = {1, 2}; st.difference_update([2])        # {1}
+```
+
+#### `set.symmetric_difference_update(other)` → `None`
+
+仅保留「只在其中一侧出现」的元素
+
+```python
+st = {1, 2}; st.symmetric_difference_update([1, 4])   # {2, 4}
 ```
 
 ### frozenset 方法

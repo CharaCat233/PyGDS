@@ -101,7 +101,7 @@ class DSLString extends DSLObject:
 
 ### DSLBytes — Bytes Type
 
-Corresponds to Python `bytes`, created by `b"..."` / `rb"..."` literals (immutable)
+Corresponds to Python `bytes`, created by `b"..."` / `rb"..."` literals or the `bytes()` constructor (immutable)
 
 ```gdscript
 class DSLBytes extends DSLObject:
@@ -376,6 +376,10 @@ lst[slice(4, 0, -1)]        # negative step reverses
 
 PyGDS provides specialized iterator implementations for different collection types.
 
+### DSLSeqIterator
+
+The first-class iterator object returned by `iter()` for list / tuple / str / range / dict / set (corresponding to CPython's `list_iterator` / `tuple_iterator` / `str_iterator` / `range_iterator` / `dict_keyiterator` / `set_iterator`, etc.): it holds a reference to the original container (a live view), and its internal driver is created at `iter()` call time and reused (so re-iteration after exhaustion yields nothing); `iter(it)` returns itself. These type classes are registered only in the built-in type table (for `type()` return values) and are not built-in names
+
 ### DSLListIterator
 
 Used by `DSLList` and `DSLTuple`.
@@ -396,7 +400,7 @@ class DSLListIterator extends DSLIterator:
 
 ### DSLDictKeyIterator
 
-Iterates over dictionary keys, automatically wrapping the internally stored `Variant` keys back into `DSLObject`.
+Iterates over dictionary keys, automatically wrapping the internally stored `Variant` keys back into `DSLObject`. It records the key-count snapshot at creation; adding or removing dictionary keys during iteration raises `RuntimeError: dictionary changed size during iteration` (replacing the value of an existing key does not).
 
 ```gdscript
 class DSLDictKeyIterator extends DSLIterator:
@@ -418,6 +422,76 @@ Infinite Iterators. The `itertools` `repeat`/`cycle`/`count` return infinite obj
 Iterates over a string character by character.
 
 ## Built-in Type Methods
+
+### int Methods
+
+#### `int.bit_length()` → `int`
+
+Returns the number of bits in the binary representation of the integer (excluding the sign and leading zeros)
+
+```python
+# Python: int.bit_length()
+(255).bit_length()                  # 8
+(5).bit_length()                    # 3
+```
+
+#### `int.bit_count()` → `int`
+
+Returns the number of ones in the binary representation of the integer
+
+```python
+# Python: int.bit_count()
+(7).bit_count()                     # 3
+```
+
+#### `int.to_bytes(length, byteorder, signed=False)` → `bytes`
+
+Converts to a byte string of the given length and byte order (`"big"` / `"little"`); values that do not fit raise `OverflowError: int too big to convert`, negative values in unsigned mode raise `OverflowError: can't convert negative int to unsigned`
+
+```python
+# Python: int.to_bytes(length, byteorder)
+(16706).to_bytes(2, "big")          # b'AB'
+```
+
+#### `int.hex()` → `str`
+
+Returns the hexadecimal string of the integer (with the `0x` prefix, `-` for negatives)
+
+```python
+(255).hex()                         # "0xff"
+```
+
+#### `int.from_bytes(bytes, byteorder, signed=False)` → `int`
+
+Class method: converts a byte string to an integer using the given byte order
+
+```python
+# Python: int.from_bytes(bytes, byteorder)
+int.from_bytes(b'AB', "big")         # 16706
+int.from_bytes(b'AB', "little")      # 16961
+```
+
+### float Methods
+
+#### `float.is_integer()` → `bool`
+
+Whether the float value is integral
+
+```python
+# Python: float.is_integer()
+(2.0).is_integer()                  # True
+(1.5).is_integer()                  # False
+```
+
+#### `float.as_integer_ratio()` → `tuple`
+
+Returns the exact fractional representation `(numerator, denominator)`; Infinity / NaN raise `OverflowError`
+
+```python
+# Python: float.as_integer_ratio()
+(2.0).as_integer_ratio()            # (2, 1)
+(0.5).as_integer_ratio()            # (1, 2)
+```
 
 ### str Methods
 
@@ -659,7 +733,117 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 
 **Conversion flags**: `!r` (repr), `!s` (str), `!a` (ascii); escaped braces `{{` / `}}`
 
+#### `str.encode(encoding="utf-8")` → `bytes`
+
+Encodes the string into bytes (UTF-8 supported)
+
+```python
+# Python: str.encode(encoding)
+"hi".encode()                       # b'hi'
+```
+
+#### `str.format_map(mapping)` → `str`
+
+Same as `str.format`, but takes the values for named placeholders from a mapping object
+
+```python
+# Python: str.format_map(mapping)
+"{x}".format_map({"x": 42})         # "42"
+```
+
 ---
+
+### bytes Methods
+
+Operate on byte strings; parameters described as "subsequence" accept bytes; index and range semantics match the corresponding `str` methods
+
+#### `bytes.decode(encoding="utf-8")` → `str`
+
+Decodes the byte string into a string
+
+```python
+# Python: bytes.decode(encoding)
+b'hi'.decode()                      # "hi"
+```
+
+#### `bytes.hex(sep="")` → `str`
+
+Returns the lowercase hexadecimal string; the optional `sep` is inserted between bytes
+
+```python
+# Python: bytes.hex(sep)
+b'AB'.hex()                         # "4142"
+b'AB'.hex(" ")                      # "41 42"
+```
+
+#### `bytes.upper()` / `bytes.lower()` / `bytes.title()` → `bytes`
+
+ASCII upper / lower / title case
+
+```python
+b'abc'.upper()                      # b'ABC'
+b'ABC'.lower()                      # b'abc'
+b'ab c'.title()                     # b'Ab C'
+```
+
+#### `bytes.strip(chars=None)` / `bytes.lstrip(chars=None)` / `bytes.rstrip(chars=None)` → `bytes`
+
+Strips bytes from both ends (or one side); the default strips ASCII whitespace (space, tabs, newlines, etc.); `chars` specifies a set of bytes
+
+```python
+b'  hi  '.strip()                   # b'hi'
+b'xxhixx'.strip(b'x')               # b'hi'
+```
+
+#### `bytes.split(sep=None, maxsplit=-1)` → `list[bytes]`
+
+Splits on `sep` (bytes); the default splits on runs of ASCII whitespace
+
+```python
+b'a,b,c'.split(b',')                # [b'a', b'b', b'c']
+b'a b  c'.split()                   # [b'a', b'b', b'c']
+```
+
+#### `bytes.replace(old, new, count=-1)` → `bytes`
+
+Replaces a subsequence; `count` limits the number of replacements
+
+```python
+b'aaa'.replace(b'a', b'b')          # b'bbb'
+```
+
+#### `bytes.find(sub, start=0, end=...)` → `int` / `bytes.index(...)` → `int`
+
+Finds the first index of a subsequence; `find` returns -1 when not found, `index` raises `ValueError`; `bytes.count(sub)` counts occurrences
+
+```python
+b'hello'.find(b'll')                # 2
+b'hello'.count(b'l')                # 2
+```
+
+#### `bytes.startswith(prefix)` / `bytes.endswith(suffix)` → `bool`
+
+```python
+b'abc'.startswith(b'ab')            # True
+```
+
+#### `bytes.join(iterable)` → `bytes`
+
+Joins an iterable of bytes using itself as the separator
+
+```python
+b'-'.join([b'a', b'b'])             # b'a-b'
+```
+
+#### `bytes.center(width, fillchar=b' ')` / `bytes.ljust(...)` / `bytes.rjust(...)` → `bytes`
+
+Width alignment (center / left / right), `fillchar` is the pad byte
+
+```python
+b'hi'.center(4)                     # b' hi '
+b'hi'.ljust(4)                      # b'hi  '
+b'hi'.rjust(4)                      # b'  hi'
+```
 
 ### list Methods
 
@@ -815,11 +999,15 @@ d = {"a": 1, "b": 2}; d.keys()      # dict_keys(["a", "b"])
 d = {"a": 1, "b": 2}; d.values()    # dict_values([1, 2])
 ```
 
-#### `dict.items()` → `list[tuple]`
+#### `dict.items()` → `view`
+
+Returns a `dict_items` view object supporting `len()`, membership tests (`(k, v) in d.items()`), iteration and `repr` (`dict_items([...])`); view equality follows set semantics (order-independent)
 
 ```python
 # Python: dict.items()
-d = {"a": 1, "b": 2}; d.items()     # [("a", 1), ("b", 2)]
+d = {"a": 1, "b": 2}; d.items()     # dict_items([('a', 1), ('b', 2)])
+('a', 1) in d.items()               # True
+len(d.items())                      # 2
 ```
 
 ---
@@ -888,9 +1076,12 @@ s = {1, 2}; s.copy()          # {1, 2} (shallow copy)
 
 #### `set.union(other)` → `set`
 
+`other` may be any iterable (this applies to the whole set-operation method family)
+
 ```python
 # Python: set.union(other)
 {1, 2}.union({2, 3})          # {1, 2, 3} (same as a | b)
+{1, 2}.union([9])             # {1, 2, 9}
 ```
 
 #### `set.intersection(other)` → `set`
@@ -898,6 +1089,7 @@ s = {1, 2}; s.copy()          # {1, 2} (shallow copy)
 ```python
 # Python: set.intersection(other)
 {1, 2}.intersection({2, 3})   # {2} (same as a & b)
+{1, 2}.intersection([1, 3])   # {1}
 ```
 
 #### `set.difference(other)` → `set`
@@ -933,6 +1125,39 @@ s = {1, 2}; s.copy()          # {1, 2} (shallow copy)
 ```python
 # Python: set.issuperset(other)
 {1, 2, 3}.issuperset({1})     # True (same as a >= b)
+```
+
+#### `set.update(other)` → `None`
+
+Union in place; `other` may be any iterable (this applies to the in-place update family)
+
+```python
+# Python: set.update(other)
+st = {1, 2}; st.update([3])   # {1, 2, 3}
+```
+
+#### `set.intersection_update(other)` → `None`
+
+Keeps only the elements also present in `other`
+
+```python
+st = {1, 2}; st.intersection_update({2, 3})   # {2}
+```
+
+#### `set.difference_update(other)` → `None`
+
+Removes the elements present in `other`
+
+```python
+st = {1, 2}; st.difference_update([2])        # {1}
+```
+
+#### `set.symmetric_difference_update(other)` → `None`
+
+Keeps only the elements present in exactly one side
+
+```python
+st = {1, 2}; st.symmetric_difference_update([1, 4])   # {2, 4}
 ```
 
 ### frozenset Methods

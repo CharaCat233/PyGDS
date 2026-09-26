@@ -706,5 +706,33 @@
     "sugar_unpack": {
         "source": "# Sugar: 解包赋值\n\nn1, n2, (n3, n4, n5), *more = 0, 1, [2, 3, 4], (5, 6), 7,\n\nprint(n1)  # 0\nprint(n2)  # 1\nprint(n3)  # 2\nprint(n4)  # 3\nprint(n5)  # 4\nprint(more)  # [(5, 6), 7]\n\ndt = {\"a\": 10, \"b\": 20}\nfor k, v in dt.items():\n    print(k, v)  # a 20 / b 20\n",
         "expected": "0\n1\n2\n3\n4\n[(5, 6), 7]\na 10\nb 20\n"
+    },
+    "edge_set_iterable": {
+        "source": "# Feature: 集合方法接受任意可迭代 + 原地更新族\n\nst = {1, 2}\nst.update([3])\nprint(sorted(st))\nst.intersection_update({2, 3})\nprint(sorted(st))\nst.difference_update([3])\nprint(sorted(st))\nst.symmetric_difference_update([1, 4])\nprint(sorted(st))\nprint({1, 2}.union([9]))\nprint({1}.issubset([1, 2]))\nprint({1, 2}.issuperset([1]))\nprint({1}.isdisjoint([2]))\nprint(sorted({1, 2}.intersection([1, 3])))\nprint(sorted({1}.difference([2])))\nprint('done')\n",
+        "expected": "[1, 2, 3]\n[2, 3]\n[2]\n[1, 2, 4]\n{1, 2, 9}\nTrue\nTrue\nTrue\n[1]\n[1]\ndone\n"
+    },
+    "err_dict_mutate": {
+        "source": "# Error: 迭代字典期间增删键触发 RuntimeError (可捕获)\n\nd = {\"a\": 1}\nit = iter(d)\nd[\"b\"] = 2\ntry:\n    list(it)\nexcept RuntimeError as e:\n    print('caught:', str(e))\n\nd2 = {\"x\": 1, \"y\": 2}\ncaught = False\ntry:\n    for k in d2:\n        d2.pop(k)\nexcept RuntimeError:\n    caught = True\nprint(caught)\n\nd3 = {\"a\": 1}\nd3[\"a\"] = 9\nn = 0\nfor k in d3:\n    n += d3[k]\nprint(n)\nprint('done')\n",
+        "expected": "caught: dictionary changed size during iteration\nTrue\n9\ndone\n"
+    },
+    "lang_bytes_methods": {
+        "source": "# Feature: bytes() 构造与 bytes 方法族\n\nb = b'hello'\nprint(b.decode())\nprint(b.hex())\nprint(b'ABC'.lower())\nprint(b'abc'.upper())\nprint(b'ab'.title())\nprint(b' x '.strip())\nprint(b'a,b,c'.split(b','))\nprint(b'aaa'.replace(b'a', b'b'))\nprint(b'hello'.find(b'll'))\nprint(b'hello'.index(b'l'))\nprint(b'hello'.count(b'l'))\nprint(b'abc'.startswith(b'ab'))\nprint(b'abc'.endswith(b'c'))\nprint(b'-'.join([b'a', b'b']))\nprint(bytes(3))\nprint(bytes([104, 105]))\nprint(bytes('hi', 'utf-8'))\nprint(bytes(b'hi'))\nprint('hi'.encode())\nprint(len(bytes(3)))\nprint('done')\n",
+        "expected": "hello\n68656c6c6f\nb'abc'\nb'ABC'\nb'Ab'\nb'x'\n[b'a', b'b', b'c']\nb'bbb'\n2\n2\n2\nTrue\nTrue\nb'a-b'\nb'\\x00\\x00\\x00'\nb'hi'\nb'hi'\nb'hi'\nb'hi'\n3\ndone\n"
+    },
+    "lang_iter_gen": {
+        "source": "# Feature: iter() 对生成器返回其自身 (耗尽后不可重复消费)\n\ndef g():\n    yield 1\n    yield 2\n\nit = iter(g())\nprint(list(it))\nprint(list(it))\n\ndef h():\n    yield 'a'\n\nit2 = iter(h())\nprint(next(it2))\ntry:\n    next(it2)\nexcept StopIteration:\n    print('stop')\nprint(iter(it2) is it2)\n\ndef k():\n    yield 10\n    yield 20\n\nit3 = iter(k())\nprint(next(it3))\nprint(list(it3))\nprint(list(it3))\nfor v in iter(k()):\n    print(v)\n",
+        "expected": "[1, 2]\n[]\na\nstop\nTrue\n10\n[20]\n[]\n10\n20\n"
+    },
+    "lang_iter_view": {
+        "source": "# Feature: dict.items() 视图对象与 defaultdict 的 iter() 类型名\n\nimport collections\n\nd = {'a': 1, 'b': 2}\nprint(type(d.items()).__name__)\nprint(len(d.items()))\nprint(list(d.items()))\nprint(('a', 1) in d.items())\nprint(d.items())\ndd = collections.defaultdict(int)\nprint(type(iter(dd)).__name__)\nprint(type(iter(d.items())).__name__)\nprint(d.values())\nprint(type(d.values()).__name__)\nd1 = {'a': 1}\nd2 = {'a': 1}\nprint(d1.items() == d2.items())\n",
+        "expected": "dict_items\n2\n[('a', 1), ('b', 2)]\nTrue\ndict_items([('a', 1), ('b', 2)])\ndict_keyiterator\ndict_itemiterator\ndict_values([1, 2])\ndict_values\nTrue\n"
+    },
+    "lang_num_methods": {
+        "source": "# Feature: int/float 方法与 format() 内建\n\nprint((255).bit_length())\nprint((7).bit_count())\nprint((5).to_bytes(2, 'big'))\nprint(int.from_bytes(b'\\x01\\x00', 'big'))\nprint(int.from_bytes((255).to_bytes(2, 'big'), 'big'))\nprint(1.5.is_integer())\nprint(2.0.is_integer())\nprint(2.0.as_integer_ratio())\nprint(0.5.as_integer_ratio())\nprint(format(255, 'x'))\nprint(format(1234567, ','))\nprint(format(3.14, '.1f'))\nprint(format(42))\nprint('done')\n",
+        "expected": "8\n3\nb'\\x00\\x05'\n256\n255\nFalse\nTrue\n(2, 1)\n(1, 2)\nff\n1,234,567\n3.1\n42\ndone\n"
+    },
+    "lang_user_sort": {
+        "source": "# Feature: 排序与 min/max 桥接用户类 __lt__ / __gt__ (含反射)\n\nclass P:\n    def __init__(self, v):\n        self.v = v\n    def __lt__(self, other):\n        return self.v < other.v\n\na = [P(2), P(1)]\na.sort()\nprint([p.v for p in a])\n\nb = sorted([P(3), P(1), P(2)], reverse=True)\nprint([p.v for p in b])\n\nprint(min([P(2), P(1)]).v)\nprint(max([P(2), P(1)]).v)\nprint(min([P(2), P(1)], key=lambda p: -p.v).v)\nprint(sorted([P(2), P(1)], key=lambda p: p.v)[0].v)\n\nclass Q:\n    def __init__(self, v):\n        self.v = v\n    def __gt__(self, other):\n        return self.v > other.v\n\nprint(sorted([Q(2), Q(1)])[0].v)\nprint(max([Q(2), Q(1)]).v)\nprint([P(1), P(9)] < [P(2), P(9)])\n\ntry:\n    sorted([P(1), 'a'])\nexcept TypeError:\n    print('TypeError')\nprint('done')\n",
+        "expected": "[1, 2]\n[3, 2, 1]\n1\n2\n2\n1\n1\n2\nTrue\nTypeError\ndone\n"
     }
 }
