@@ -1817,6 +1817,157 @@ class RaiseStmt extends Stmt:
 	func _init(e):
 		expression = e
 
+## match 语句 (结构化模式匹配) [br]
+## match 与 case 是软关键字, 不进入 Lexer.keywords, 由解析器按上下文识别
+class MatchStmt extends Stmt:
+	## 被匹配的主题表达式 (可为元组)
+	var subject: Expr
+	## case 子句数组 (元素为 MatchCase)
+	var cases: Array
+	## 各 case 的守卫表达式数组 (与 cases 一一对应, 无守卫的元素为 null) [br]
+	## 守卫的扁平视图, 供 yield 扫描按属性反射发现 (cases 内部结构不在反射范围)
+	var case_guards: Array
+	## 构造 match 语句 [br]
+	## [param s] 主题表达式 [br]
+	## [param c] case 子句数组 [br]
+	## [param g] 守卫表达式数组
+	func _init(s, c, g):
+		subject = s
+		cases = c
+		case_guards = g
+
+## match 语句的 case 子句
+class MatchCase:
+	## 匹配模式 (MatchPattern 节点)
+	var pattern
+	## 守卫表达式 (可为 null)
+	var guard: Expr
+	## case 体语句列表
+	var body: Array
+	## 构造 case 子句 [br]
+	## [param p] 匹配模式 [br]
+	## [param g] 守卫表达式, 可为 null [br]
+	## [param b] case 体语句列表
+	func _init(p, g, b):
+		pattern = p
+		guard = g
+		body = b
+
+## 模式节点基类
+class MatchPattern:
+	pass
+
+## 字面量模式与值模式 [br]
+## 字面量 (数字, 字符串, bytes, None, True, False, 负数) 与点号常量 (如 Color.RED) 统一承载
+class MatchValuePattern extends MatchPattern:
+	## 字面量表达式或点号链表达式
+	var value: Expr
+	## 是否为字面量模式: None/True/False 字面量按单例值判定, 值模式一律用相等比较
+	var is_literal: bool
+	## 构造字面量/值模式 [br]
+	## [param v] 字面量表达式或点号链表达式 [br]
+	## [param lit] 是否为字面量模式
+	func _init(v: Expr, lit: bool = false):
+		value = v
+		is_literal = lit
+
+## 捕获模式 [br]
+## 永远匹配成功并把主题绑定到名字
+class MatchCapturePattern extends MatchPattern:
+	## 绑定的变量名
+	var name: String
+	## 构造捕获模式 [br]
+	## [param n] 绑定的变量名
+	func _init(n: String):
+		name = n
+
+## 通配符模式 (_) [br]
+## 永远匹配成功且不绑定
+class MatchWildcardPattern extends MatchPattern:
+	pass
+
+## as 模式 (模式 as 名字) [br]
+## 子模式匹配成功后把整个主题绑定到名字
+class MatchAsPattern extends MatchPattern:
+	## 子模式
+	var pattern
+	## 绑定的变量名
+	var name: String
+	## 构造 as 模式 [br]
+	## [param p] 子模式 [br]
+	## [param n] 绑定的变量名
+	func _init(p, n: String):
+		pattern = p
+		name = n
+
+## 序列模式 ([a, b] / (a, b) / 无括号逗号形式) [br]
+## 主题必须是内建 list 或 tuple (字符串, bytes 与用户类不参与序列匹配)
+class MatchSequencePattern extends MatchPattern:
+	## 元素模式数组
+	var patterns: Array
+	## 星号元素的下标, 无星号为 -1
+	var star_index: int = -1
+	## 星号绑定的变量名 (可为 "_" 表示不绑定)
+	var star_name: String = ""
+	## 构造序列模式 [br]
+	## [param p] 元素模式数组 [br]
+	## [param si] 星号元素下标, 无星号为 -1 [br]
+	## [param sn] 星号绑定名
+	func _init(p: Array, si: int = -1, sn: String = ""):
+		patterns = p
+		star_index = si
+		star_name = sn
+
+## 映射模式 ({"k": p, **rest}) [br]
+## 主题必须是内建 dict
+class MatchMappingPattern extends MatchPattern:
+	## 键表达式数组 (字面量或点号常量)
+	var key_exprs: Array
+	## 与键一一对应的值模式数组
+	var value_patterns: Array
+	## **rest 绑定的变量名 (空串表示无 rest)
+	var rest_name: String = ""
+	## 构造映射模式 [br]
+	## [param k] 键表达式数组 [br]
+	## [param v] 值模式数组 [br]
+	## [param r] **rest 绑定名, 空串表示无
+	func _init(k: Array, v: Array, r: String = ""):
+		key_exprs = k
+		value_patterns = v
+		rest_name = r
+
+## 类模式 (Cls(...) / 点号链(...)) [br]
+## 先做 isinstance 检查, 位置子模式经 __match_args__ 映射为属性, 关键字子模式直接取属性
+class MatchClassPattern extends MatchPattern:
+	## 类名表达式 (名字或点号链)
+	var cls_expr: Expr
+	## 位置子模式数组
+	var pos_patterns: Array
+	## 关键字参数名数组
+	var kw_names: Array
+	## 与关键字名一一对应的子模式数组
+	var kw_patterns: Array
+	## 构造类模式 [br]
+	## [param c] 类名表达式 [br]
+	## [param pos] 位置子模式数组 [br]
+	## [param kn] 关键字名数组 [br]
+	## [param kp] 关键字子模式数组
+	func _init(c: Expr, pos: Array, kn: Array, kp: Array):
+		cls_expr = c
+		pos_patterns = pos
+		kw_names = kn
+		kw_patterns = kp
+
+## 或模式 (p1 | p2) [br]
+## 逐个尝试各分支, 使用首个成功分支的绑定
+class MatchOrPattern extends MatchPattern:
+	## 分支模式数组
+	var alternatives: Array
+	## 构造或模式 [br]
+	## [param a] 分支模式数组
+	func _init(a: Array):
+		alternatives = a
+
 ## 控制台统一输出与错误报告器, 支持日志级别 [br]
 ## 整合 DSL 的 print 输出, 解析错误和运行时错误 [br]
 ## 通过日志级别控制输出详细程度
@@ -10194,6 +10345,14 @@ class Parser:
 	## [returns] 当前 Token 类型匹配时返回 true
 	func check(type: TokenType) -> bool:
 		return (not is_at_end()) and peek().type == type
+
+	## 检查指定偏移处的 Token 是否为指定类型 (不消费 Token) [br]
+	## [param offset] 相对当前 Token 的偏移量 [br]
+	## [param type] 期望的 TokenType 枚举值 [br]
+	## [returns] 该位置 Token 类型匹配时返回 true
+	func check_next(offset: int, type: TokenType) -> bool:
+		var idx = current + offset
+		return idx < tokens.size() and tokens[idx].type == type
 	
 	## 尝试匹配一组 Token 类型中的任意一个 [br]
 	## 若匹配成功则消费 Token 并返回 true, 否则仅返回 false [br]
@@ -10297,6 +10456,8 @@ class Parser:
 			return raise_statement()
 		if match_types([TokenType.ASYNC]):
 			return async_declaration()
+		if check(TokenType.IDENTIFIER) and peek().lexeme == "match" and _looks_like_match_statement():
+			return match_statement()
 		return expression_statement()
 		
 	## 处理 async 开头的语句 [br]
@@ -10683,6 +10844,549 @@ class Parser:
 				return null
 			
 		return IfStmt.new(condition, then_branch, elif_branches, else_branch)
+
+	## 前瞻判断当前语句是否为 match 语句 (软关键字消歧) [br]
+	## match 是普通标识符, 仅当同一逻辑行的括号外冒号在 match 之后且有其它 Token 间隔时,
+	## 才视作 match 语句头 (覆盖 `match = 1` / `match(x)` / `match[0] = 1` / `match: int = 1` 等标识符用法) [br]
+	## [returns] 是 match 语句头时返回 true
+	func _looks_like_match_statement() -> bool:
+		var j = current + 1
+		var depth = 0
+		var seen_token = false
+		while j < tokens.size():
+			var t = tokens[j]
+			if t.type == TokenType.LPAREN or t.type == TokenType.LBRACKET or t.type == TokenType.LBRACE:
+				depth += 1
+				seen_token = true
+			elif t.type == TokenType.RPAREN or t.type == TokenType.RBRACKET or t.type == TokenType.RBRACE:
+				depth -= 1
+				seen_token = true
+			elif t.type == TokenType.COLON and depth == 0:
+				return seen_token
+			elif t.type == TokenType.NEWLINE or t.type == TokenType.EOF or t.type == TokenType.DEDENT:
+				return false
+			elif t.type != TokenType.INDENT:
+				seen_token = true
+			j += 1
+		return false
+
+	## 解析 match 语句 [br]
+	## 主题表达式支持元组形式 (match 1, 2:), 头部之后必须换行缩进并至少有一个 case 子句 [br]
+	## [returns] 解析出的 MatchStmt 节点, 出错时返回 null
+	func match_statement() -> Stmt:
+		var match_line = peek().line
+		advance()
+		var subject = tuple_expression()
+		if subject == null or report.has_error:
+			return null
+		if not check(TokenType.COLON):
+			report.error("SyntaxError: expected ':'")
+			return null
+		advance()
+		_expect_statement_end()
+		if report.has_error:
+			return null
+		if not check(TokenType.NEWLINE):
+			report.error("IndentationError: expected an indented block after 'match' statement on line %d" % match_line)
+			return null
+		if current + 1 >= tokens.size() or tokens[current + 1].type != TokenType.INDENT:
+			report.error("IndentationError: expected an indented block after 'match' statement on line %d" % match_line)
+			return null
+		advance()
+		advance()
+		var cases = []
+		var guards = []
+		while not check(TokenType.DEDENT) and not is_at_end():
+			if report.has_error:
+				break
+			skip_newlines()
+			if check(TokenType.DEDENT):
+				break
+			if not (check(TokenType.IDENTIFIER) and peek().lexeme == "case"):
+				# match 块内只允许 case 子句
+				report.error("SyntaxError: invalid syntax")
+				return null
+			var case_clause = _parse_case_clause()
+			if case_clause == null or report.has_error:
+				return null
+			cases.append(case_clause)
+			guards.append(case_clause.guard)
+		consume(TokenType.DEDENT, "Expected dedent")
+		if report.has_error:
+			return null
+		for i in range(cases.size()):
+			_check_case_reachable(cases, i)
+			if report.has_error:
+				return null
+		return MatchStmt.new(subject, cases, guards)
+
+	## 解析单个 case 子句 (模式 [if 守卫] : 块)
+	## [returns] 解析出的 MatchCase 节点, 出错时返回 null
+	func _parse_case_clause() -> MatchCase:
+		advance()
+		var pattern = _parse_case_patterns()
+		if pattern == null or report.has_error:
+			return null
+		var bound = _pattern_bound_names(pattern)
+		if bound.size() != _unique_names(bound).size():
+			var dup = ""
+			var seen_dup: Array = []
+			for n in bound:
+				if seen_dup.has(n):
+					dup = n
+					break
+				seen_dup.append(n)
+			report.error("SyntaxError: multiple assignments to name '%s' in pattern" % dup)
+			return null
+		var guard = null
+		if match_types([TokenType.IF]):
+			guard = simple_expression()
+			if guard == null or report.has_error:
+				return null
+		var colon = consume(TokenType.COLON, "Expected ':'")
+		if colon == null:
+			return null
+		# 冒号后换行时必须是缩进块, 同行直接跟语句是单行体
+		if check(TokenType.NEWLINE) and (current + 1 >= tokens.size() or tokens[current + 1].type != TokenType.INDENT):
+			report.error("IndentationError: expected an indented block after 'case' statement on line %d" % colon.line)
+			return null
+		var body = block()
+		if report.has_error:
+			return null
+		return MatchCase.new(pattern, guard, body)
+
+	## 解析 case 子句顶部的模式部分 [br]
+	## 允许无括号的逗号序列 (open sequence), 出现逗号时整体打包为序列模式 [br]
+	## [returns] 解析出的 MatchPattern 节点, 出错时返回 null
+	func _parse_case_patterns():
+		var first = _parse_star_pattern()
+		if first == null or report.has_error:
+			return null
+		var first_pattern = first[0] if first is Array else first
+		var first_star = 0 if first is Array else -1
+		if not check(TokenType.COMMA):
+			if first_star >= 0:
+				# 顶层单星不构成序列
+				report.error("SyntaxError: invalid syntax")
+				return null
+			return first_pattern
+		var elements = [first_pattern]
+		var star_index = first_star
+		while match_types([TokenType.COMMA]):
+			if check(TokenType.COLON):
+				# 尾逗号: 序列在此结束
+				break
+			var elem = _parse_star_pattern()
+			if elem == null or report.has_error:
+				return null
+			if elem is Array:
+				if star_index >= 0:
+					report.error("SyntaxError: multiple starred names in sequence pattern")
+					return null
+				star_index = elements.size()
+				elem = elem[0]
+			elements.append(elem)
+		var star_name = _star_binding_name(elements, star_index)
+		return MatchSequencePattern.new(elements, star_index, star_name)
+
+	## 读取序列模式中星号元素的绑定名 [br]
+	## [param elements] 元素模式数组 [br]
+	## [param star_index] 星号下标, -1 表示无星号 [br]
+	## [returns] 绑定名 (通配符为 "_", 无星号为空串)
+	func _star_binding_name(elements: Array, star_index: int) -> String:
+		if star_index < 0:
+			return ""
+		var star_pattern = elements[star_index]
+		return star_pattern.name if star_pattern is MatchCapturePattern else "_"
+
+	## 解析序列元素, 允许星号前缀 [br]
+	## [returns] 普通模式节点, 或 [模式, 星号下标] 数组 (星号元素), 出错时返回 null
+	func _parse_star_pattern():
+		if match_types([TokenType.STAR]):
+			var name_tok = consume(TokenType.IDENTIFIER, "Expected capture name")
+			if name_tok == null:
+				return null
+			var inner = null
+			if name_tok.lexeme == "_":
+				inner = MatchWildcardPattern.new()
+			else:
+				inner = MatchCapturePattern.new(name_tok.lexeme)
+			return [inner, 0]
+		var pattern = _parse_pattern()
+		if pattern == null or report.has_error:
+			return null
+		return pattern
+
+	## 检查第 idx 个 case 是否被更早的通配/捕获子句遮蔽 (编译期不可达检查) [br]
+	## [param cases] case 子句数组 [br]
+	## [param idx] 待检查的 case 下标
+	func _check_case_reachable(cases: Array, idx: int) -> void:
+		for j in range(idx):
+			var earlier = cases[j]
+			# 带守卫的子句守卫可能失败, 后续子句仍可达
+			if earlier.guard != null:
+				continue
+			if earlier.pattern is MatchWildcardPattern:
+				report.error("SyntaxError: wildcard makes remaining patterns unreachable")
+				return
+			if earlier.pattern is MatchCapturePattern:
+				report.error("SyntaxError: name capture '%s' makes remaining patterns unreachable" % (earlier.pattern as MatchCapturePattern).name)
+				return
+
+	## 解析单个模式 (as_pattern 层, 支持 or_pattern as 名字) [br]
+	## [returns] 解析出的 MatchPattern 节点, 出错时返回 null
+	func _parse_pattern():
+		var pattern = _parse_or_pattern()
+		if pattern == null or report.has_error:
+			return null
+		if match_types([TokenType.AS]):
+			var name_tok = consume(TokenType.IDENTIFIER, "Expected capture name")
+			if name_tok == null:
+				return null
+			if name_tok.lexeme == "_":
+				report.error("SyntaxError: cannot use '_' as a target")
+				return null
+			return MatchAsPattern.new(pattern, name_tok.lexeme)
+		return pattern
+
+	## 解析或模式 (closed_pattern (| closed_pattern)*) [br]
+	## 各分支必须绑定相同的名字集合 (编译期检查) [br]
+	## [returns] 单个 closed pattern 或 MatchOrPattern 节点, 出错时返回 null
+	func _parse_or_pattern():
+		var alternatives = []
+		while true:
+			var alt = _parse_closed_pattern()
+			if alt == null or report.has_error:
+				return null
+			alternatives.append(alt)
+			if not match_types([TokenType.PIPE]):
+				break
+		if alternatives.size() == 1:
+			return alternatives[0]
+		var names = _unique_names(_pattern_bound_names(alternatives[0]))
+		for i in range(1, alternatives.size()):
+			var other = _unique_names(_pattern_bound_names(alternatives[i]))
+			if not _same_name_set(names, other):
+				report.error("SyntaxError: alternative patterns bind different names")
+				return null
+		return MatchOrPattern.new(alternatives)
+
+	## 比较两个名字集合是否一致 (忽略顺序)
+	func _same_name_set(a: Array, b: Array) -> bool:
+		if a.size() != b.size():
+			return false
+		for n in a:
+			if not b.has(n):
+				return false
+		return true
+
+	## 收集模式绑定的变量名 (用于 or 分支一致性与重复绑定检查) [br]
+	## 名字可能重复出现, 需要去重时由调用方处理
+	func _pattern_bound_names(pattern) -> Array:
+		var names: Array = []
+		_collect_pattern_names(pattern, names)
+		return names
+
+	## 对名字列表去重
+	func _unique_names(raw: Array) -> Array:
+		var out: Array = []
+		for n in raw:
+			if not out.has(n):
+				out.append(n)
+		return out
+
+	## 递归收集模式绑定的变量名
+	func _collect_pattern_names(pattern, names: Array) -> void:
+		if pattern is MatchCapturePattern:
+			names.append(pattern.name)
+		elif pattern is MatchAsPattern:
+			_collect_pattern_names(pattern.pattern, names)
+			if pattern.name != "_":
+				names.append(pattern.name)
+		elif pattern is MatchSequencePattern:
+			for sub in pattern.patterns:
+				_collect_pattern_names(sub, names)
+		elif pattern is MatchMappingPattern:
+			for sub in pattern.value_patterns:
+				_collect_pattern_names(sub, names)
+			if pattern.rest_name != "" and pattern.rest_name != "_":
+				names.append(pattern.rest_name)
+		elif pattern is MatchClassPattern:
+			for sub in pattern.pos_patterns:
+				_collect_pattern_names(sub, names)
+			for sub in pattern.kw_patterns:
+				_collect_pattern_names(sub, names)
+
+	## 解析 closed 模式 (字面量, 捕获, 通配, 值, 组, 序列, 映射, 类) [br]
+	## [returns] 解析出的 MatchPattern 节点, 出错时返回 null
+	func _parse_closed_pattern():
+		var tok = peek()
+		match tok.type:
+			TokenType.NULL, TokenType.TRUE, TokenType.FALSE, TokenType.INTEGER, TokenType.FLOAT, TokenType.STRING:
+				return _parse_literal_or_value_pattern()
+			TokenType.MINUS:
+				advance()
+				var num_tok = peek()
+				if num_tok.type != TokenType.INTEGER and num_tok.type != TokenType.FLOAT:
+					report.error("SyntaxError: invalid syntax")
+					return null
+				var num_expr = _parse_literal_or_value_pattern()
+				if num_expr == null or report.has_error:
+					return null
+				var num_val = (num_expr.value as Literal).value
+				return MatchValuePattern.new(Literal.new(-num_val), true)
+			TokenType.IDENTIFIER:
+				if tok.lexeme == "_":
+					advance()
+					return MatchWildcardPattern.new()
+				return _parse_name_pattern()
+			TokenType.LPAREN, TokenType.LBRACKET:
+				return _parse_sequence_or_group_pattern()
+			TokenType.LBRACE:
+				return _parse_mapping_pattern()
+			TokenType.FSTRING:
+				# f-string 不是模式
+				report.error("SyntaxError: invalid syntax")
+				return null
+			_:
+				report.error("SyntaxError: invalid syntax")
+				return null
+
+	## 解析字面量模式 [br]
+	## [returns] MatchValuePattern 节点 (value 为 Literal), 出错时返回 null
+	func _parse_literal_or_value_pattern():
+		var tok = advance()
+		var value = null
+		if tok.type == TokenType.NULL:
+			value = null
+		elif tok.type == TokenType.TRUE:
+			value = true
+		elif tok.type == TokenType.FALSE:
+			value = false
+		elif tok.type == TokenType.INTEGER or tok.type == TokenType.FLOAT:
+			value = tok.literal
+		elif tok.type == TokenType.STRING:
+			value = tok.literal
+		else:
+			report.error("SyntaxError: invalid syntax")
+			return null
+		return MatchValuePattern.new(Literal.new(value), true)
+
+	## 解析以名字开头的模式 (捕获, 值或类模式) [br]
+	## [returns] 捕获 / 值 / 类模式节点, 出错时返回 null
+	func _parse_name_pattern():
+		var name_tok = advance()
+		if not check(TokenType.DOT) and not check(TokenType.LPAREN):
+			return MatchCapturePattern.new(name_tok.lexeme)
+		# 点号链: 值模式或类模式名
+		var expr = Variable.new(name_tok.lexeme)
+		while match_types([TokenType.DOT]):
+			var attr_tok = consume(TokenType.IDENTIFIER, "Expected attribute name")
+			if attr_tok == null:
+				return null
+			expr = GetAttr.new(expr, attr_tok.lexeme)
+		if check(TokenType.LPAREN):
+			return _parse_class_pattern(expr)
+		return MatchValuePattern.new(expr)
+
+	## 解析类模式的参数部分 (点号链后的圆括号) [br]
+	## 位置子模式必须全部在关键字子模式之前, 关键字名不得重复 [br]
+	## [param cls_expr] 已解析的类名表达式 [br]
+	## [returns] MatchClassPattern 节点, 出错时返回 null
+	func _parse_class_pattern(cls_expr: Expr):
+		consume(TokenType.LPAREN, "Expected '('")
+		if report.has_error:
+			return null
+		var pos_patterns = []
+		var kw_names = []
+		var kw_patterns = []
+		var keyword_started = false
+		if not check(TokenType.RPAREN):
+			while true:
+				if check(TokenType.IDENTIFIER) and check_next(1, TokenType.EQUAL):
+					keyword_started = true
+					var kw_tok = advance()
+					advance()
+					if kw_names.has(kw_tok.lexeme):
+						report.error("SyntaxError: attribute name repeated in class pattern: %s" % kw_tok.lexeme)
+						return null
+					var sub = _parse_pattern()
+					if sub == null or report.has_error:
+						return null
+					kw_names.append(kw_tok.lexeme)
+					kw_patterns.append(sub)
+				else:
+					if keyword_started:
+						report.error("SyntaxError: positional patterns follow keyword patterns")
+						return null
+					var sub = _parse_pattern()
+					if sub == null or report.has_error:
+						return null
+					pos_patterns.append(sub)
+				if not match_types([TokenType.COMMA]):
+					break
+		consume(TokenType.RPAREN, "Expected ')'")
+		if report.has_error:
+			return null
+		return MatchClassPattern.new(cls_expr, pos_patterns, kw_names, kw_patterns)
+
+	## 解析括号包裹的组模式或序列模式 [br]
+	## 单个无逗号模式是组模式 (等价于其内部模式), 逗号分隔是序列模式 [br]
+	## [returns] 解析出的 MatchPattern 节点, 出错时返回 null
+	func _parse_sequence_or_group_pattern():
+		var is_tuple = check(TokenType.LPAREN)
+		var close_type = TokenType.RPAREN if is_tuple else TokenType.RBRACKET
+		advance()
+		var elements = []
+		var star_index = -1
+		if check(close_type):
+			advance()
+			return MatchSequencePattern.new(elements, star_index, "")
+		while true:
+			var elem = _parse_star_pattern()
+			if elem == null or report.has_error:
+				return null
+			if elem is Array:
+				if star_index >= 0:
+					report.error("SyntaxError: multiple starred names in sequence pattern")
+					return null
+				star_index = elements.size()
+				elem = elem[0]
+			elements.append(elem)
+			if not match_types([TokenType.COMMA]):
+				break
+			if check(close_type):
+				advance()
+				return MatchSequencePattern.new(elements, star_index, _star_binding_name(elements, star_index))
+		if is_tuple:
+			consume(TokenType.RPAREN, "Expected ')'")
+		else:
+			consume(TokenType.RBRACKET, "Expected ']'")
+		if report.has_error:
+			return null
+		if is_tuple and elements.size() == 1 and star_index < 0:
+			# 单元素无逗号的圆括号是组模式
+			return elements[0]
+		return MatchSequencePattern.new(elements, star_index, _star_binding_name(elements, star_index))
+
+	## 解析映射模式 ({key: pattern, **rest}) [br]
+	## **rest 只能出现一次且必须在最后 [br]
+	## [returns] MatchMappingPattern 节点, 出错时返回 null
+	func _parse_mapping_pattern():
+		advance()
+		var key_exprs = []
+		var value_patterns = []
+		var rest_name = ""
+		if not check(TokenType.RBRACE):
+			while true:
+				if match_types([TokenType.STARSTAR]):
+					var rest_tok = consume(TokenType.IDENTIFIER, "Expected capture name")
+					if rest_tok == null:
+						return null
+					# **rest 不允许通配符
+					if rest_tok.lexeme == "_":
+						report.error("SyntaxError: invalid syntax")
+						return null
+					if not check(TokenType.RBRACE) and not check(TokenType.COMMA):
+						report.error("SyntaxError: invalid syntax")
+						return null
+					if check(TokenType.COMMA):
+						advance()
+						if not check(TokenType.RBRACE):
+							# **rest 之后不允许再有键
+							report.error("SyntaxError: invalid syntax")
+							return null
+					rest_name = rest_tok.lexeme
+					break
+				var key = _parse_mapping_key()
+				if key == null or report.has_error:
+					return null
+				consume(TokenType.COLON, "Expected ':'")
+				if report.has_error:
+					return null
+				var sub = _parse_pattern()
+				if sub == null or report.has_error:
+					return null
+				key_exprs.append(key)
+				value_patterns.append(sub)
+				# 常量键的等值重复在解析期报错 (值模式键运行时才求值, 不参与检查)
+				if key is Literal:
+					for pi in range(key_exprs.size() - 1):
+						var prev_key = key_exprs[pi]
+						if prev_key is Literal and _const_key_equal((prev_key as Literal).value, (key as Literal).value):
+							report.error("SyntaxError: mapping pattern checks duplicate key (%s)" % _const_key_repr((key as Literal).value))
+							return null
+				if not match_types([TokenType.COMMA]):
+					break
+		consume(TokenType.RBRACE, "Expected '}'")
+		if report.has_error:
+			return null
+		return MatchMappingPattern.new(key_exprs, value_patterns, rest_name)
+
+	## 解析映射模式的键 (字面量或点号常量) [br]
+	## [returns] 键表达式, 出错时返回 null
+	func _parse_mapping_key() -> Expr:
+		var tok = peek()
+		if tok.type == TokenType.MINUS:
+			advance()
+			var num_tok = peek()
+			if num_tok.type != TokenType.INTEGER and num_tok.type != TokenType.FLOAT:
+				report.error("SyntaxError: invalid syntax")
+				return null
+			var num_pattern = _parse_literal_or_value_pattern()
+			if num_pattern == null or report.has_error:
+				return null
+			var num_val = (num_pattern.value as Literal).value
+			return Literal.new(-num_val)
+		if tok.type == TokenType.IDENTIFIER:
+			var name_tok = advance()
+			if not check(TokenType.DOT):
+				report.error("SyntaxError: invalid syntax")
+				return null
+			var expr = Variable.new(name_tok.lexeme)
+			while match_types([TokenType.DOT]):
+				var attr_tok = consume(TokenType.IDENTIFIER, "Expected attribute name")
+				if attr_tok == null:
+					return null
+				expr = GetAttr.new(expr, attr_tok.lexeme)
+			return expr
+		var pattern = _parse_literal_or_value_pattern()
+		if pattern == null or report.has_error:
+			return null
+		return pattern.value
+
+	## 判断两个常量键是否等值 (数字跨 int/float/bool 互比, 与 CPython 键哈希语义一致)
+	func _const_key_equal(a, b) -> bool:
+		if a == null or b == null:
+			return a == null and b == null
+		var a_num = a is bool or a is int or a is float
+		var b_num = b is bool or b is int or b is float
+		if a_num and b_num:
+			var fa = 1.0 if (a is bool and (a as bool)) else (0.0 if a is bool else float(a))
+			var fb = 1.0 if (b is bool and (b as bool)) else (0.0 if b is bool else float(b))
+			return fa == fb
+		if a is String and b is String:
+			return a == b
+		if a is DSLBytes and b is DSLBytes:
+			return (a as DSLBytes)._dsl_eq(b as DSLBytes)
+		return false
+
+	## 常量键的 repr 文本 (重复键报错用)
+	func _const_key_repr(v) -> String:
+		if v == null:
+			return "None"
+		if v is bool:
+			return "True" if (v as bool) else "False"
+		if v is int:
+			return str(v)
+		if v is float:
+			return DSLObject._py_float_repr(v)
+		if v is String:
+			return "'" + DSLObject._py_str_repr(v) + "'"
+		if v is DSLBytes:
+			return (v as DSLBytes)._dsl_str()
+		return str(v)
+
 		
 	## 解析 while 循环语句 [br]
 	## [returns] 解析出的 WhileStmt 节点, 出错时返回 null
@@ -11202,6 +11906,15 @@ class Parser:
 						found = true
 				if _walk_yield_stmt(stmt.finally_body, scope, loop_depth):
 					found = true
+			elif stmt is MatchStmt:
+				if _walk_yield_expr(stmt.subject, scope, ""):
+					found = true
+				for g in stmt.case_guards:
+					if g != null and _walk_yield_expr(g, scope, ""):
+						found = true
+				for c in stmt.cases:
+					if _walk_yield_stmt(c.body, scope, loop_depth):
+						found = true
 			elif stmt is RaiseStmt:
 				if stmt.expression != null and _walk_yield_expr(stmt.expression, scope, ""):
 					found = true
@@ -12313,7 +13026,8 @@ class Parser:
 			return null
 		if match_types([TokenType.COMMA]):
 			var elements = [first]
-			while not check(TokenType.NEWLINE) and not check(TokenType.EOF) and not check(TokenType.RPAREN) and not check(TokenType.RBRACKET) and not check(TokenType.RBRACE):
+			# 冒号终结元组 (match 主题的尾逗号形式 match 1,: 后紧跟语句冒号)
+			while not check(TokenType.NEWLINE) and not check(TokenType.EOF) and not check(TokenType.RPAREN) and not check(TokenType.RBRACKET) and not check(TokenType.RBRACE) and not check(TokenType.COLON):
 				var elem = _parse_star_or_simple()
 				if elem == null or report.has_error:
 					return null
@@ -15690,6 +16404,287 @@ class Interpreter:
 		environment = prev_env
 		return ExecResult.NORMAL
 		
+	## 执行模式匹配: 尝试用模式匹配主题, 成功时收集绑定 [br]
+	## [param pattern] 模式节点 [br]
+	## [param subject] 被匹配的主题 [br]
+	## [param bindings] 匹配成功时的绑定收集字典 [br]
+	## [returns] 是否匹配成功 (求值挂起或报错时返回 false, 调用方检查 _suspended 与 report.has_error)
+	func _match_pattern(pattern, subject: DSLObject, bindings: Dictionary) -> bool:
+		if pattern is MatchWildcardPattern:
+			return true
+		if pattern is MatchCapturePattern:
+			bindings[pattern.name] = subject
+			return true
+		if pattern is MatchAsPattern:
+			if not _match_pattern(pattern.pattern, subject, bindings):
+				return false
+			bindings[pattern.name] = subject
+			return true
+		if pattern is MatchValuePattern:
+			var val = evaluate(pattern.value)
+			if val == null:
+				return false
+			return _match_value_eq(subject, val, (pattern as MatchValuePattern).is_literal)
+		if pattern is MatchOrPattern:
+			for alt in (pattern as MatchOrPattern).alternatives:
+				var alt_bindings = {}
+				if _match_pattern(alt, subject, alt_bindings):
+					bindings.merge(alt_bindings)
+					return true
+			return false
+		if pattern is MatchSequencePattern:
+			return _match_sequence_pattern(pattern, subject, bindings)
+		if pattern is MatchMappingPattern:
+			return _match_mapping_pattern(pattern, subject, bindings)
+		if pattern is MatchClassPattern:
+			return _match_class_pattern(pattern, subject, bindings)
+		return false
+
+	## 模式值与主题的相等判定 [br]
+	## 字面量模式的 None/True/False 按单例值判定 (与身份比较语义等价), 其余走 == 分派 [br]
+	## [param subject] 被匹配的主题 [br]
+	## [param val] 模式值 [br]
+	## [param is_literal] 是否字面量模式 [br]
+	## [returns] 是否相等
+	func _match_value_eq(subject: DSLObject, val: DSLObject, is_literal: bool) -> bool:
+		if is_literal:
+			if val is DSLNone:
+				return subject is DSLNone
+			if val is DSLBool:
+				return subject is DSLBool and (subject as DSLBool).value == (val as DSLBool).value
+		var result = _op_binary("eq", TokenType.EQUAL_EQUAL, [subject, val])
+		if result == null:
+			return false
+		return result._dsl_bool()
+
+	## 序列模式匹配 [br]
+	## 主题必须是内建 list 或 tuple (字符串, bytes 与用户类不参与序列匹配, 对齐 CPython 类型标志语义) [br]
+	## [param pattern] 序列模式 [br]
+	## [param subject] 被匹配的主题 [br]
+	## [param bindings] 绑定收集字典 [br]
+	## [returns] 是否匹配成功
+	func _match_sequence_pattern(pattern, subject: DSLObject, bindings: Dictionary) -> bool:
+		if not (subject is DSLList or subject is DSLTuple):
+			return false
+		var seq: Array[DSLObject] = (subject as DSLObject).items
+		var n = seq.size()
+		var sub_patterns = (pattern as MatchSequencePattern).patterns
+		var star_index = (pattern as MatchSequencePattern).star_index
+		var star_name = (pattern as MatchSequencePattern).star_name
+		if star_index < 0:
+			if n != sub_patterns.size():
+				return false
+			for i in range(n):
+				if not _match_pattern(sub_patterns[i], seq[i], bindings):
+					return false
+			return true
+		var before = star_index
+		var after = sub_patterns.size() - before - 1
+		if n < before + after:
+			return false
+		for i in range(before):
+			if not _match_pattern(sub_patterns[i], seq[i], bindings):
+				return false
+		var rest: Array[DSLObject] = []
+		for i in range(before, n - after):
+			rest.append(seq[i])
+		if star_name != "_":
+			bindings[star_name] = DSLList.new(rest)
+		for i in range(after):
+			if not _match_pattern(sub_patterns[before + 1 + i], seq[n - after + i], bindings):
+				return false
+		return true
+
+	## 映射模式匹配 [br]
+	## 主题必须是内建 dict; 键逐个查找, 缺键即不匹配; **rest 捕获剩余键值对 [br]
+	## [param pattern] 映射模式 [br]
+	## [param subject] 被匹配的主题 [br]
+	## [param bindings] 绑定收集字典 [br]
+	## [returns] 是否匹配成功
+	func _match_mapping_pattern(pattern, subject: DSLObject, bindings: Dictionary) -> bool:
+		if not (subject is DSLDict):
+			return false
+		var d = subject as DSLDict
+		var mp = pattern as MatchMappingPattern
+		var remaining = d.dict.duplicate()
+		for i in range(mp.key_exprs.size()):
+			var key_val = evaluate(mp.key_exprs[i])
+			if key_val == null:
+				return false
+			var vkey = d._key_to_variant(key_val)
+			if vkey == null:
+				return false
+			if not d.dict.has(vkey):
+				return false
+			if not _match_pattern(mp.value_patterns[i], d.dict[vkey], bindings):
+				return false
+			remaining.erase(vkey)
+		if mp.rest_name != "" and mp.rest_name != "_":
+			var rest_dict: Dictionary[Variant, DSLObject] = {}
+			for k in remaining:
+				rest_dict[k] = remaining[k]
+			bindings[mp.rest_name] = DSLDict.new(rest_dict)
+		return true
+
+	## 类模式匹配 [br]
+	## 先做 isinstance 检查, 位置子模式经 __match_args__ 映射为属性名, 关键字子模式直接取属性 [br]
+	## [param pattern] 类模式 [br]
+	## [param subject] 被匹配的主题 [br]
+	## [param bindings] 绑定收集字典 [br]
+	## [returns] 是否匹配成功
+	func _match_class_pattern(pattern, subject: DSLObject, bindings: Dictionary) -> bool:
+		var cp = pattern as MatchClassPattern
+		var cls = evaluate(cp.cls_expr)
+		if cls == null:
+			return false
+		var is_inst = builtin_isinstance([subject, cls] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if is_inst == null or report.has_error:
+			return false
+		if not is_inst.value:
+			return false
+		if cp.pos_patterns.size() == 0 and cp.kw_names.size() == 0:
+			return true
+		var args_info = null
+		if cp.pos_patterns.size() > 0:
+			args_info = _match_args_info(cls, cp.pos_patterns.size())
+			if args_info == null:
+				return false
+			if not args_info["self"]:
+				var dup = _find_repeat(_dup_check_names(args_info["names"], cp.kw_names))
+				if dup != "":
+					raise_exception("TypeError", "%s() got multiple sub-patterns for attribute '%s'" % [args_info["cls"], dup])
+					return false
+		if args_info != null and args_info["self"]:
+			# 内建类型单位置子模式直接绑定主题本身
+			if not _match_pattern(cp.pos_patterns[0], subject, bindings):
+				return false
+			return _match_class_kws(cp, subject, bindings, cp.pos_patterns.size())
+		var attr_names: Array = []
+		if args_info != null:
+			attr_names = args_info["names"]
+		for i in range(cp.kw_names.size()):
+			attr_names.append(cp.kw_names[i])
+		for i in range(attr_names.size()):
+			var attr_val = _match_class_attr(subject, attr_names[i])
+			if attr_val == null:
+				# 属性缺失或取值失败: 不匹配 (报错时由调用方检查 report.has_error)
+				return false
+			var sub = cp.pos_patterns[i] if i < cp.pos_patterns.size() else cp.kw_patterns[i - cp.pos_patterns.size()]
+			if not _match_pattern(sub, attr_val, bindings):
+				return false
+		return true
+
+	## 读取类模式子模式的属性值 [br]
+	## 属性缺失视为匹配失败 (错误被吞掉, 对齐 CPython match_class_attr), 其它取值错误向上传播 [br]
+	## [param subject] 被匹配的主题 [br]
+	## [param attr_name] 属性名 [br]
+	## [returns] 属性值, 属性缺失或取值失败时返回 null
+	func _match_class_attr(subject: DSLObject, attr_name: String) -> DSLObject:
+		var attr_val = subject._dsl_getattribute(attr_name)
+		if subject.last_error == "":
+			return attr_val
+		if subject.last_error.begins_with("AttributeError:"):
+			subject.last_error = ""
+			return null
+		raise_exception_from_last_error(subject.last_error, subject.last_error_args)
+		return null
+
+	## 匹配类模式的关键字子模式部分 (从指定关键字下标开始) [br]
+	## [param cp] 类模式节点 [br]
+	## [param subject] 被匹配的主题 [br]
+	## [param bindings] 绑定收集字典 [br]
+	## [param kw_start] 关键字起始下标 [br]
+	## [returns] 是否全部匹配成功
+	func _match_class_kws(cp, subject: DSLObject, bindings: Dictionary, kw_start: int) -> bool:
+		for i in range(kw_start, cp.kw_names.size()):
+			var attr_val = _match_class_attr(subject, cp.kw_names[i])
+			if attr_val == null:
+				return false
+			if not _match_pattern(cp.kw_patterns[i], attr_val, bindings):
+				return false
+		return true
+
+	## 合并位置映射名与关键字名 (重复属性检查用)
+	func _dup_check_names(pos_names: Array, kw_names: Array) -> Array:
+		var all_names: Array = []
+		all_names.append_array(pos_names)
+		all_names.append_array(kw_names)
+		return all_names
+
+	## 在名字列表中找第一个重复名
+	func _find_repeat(names: Array) -> String:
+		var seen: Array = []
+		for n in names:
+			if seen.has(n):
+				return n
+			seen.append(n)
+		return ""
+
+	## 读取类模式位置子模式对应的属性名 (来自 __match_args__, 沿继承链查找) [br]
+	## 数量不符时报 TypeError [br]
+	## [param cls] 类对象 [br]
+	## [param pos_count] 位置子模式数量 [br]
+	## [returns] 属性名数组, 失败时返回 null (已报错)
+	## 读取类模式位置子模式的映射信息 (来自 __match_args__, 沿继承链查找) [br]
+	## 无 __match_args__ 时, 数值与容器等内建类型 (含其子类) 允许单个位置子模式直接绑定主题 [br]
+	## [param cls] 类对象 [br]
+	## [param pos_count] 位置子模式数量 [br]
+	## [returns] {names: 属性名数组, self: 是否直接绑定主题, cls: 类名}, 失败时返回 null (已报错)
+	func _match_args_info(cls: DSLObject, pos_count: int):
+		var match_args = null
+		if cls is DSLClass:
+			var current = cls as DSLClass
+			while current != null:
+				if current.class_attrs.has("__match_args__"):
+					match_args = current.class_attrs["__match_args__"]
+					break
+				current = current.superclass
+		var match_self = false
+		if match_args == null and cls is DSLClass and _has_match_self(cls as DSLClass):
+			match_self = true
+		if match_args != null and not (match_args is DSLTuple):
+			var display_name = (cls as DSLClass).name if cls is DSLClass else cls._type_name()
+			raise_exception("TypeError", "%s.__match_args__ must be a tuple (got %s)" % [display_name, match_args._type_name()])
+			return null
+		var lo = 0
+		if match_self:
+			lo = 1
+		elif match_args is DSLTuple:
+			lo = match_args.items.size()
+		if pos_count > lo:
+			var cls_name = ""
+			if cls is DSLClass:
+				cls_name = (cls as DSLClass).name
+			else:
+				cls_name = cls._type_name()
+			var lo_word = "sub-pattern" if lo == 1 else "sub-patterns"
+			raise_exception("TypeError", "%s() accepts %d positional %s (%d given)" % [cls_name, lo, lo_word, pos_count])
+			return null
+		var names: Array = []
+		if not match_self:
+			for i in range(pos_count):
+				names.append(match_args.items[i]._dsl_str())
+		var cls_name = ""
+		if cls is DSLClass:
+			cls_name = (cls as DSLClass).name
+		else:
+			cls_name = cls._type_name()
+		return {"names": names, "self": match_self, "cls": cls_name}
+
+	## 判断类是否具备单位置子模式直接绑定主题的语义 [br]
+	## 对应类本身或继承链上的根为数值与容器类内建类型 (用户类与 object 不具备) [br]
+	## [param cls] 类对象 [br]
+	## [returns] 具备时返回 true
+	func _has_match_self(cls: DSLClass) -> bool:
+		var match_self_types = ["int", "float", "str", "list", "dict", "tuple", "set", "frozenset", "bytes", "bytearray", "bool"]
+		var current = cls
+		while current != null:
+			# 内建类的 module_prefix 为空串, 用户脚本中的同名类不会误判
+			if match_self_types.has(current.name) and current.module_prefix == "":
+				return true
+			current = current.superclass
+		return false
+
 	## 判断语句是否含 yield 表达式 (供生成器侧子表达式记忆启用判定) [br]
 	## 递归检查表达式与嵌套语句块, 只做结构判断, 不涉及语义 [br]
 	## [param stmt] 语句节点 [br]
@@ -15819,6 +16814,37 @@ class Interpreter:
 					if f != null and f is Dictionary:
 						f.resume_info = {"type": "if", "branch": "else"}
 					return exec_block(stmt.else_branch, environment)
+			return ExecResult.NORMAL
+		
+		if stmt is MatchStmt:
+			var subject = evaluate(stmt.subject)
+			if _suspended:
+				_expr_evaluated = (subject != null) and not _needs_replay
+				return ExecResult.SUSPENDED
+			if subject == null or report.has_error:
+				return ExecResult.ERROR
+			for case_clause in stmt.cases:
+				var bindings = {}
+				var matched = _match_pattern(case_clause.pattern, subject, bindings)
+				if _suspended:
+					# 匹配中途挂起 (值模式/类模式求值等): 交回语句重放
+					return ExecResult.SUSPENDED
+				if report.has_error:
+					return ExecResult.ERROR
+				if not matched:
+					continue
+				# 先应用绑定再求值守卫, 守卫失败时绑定保留 (CPython 字节码顺序)
+				for bound_name in bindings:
+					environment.set_val(bound_name, bindings[bound_name])
+				if case_clause.guard != null:
+					var guard_val = evaluate(case_clause.guard)
+					if _suspended:
+						return ExecResult.SUSPENDED
+					if guard_val == null or report.has_error:
+						return ExecResult.ERROR
+					if not guard_val._dsl_bool():
+						continue
+				return exec_block(case_clause.body, environment)
 			return ExecResult.NORMAL
 		
 		if stmt is WhileStmt:

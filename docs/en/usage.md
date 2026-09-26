@@ -503,6 +503,103 @@ for i in range(10):
     print(i)    # 0, 1, 2, 4, 5, 6
 ```
 
+### match / case Structural Pattern Matching (Python 3.10+)
+
+`match` / `case` are soft keywords: they act as keywords only when `match` appears at statement start followed by a colon on the same logical line, or when `case` appears inside a `match` block; everywhere else (`match = 1`, `match(x)`, `def match():`, etc.) they remain ordinary identifiers
+
+```python
+command = "run"
+
+match command:
+    case "run":
+        print("running")
+    case "stop":
+        print("stopped")
+    case _:
+        print("unknown")
+
+# Capture and guard: a capture pattern always matches, the guard is an ordinary expression
+match 5:
+    case n if n > 3:
+        print("big", n)
+    case n:
+        print("small", n)
+
+# Sequence patterns: the subject must be a built-in list or tuple
+# (str / bytes / bytearray / user classes do not participate)
+match [1, 2, 3]:
+    case [a, b, c]:
+        print(a, b, c)
+
+# Star captures the remaining elements (possibly empty); the star may appear at any position
+match [1, 2, 3, 4]:
+    case [first, *rest]:
+        print(first, rest)
+
+# Mapping patterns: the subject must be a built-in dict; a missing key means no match;
+# **rest captures the remaining key-value pairs (cannot be written as **_)
+match {"name": "py", "ver": 6}:
+    case {"name": n, **rest}:
+        print(n, rest)
+
+# Class patterns: isinstance check first; positional sub-patterns are mapped to attributes
+# via __match_args__, keyword sub-patterns read attributes directly
+class Point:
+    __match_args__ = ("x", "y")
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+match Point(0, 5):
+    case Point(0, y):
+        print("on y-axis", y)
+    case Point(x, y):
+        print("at", x, y)
+
+# Or-patterns and as bindings
+match 7:
+    case 1 | 2 | 3:
+        print("small")
+    case n as whole if whole > 5:
+        print("large", whole)
+
+# Subjects support tuple form
+def classify(p):
+    match p.x, p.y:
+        case (0, 0):
+            return "origin"
+        case (0, _):
+            return "y-axis"
+        case (_, 0):
+            return "x-axis"
+        case _:
+            return "plane"
+print(classify(Point(0, 0)), classify(Point(0, 3)), classify(Point(4, 0)), classify(Point(1, 1)))
+
+# Literal patterns: None / True / False are compared by singleton identity,
+# numbers / strings / bytes by equality
+def check(v):
+    match v:
+        case None:
+            return "none"
+        case True:
+            return "true"
+        case 1:
+            return "one"
+    return "other"
+print(check(None), check(True), check(1), check("x"))
+```
+
+Additional notes on pattern syntax and semantics (all consistent with CPython):
+
+- Matching tries each `case` from top to bottom; the first hit executes and leaves the `match`. On a hit, capture names are bound before the guard is evaluated; if the guard is false the bindings are kept and matching continues with the next `case`
+- The wildcard `_` binds nothing; capture bindings follow ordinary assignment scoping (`global` / `nonlocal` declarations apply as well)
+- Sequence patterns require equal length (or no shorter than the fixed part when a star is present); `str` / `bytes` / `bytearray` and user class instances never match sequence patterns
+- Value patterns (dotted constants, e.g. `Color.RED`) are evaluated during matching and compared by equality
+- Without `__match_args__` the positional sub-pattern limit of a class pattern is 0, except for the numeric and container built-in types (`int` / `float` / `str` / `list` / `dict` / `tuple` / `set` / `frozenset` / `bytes` / `bytearray` / `bool`, including their subclasses): with exactly one positional sub-pattern the subject itself is bound directly (e.g. `case int(v):`)
+- Compile-time checks (raising `SyntaxError`): or-pattern alternatives binding different names, repeated binding of the same name within one pattern, `case ... as _`, repeated keyword in a class pattern, positional sub-patterns after keyword ones, keys after `**rest` in a mapping pattern, `**_`, equal constant keys in a mapping pattern (e.g. `{1: a, 1.0: b}`), and unreachable `case` clauses following an unguarded capture or wildcard `case`
+- `match` / `case` work with the suspension system: `time.sleep` in the subject, guards and case bodies suspends and resumes normally
+
 ### Function Definitions
 
 ```python

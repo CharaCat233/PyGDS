@@ -27,6 +27,12 @@ All DSL types inherit from the `DSLObject` base class, simulating Python's magic
 | `DSLAttrGetter` | `operator.attrgetter` | Immutable | No |
 | `DSLCmpKey` | `functools.KeyWrapper` | Immutable | No |
 
+Type participation rules of `match` / `case` structural pattern matching (consistent with the CPython 3.12 type-flag semantics):
+
+- **Sequence patterns** only accept built-in `list` and `tuple`; `str` / `bytes` / `bytearray` and user class instances (even with `__getitem__` / `__len__`) never participate in sequence matching
+- **Mapping patterns** only accept built-in `dict`; user class instances never participate in mapping matching
+- **Class patterns** work with any type (via `isinstance`); without `__match_args__`, the numeric and container built-in types (`int` / `float` / `str` / `list` / `dict` / `tuple` / `set` / `frozenset` / `bytes` / `bytearray` / `bool`, including their subclasses) accept exactly one positional sub-pattern and bind the subject itself directly, while all other types have a positional limit of 0
+
 ---
 
 ### DSLInteger — Integer Type

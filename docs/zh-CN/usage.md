@@ -505,6 +505,99 @@ for i in range(10):
     print(i)    # 0, 1, 2, 4, 5, 6
 ```
 
+### match / case 结构化模式匹配（Python 3.10+）
+
+`match` / `case` 是软关键字：仅 `match` 出现在语句起始且同一逻辑行带冒号、`case` 出现在 `match` 块内时按关键字处理，其它位置（`match = 1`、`match(x)`、`def match():` 等）仍是普通标识符
+
+```python
+command = "run"
+
+match command:
+    case "run":
+        print("running")
+    case "stop":
+        print("stopped")
+    case _:
+        print("unknown")
+
+# 捕获与守卫: 捕获模式永远匹配, 守卫是普通表达式
+match 5:
+    case n if n > 3:
+        print("big", n)
+    case n:
+        print("small", n)
+
+# 序列模式: 主题须是内建 list 或 tuple (str / bytes / bytearray / 用户类不参与)
+match [1, 2, 3]:
+    case [a, b, c]:
+        print(a, b, c)
+
+# 星号捕获剩余元素 (可为空); 星号可出现在任意位置
+match [1, 2, 3, 4]:
+    case [first, *rest]:
+        print(first, rest)
+
+# 映射模式: 主题须是内建 dict; 缺键即不匹配; **rest 捕获剩余键值对 (不能写成 **_)
+match {"name": "py", "ver": 6}:
+    case {"name": n, **rest}:
+        print(n, rest)
+
+# 类模式: 先 isinstance 检查; 位置子模式经 __match_args__ 映射为属性, 关键字子模式直接取属性
+class Point:
+    __match_args__ = ("x", "y")
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+match Point(0, 5):
+    case Point(0, y):
+        print("on y-axis", y)
+    case Point(x, y):
+        print("at", x, y)
+
+# 或模式与 as 绑定
+match 7:
+    case 1 | 2 | 3:
+        print("small")
+    case n as whole if whole > 5:
+        print("large", whole)
+
+# 主题支持元组形式
+def classify(p):
+    match p.x, p.y:
+        case (0, 0):
+            return "origin"
+        case (0, _):
+            return "y-axis"
+        case (_, 0):
+            return "x-axis"
+        case _:
+            return "plane"
+print(classify(Point(0, 0)), classify(Point(0, 3)), classify(Point(4, 0)), classify(Point(1, 1)))
+
+# 字面量模式: None / True / False 按单例身份比较, 数字 / 字符串 / bytes 用相等比较
+def check(v):
+    match v:
+        case None:
+            return "none"
+        case True:
+            return "true"
+        case 1:
+            return "one"
+    return "other"
+print(check(None), check(True), check(1), check("x"))
+```
+
+模式语法与语义的补充说明（均与 CPython 一致）：
+
+- 匹配自上而下逐个尝试，首个命中的 `case` 执行后退出 `match`；命中时先绑定捕获名再求值守卫，守卫为假时捕获的绑定保留，继续尝试下一个 `case`
+- 通配符 `_` 不绑定；捕获绑定遵循普通赋值的作用域规则（`global` / `nonlocal` 声明同样生效）
+- 序列模式要求长度相等（含星号时要求不短于固定部分）；`str` / `bytes` / `bytearray` 与用户类实例不参与序列匹配
+- 值模式（点号常量，如 `Color.RED`）在匹配时求值，用相等比较
+- 类模式无 `__match_args__` 时，位置子模式数量上限为 0；数值与容器类内建类型（`int` / `float` / `str` / `list` / `dict` / `tuple` / `set` / `frozenset` / `bytes` / `bytearray` / `bool`，含其子类）例外：恰好一个位置子模式时直接绑定主题本身（如 `case int(v):`）
+- 编译期检查（报 `SyntaxError`）：或模式各分支绑定名不一致、模式内重复绑定同一名字、`case ... as _`、类模式关键字重复、关键字后出现位置子模式、映射模式 `**rest` 后仍有键、`**_`、映射模式常量键等值重复（如 `{1: a, 1.0: b}`）、带无守卫捕获或通配的 `case` 之后出现不可达 `case`
+- `match` / `case` 与挂起系统兼容：主题、守卫与 case 体中的 `time.sleep` 均正常挂起推进
+
 ### 函数定义
 
 ```python

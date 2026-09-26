@@ -27,6 +27,12 @@ PyGDS 实现了与 Python 高度一致的内置类型系统
 | `DSLAttrGetter` | `operator.attrgetter` | 不可变 | 否 |
 | `DSLCmpKey` | `functools.KeyWrapper` | 不可变 | 否 |
 
+`match` / `case` 结构化模式匹配的类型参与规则（与 CPython 3.12 的类型标志语义一致）：
+
+- **序列模式**仅接受内建 `list` 与 `tuple`；`str` / `bytes` / `bytearray` 与用户类实例（即使实现了 `__getitem__` / `__len__`）不参与序列匹配
+- **映射模式**仅接受内建 `dict`；用户类实例不参与映射匹配
+- **类模式**对任意类型可用（走 `isinstance`）；无 `__match_args__` 时，数值与容器类内建类型（`int` / `float` / `str` / `list` / `dict` / `tuple` / `set` / `frozenset` / `bytes` / `bytearray` / `bool`，含其子类）接受恰好一个位置子模式并直接绑定主题本身，其余类型位置子模式上限为 0
+
 ---
 
 ### DSLInteger — 整数类型

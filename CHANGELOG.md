@@ -2,6 +2,31 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.6.0-alpha.1] - 2026-09-26
+
+本版实现 `match` / `case` 结构化模式匹配（Python 3.10+，基线对齐 CPython 3.12 的匹配语义与语法错误文案）。`match` / `case` 按软关键字处理，既有以 `match` / `case` 命名的标识符不受影响
+
+### 新增
+
+- **`match` / `case` 语句**：主题表达式支持元组形式（`match 1, 2:`）与括号 / 括号内换行；`match` 块内要求至少一个 `case` 子句，`case` 体支持缩进块与单行体
+- **模式种类**：字面量模式（数字 / 字符串 / bytes / `None` / `True` / `False` / 负数）、捕获模式（永远匹配并绑定）、通配符 `_`、序列模式（固定长度 / `*rest` 任意位置 / `*_` / 空序列 / 无括号逗号序列）、映射模式（常量与点号常量键 / `**rest`）、类模式（`isinstance` 检查 / `__match_args__` 位置映射 / 关键字子模式 / 嵌套 / 内建类型单位置绑定主题——`case int(v):` 对 `int` / `float` / `str` / `list` / `dict` / `tuple` / `set` / `frozenset` / `bytes` / `bytearray` / `bool` 及其子类生效）、或模式（`|`）、`as` 绑定、任意深度嵌套
+- **语义**：字面量模式中 `None` / `True` / `False` 按单例身份比较（`case True:` 不匹配 `1`），数字 / 字符串 / bytes 用相等比较（`case 1:` 匹配 `1.0` 与 `True`）；命中时先绑定捕获名再求值守卫，守卫为假时绑定保留并继续下一个 `case`；匹配自上而下逐个尝试，首个命中执行后退出；捕获绑定遵循普通赋值作用域（`global` / `nonlocal` 生效）
+- **编译期检查（`SyntaxError`，文案与 CPython 3.12 一致）**：或模式分支绑定名不一致（`alternative patterns bind different names`）、模式内重复绑定（`multiple assignments to name 'a' in pattern`）、`case ... as _`（`cannot use '_' as a target`）、类模式关键字重复（`attribute name repeated in class pattern: x`）、关键字后位置子模式（`positional patterns follow keyword patterns`）、`**rest` 后仍有键、`**_`、映射模式常量键等值重复（`mapping pattern checks duplicate key (1.0)`，`1` / `1.0` / `True` 同键）、带无守卫捕获或通配的 `case` 后续不可达（`name capture 'y' makes remaining patterns unreachable` / `wildcard makes remaining patterns unreachable`）、带守卫的子句不构成不可达
+- **运行期错误**：类模式位置子模式超量报 `Cls() accepts N positional sub-patterns (M given)`（单数区分）；`__match_args__` 非元组报 `Cls.__match_args__ must be a tuple (got list)`；位置映射名与关键字重复报 `Cls() got multiple sub-patterns for attribute 'x'`；类模式关键字属性缺失按匹配失败处理（不抛异常），属性 getter 抛出的非 `AttributeError` 异常照常传播；用户类实例不参与序列 / 映射匹配（对齐 CPython 3.12 的类型标志语义）
+- **软关键字消歧**：`match` 仅在语句起始且同一逻辑行存在括号外冒号时按 match 语句解析；`match = 1` / `match(x)` / `match[0] = 1` / `match: int = 1` / `match = {1: 2}` 等标识符用法全部保持；`case` 在 `match` 块外仍是普通标识符
+- **挂起系统兼容**：主题、守卫、类模式属性 getter、case 体中的 `time.sleep` 均正常挂起与语句重放推进（生成器内 `match`、循环内 `match`、并列调用的副作用不重复均验证）
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md` 新增「match / case 结构化模式匹配」章节（语法示例双侧实测 + 模式语义补充说明）
+- `docs/zh-CN/builtin_types.md` 与 `docs/en/builtin_types.md` 类型总览新增模式匹配的类型参与规则
+- README 与 README_EN 兼容矩阵新增 `match`/`case` 行，「已知问题与限制」章节移除 P1-10 条目
+
+### 测试
+
+- 新增 20 个测试：行为类 `lang_match_basic`（字面量 / 捕获 / 通配 / 守卫 / 或 / as / 主题元组 / 软关键字 / 循环内匹配）、`lang_match_seq`（序列与星号 / 无括号序列 / 嵌套 / 排除规则）、`lang_match_map`（映射与 `**rest` / 嵌套 / 布尔键）、`lang_match_class`（类模式 / 值模式 / 内建类型绑定 / 运行期错误文案）、`lang_match_sleep`（挂起场景全形态）；错误类 `err_match_*` 15 例（case 缺模式、or 绑定不一致、重复绑定、不可达 case、`as _`、关键字重复与后置、`**rest` 后有键、`**_`、match 块内非 case、顶层单星 / 顶层 case、多星、重复键），全部并入 `expected.json`（共 204 个用例全部通过，既有条目 `expected` 零变更），挂起测试 22 个用例通过
+- 差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
 ## [0.5.0] - 2026-09-26
 
 ### 文档
