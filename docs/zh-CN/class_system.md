@@ -15,16 +15,22 @@ PyGDS 的类与实例系统严格对标 CPython 的对象模型，实现了类�
 
 ## DSLClass
 
-`DSLClass` 表示一个 Python 类（对标 CPython 的 `type` 类型），它存储类名、方法字典、基类引用和类属性
+`DSLClass` 表示一个 Python 类（对标 CPython 的 `type` 类型），它存储类名、方法字典、基类列表、C3 线性化序列（MRO）和类属性
 
 ```gdscript
 class DSLClass extends DSLObject:
     var name: String               # 类名 (如 "MyClass", "int", "list")
-    var superclass: DSLClass       # 基类, 可为 null (仅 object 的基类为 null)
+    var superclass: DSLClass       # 首个基类, 多基类时为 bases[0], 可为 null
+    var bases: Array               # 直接基类数组 (DSLClass 对象, 无基类时为空)
+    var mro: Array                 # C3 线性化序列 (含自身, 创建时计算并缓存)
     var methods: Dictionary        # 方法名 → DSLFunction / DSLBuiltinFunction / DSLMethodDescriptor / DSLWrappedDescriptor
     var class_attrs: Dictionary    # 类属性 (如 class_var = 100)
     var interp: Interpreter        # 解释器引用
 ```
+
+### C3 线性化
+
+`_compute_mro()` 实现 C3 线性化：`L[C] = C + merge(L[B1], ..., L[Bn], [B1, ..., Bn])`，每次从各序列头部选取未在任何序列尾部出现的类加入结果，无法选取时报 MRO 冲突。`_recompute_mro()` 在类创建与直接基类变化时调用并缓存结果；单基类的 MRO 退化为沿首个基类的链
 
 ---
 
@@ -145,35 +151,37 @@ func _type_name() -> String:
 位于 `PyGDS.DSLClass._dsl_getattribute`，用于在类上查找属性（访问 `MyClass.method` 时走此链路）
 
 ```gdscript
-func _dsl_getattribute(name: String) -> DSLObject:
-    # 1. 查找方法
-    if methods.has(name):
-        var method = methods[name]
-        if method is DSLBuiltinFunction:
+func _dsl_getattribute(attr_name: String) -> DSLObject:
+    # 1. 类名内省
+    if attr_name == "__name__":
+        return DSLString.new(name)
+
+    # 2. 沿 MRO 查找方法与类属性
+    for k in mro:
+        if k.methods.has(attr_name):
+            var method = k.methods[attr_name]
+            if method is DSLBuiltinFunction:
+                return method
+            if method.has_method("__get__"):
+                return method.__get__(null, self)
             return method
-        if method.has_method("__get__"):
-            return method.__get__(null, self)  # 描述符协议: null 实例 = 返回描述符本身
-        return method
+        if k.class_attrs.has(attr_name):
+            return k.class_attrs[attr_name]
 
-    # 2. 查找类属性
-    if class_attrs.has(name):
-        return class_attrs[name]
+    # 3. 类对象自带的内省成员 (用户定义的同名成员优先)
+    if attr_name == "mro":
+        return DSLBuiltinFunction.new("mro", Callable(self, "magic_mro"))
+    if attr_name == "__mro__":
+        ...
 
-    # 3. 沿超类链查找
-    var super_klass = superclass
-    while super_klass != null:
-        var result = super_klass._dsl_getattribute(name)
-        if result != null and not (result is DSLNone):
-            return result
-        super_klass = super_klass.superclass
-
-    # 4. 未找到, 返回 DSLNone (不再委托给 DSLObject 父类，避免无限递归)
-    return DSLNone.new()
+    # 4. 未找到: 记录 AttributeError 并返回 null
+    last_error = "AttributeError: type object '%s' has no attribute '%s'" % [name, attr_name]
+    return null
 ```
 
-**查找优先级：** 方法字典 → 类属性 → 超类链（MRO）→ DSLNone
+**查找优先级：** 类名内省 → MRO 逐级（方法字典 → 类属性）→ `mro` / `__mro__` 内省成员 → AttributeError
 
-注意：最后一步返回 `DSLNone.new()` 而非 `super._dsl_getattribute(name)`，因为后者会再次调用 `klass._dsl_getattribute` 形成无限递归
+`_lookup_method` 同样沿 MRO 逐级查找方法字典，供实例方法解析与 `__new__` / `__init__` 定位使用
 
 ---
 
@@ -431,6 +439,22 @@ ro.area = 100       # AttributeError: can't set attribute
 | `class` 定义 | `DSLClass` 创建并绑定到环境之后 |
 
 装饰器表达式经 `evaluate()` 通道求值，内部的 `time.sleep` 挂起向上返回 `SUSPENDED` 交回语句重放；装饰对象为类体方法时传入的是未绑定的 `DSLFunction`。当装饰器返回包装函数替换原对象时，`method_type` 承载的静态方法 / 类方法 / property 包装语义不保留
+
+---
+
+## 多继承与 MRO
+
+### 类创建流程
+
+`execute_class` 依次执行：逐个求值基类表达式（`superclass must be a class` 校验）→ 无基类时默认补 `object` → 直接基类重复检查（`duplicate base class A`）→ 计算并缓存 C3 线性化（无法一致时报 `Cannot create a consistent method resolution order (MRO) for bases A, B`）→ 布局冲突检查（`multiple bases have instance lay-out conflict`，每个直接基类的布局根取其 MRO 上首个内建布局类型，异常类统一视为同一布局）→ 执行类体。`type(name, bases, dict)` 三参形式走同样的检查
+
+### MRO 驱动的查找点
+
+沿单父链遍历的代码已全部迁移为 MRO 迭代，包括：`DSLClass._lookup_method`（方法解析与 `__new__` / `__init__` 定位）、`DSLClass._dsl_getattribute`（类属性访问）、`DSLObject._is_subclass_of_klass`（isinstance / issubclass / 异常匹配 / 类实例化判定的公共底层）、`dir()` 的三个收集循环、`__match_args__` 与 match-self 判定、异常体系注册表核对（`_is_registered_exception_class`）与 `_inherits_exception`
+
+### DSLSuper 沿 MRO 协作
+
+`DSLSuper` 持有定义方法所在的类与绑定目标（实例或类），查找从定义类在目标 MRO 中的下一项开始；类方法经 super 访问时绑定到目标的类本身（而非查找命中的类），与 CPython 的描述符绑定一致。菱形继承下 `super().__init__()` 逐类恰好执行一次
 
 ---
 

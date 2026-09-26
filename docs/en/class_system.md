@@ -15,16 +15,22 @@ Built-in type methods are injected via the `_inject_builtin_methods()` method.
 
 ## DSLClass
 
-`DSLClass` represents a Python class (equivalent to CPython's `type` type). It stores the class name, method dictionary, base class reference, and class attributes.
+`DSLClass` represents a Python class (equivalent to CPython's `type` type). It stores the class name, method dictionary, base class list, C3 linearization (MRO), and class attributes.
 
 ```gdscript
 class DSLClass extends DSLObject:
     var name: String               # Class name (e.g. "MyClass", "int", "list")
-    var superclass: DSLClass       # Base class, can be null (only object's base class is null)
+    var superclass: DSLClass       # First base class, bases[0] under multiple inheritance, can be null
+    var bases: Array               # Direct base classes (DSLClass objects, empty when none)
+    var mro: Array                 # C3 linearization (including self, computed and cached at creation)
     var methods: Dictionary        # method name → DSLFunction / DSLBuiltinFunction / DSLMethodDescriptor / DSLWrappedDescriptor
     var class_attrs: Dictionary    # Class attributes (e.g. class_var = 100)
     var interp: Interpreter        # Interpreter reference
 ```
+
+### C3 Linearization
+
+`_compute_mro()` implements C3 linearization: `L[C] = C + merge(L[B1], ..., L[Bn], [B1, ..., Bn])` — each step selects from the sequence heads the first class that appears in no other sequence's tail and appends it to the result; when no selection is possible an MRO conflict is reported. `_recompute_mro()` is invoked at class creation and whenever the direct bases change, caching the result; with a single base the MRO degenerates to the first base's chain.
 
 ---
 
@@ -145,35 +151,37 @@ func _type_name() -> String:
 Located in `PyGDS.DSLClass._dsl_getattribute`, used to look up attributes on a class (this path is followed when accessing `MyClass.method`).
 
 ```gdscript
-func _dsl_getattribute(name: String) -> DSLObject:
-    # 1. Look up methods
-    if methods.has(name):
-        var method = methods[name]
-        if method is DSLBuiltinFunction:
+func _dsl_getattribute(attr_name: String) -> DSLObject:
+    # 1. Class name introspection
+    if attr_name == "__name__":
+        return DSLString.new(name)
+
+    # 2. Look up methods and class attributes along the MRO
+    for k in mro:
+        if k.methods.has(attr_name):
+            var method = k.methods[attr_name]
+            if method is DSLBuiltinFunction:
+                return method
+            if method.has_method("__get__"):
+                return method.__get__(null, self)
             return method
-        if method.has_method("__get__"):
-            return method.__get__(null, self)  # Descriptor protocol: null instance = return the descriptor itself
-        return method
+        if k.class_attrs.has(attr_name):
+            return k.class_attrs[attr_name]
 
-    # 2. Look up class attributes
-    if class_attrs.has(name):
-        return class_attrs[name]
+    # 3. Built-in introspection members of the class object (user-defined members take priority)
+    if attr_name == "mro":
+        return DSLBuiltinFunction.new("mro", Callable(self, "magic_mro"))
+    if attr_name == "__mro__":
+        ...
 
-    # 3. Search along the superclass chain
-    var super_klass = superclass
-    while super_klass != null:
-        var result = super_klass._dsl_getattribute(name)
-        if result != null and not (result is DSLNone):
-            return result
-        super_klass = super_klass.superclass
-
-    # 4. Not found, return DSLNone (do not delegate to the DSLObject parent class to avoid infinite recursion)
-    return DSLNone.new()
+    # 4. Not found: record AttributeError and return null
+    last_error = "AttributeError: type object '%s' has no attribute '%s'" % [name, attr_name]
+    return null
 ```
 
-**Lookup priority:** Method dictionary → Class attributes → Superclass chain (MRO) → DSLNone
+**Lookup priority:** class name introspection → per level along the MRO (method dictionary → class attributes) → the `mro` / `__mro__` introspection members → AttributeError
 
-Note: The final step returns `DSLNone.new()` rather than `super._dsl_getattribute(name)`, because the latter would call `klass._dsl_getattribute` again, causing infinite recursion.
+`_lookup_method` likewise resolves methods along the MRO, serving instance method resolution and `__new__` / `__init__` location.
 
 ---
 
@@ -431,6 +439,22 @@ The interpreter's `_apply_decorators()` runs after the function / class object i
 | `class` definitions | After the `DSLClass` is created and bound into the environment |
 
 Decorator expressions are evaluated through the `evaluate()` channel, so a `time.sleep` suspension inside them returns `SUSPENDED` upward for statement replay; class-body methods pass the unbound `DSLFunction` to the decorator. When a decorator returns a wrapper function that replaces the original, the static-method / class-method / property wrapping carried by `method_type` is not preserved
+
+---
+
+## Multiple Inheritance and MRO
+
+### Class Creation Flow
+
+`execute_class` runs in sequence: evaluate each base expression (`superclass must be a class` validation) → default to `object` when no bases are given → duplicate direct base check (`duplicate base class A`) → compute and cache the C3 linearization (raising `Cannot create a consistent method resolution order (MRO) for bases A, B` when inconsistent) → layout conflict check (`multiple bases have instance lay-out conflict`; each direct base's layout root is the first built-in layout type along its MRO, with exception classes treated as one shared layout) → execute the class body. The three-argument `type(name, bases, dict)` form runs the same checks.
+
+### MRO-Driven Lookup Points
+
+All single-parent chain traversals have been migrated to MRO iteration, including: `DSLClass._lookup_method` (method resolution and `__new__` / `__init__` location), `DSLClass._dsl_getattribute` (class attribute access), `DSLObject._is_subclass_of_klass` (the shared base for isinstance / issubclass / exception matching / instantiation checks), the three collection loops in `dir()`, `__match_args__` and match-self determination, exception hierarchy registry checks (`_is_registered_exception_class`), and `_inherits_exception`.
+
+### DSLSuper Cooperating Along the MRO
+
+`DSLSuper` holds the class where the method is defined and the binding target (instance or class); lookup starts after the defining class in the target's MRO. A classmethod accessed through super binds to the target's own class (not the class where the lookup hit), matching CPython's descriptor binding. Under diamond inheritance each `super().__init__()` runs exactly once per class.
 
 ---
 

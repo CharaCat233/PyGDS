@@ -1295,6 +1295,52 @@ print(super(Q, q).greet())      # parent
 
 > **Note**: `super()` can only be used inside class methods (static methods have no self/cls and raise `RuntimeError: super(): no arguments`).
 
+#### Multiple Inheritance and MRO
+
+Multiple inheritance `class C(A, B):` is supported; methods and class attributes are resolved along the C3 linearization (MRO). The class object's `__mro__` (tuple) and `mro()` (list) expose the sequence. Inconsistent base orderings raise `TypeError: Cannot create a consistent method resolution order (MRO) for bases A, B`, duplicate direct bases raise `duplicate base class A`, and incompatible instance layouts among bases (e.g. `list` with `dict`) raise `multiple bases have instance lay-out conflict`. Both zero-arg `super()` and the two-argument form resolve along the instance's (or class's) MRO starting after the defining class, so cooperative `super().__init__()` chains work under diamond inheritance
+
+```python
+class A:
+    def who(self):
+        return "A"
+
+class B:
+    def who(self):
+        return "B"
+
+class C(A, B):
+    pass
+
+c = C()
+print(c.who())                              # A (A comes earlier in the MRO)
+print([k.__name__ for k in C.__mro__])      # ['C', 'A', 'B', 'object']
+print(isinstance(c, A), isinstance(c, B))   # True True
+
+
+class Base:
+    def __init__(self):
+        self.steps = ["base"]
+        super().__init__()
+
+class Left(Base):
+    def __init__(self):
+        super().__init__()
+        self.steps.append("left")
+
+class Right(Base):
+    def __init__(self):
+        super().__init__()
+        self.steps.append("right")
+
+class Child(Left, Right):
+    def __init__(self):
+        super().__init__()
+        self.steps.append("child")
+
+print(Child().steps)                        # ['base', 'right', 'left', 'child']
+print([k.__name__ for k in Child.__mro__])  # ['Child', 'Left', 'Right', 'Base', 'object']
+```
+
 ### assert Statement
 
 ```python

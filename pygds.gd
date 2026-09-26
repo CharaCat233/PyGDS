@@ -1908,23 +1908,23 @@ class FunctionStmt extends Stmt:
 		body = b
 
 ## 类定义语句 [br]
-## 定义类名, 基类和类体内容
+## 定义类名, 基类列表 (支持多继承) 和类体内容
 class ClassStmt extends Stmt:
 	## 类名
 	var name: String
-	## 基类表达式 (可为 null, 表示继承 DSLObject)
-	var superclass: Expr
+	## 基类表达式数组 (可为空, 表示默认继承 object)
+	var bases: Array
 	## 类体语句列表 (一系列 FunctionStmt 或其他语句)
 	var body: Array[Stmt]
 	## 任意装饰器表达式数组 (源码顺序, 最外层在前)
 	var decorators: Array = []
 	## 构造类定义 [br]
 	## [param n] 类名 [br]
-	## [param s] 基类表达式, 可为 null [br]
+	## [param base_arr] 基类表达式数组 [br]
 	## [param b] 类体语句列表
-	func _init(n, s, b):
+	func _init(n, base_arr, b):
 		name = n
-		superclass = s
+		bases = base_arr
 		body = b
 
 ## return 语句 [br]
@@ -2437,18 +2437,13 @@ class DSLObject:
 			return klass.name
 		return "object"
 	
-	## 判断当前类是否是目标类的子类 [br]
+	## 判断当前类是否是目标类的子类 (沿 MRO, 含自身) [br]
 	## [param target] 目标类对象 [br]
 	## [return] 如果当前类继承自目标类则返回 true
 	func _is_subclass_of_klass(target: DSLClass) -> bool:
 		if klass == null:
 			return false
-		var current = klass
-		while current != null:
-			if current == target:
-				return true
-			current = current.superclass
-		return false
+		return klass.mro.has(target)
 		
 	## 二元算术运算的默认实现 (未重写的类型一律拒绝) [br]
 	## 调用约定与各内置类型的重写一致: args 为 [self, other] [br]
@@ -9056,8 +9051,12 @@ class DSLMethod extends DSLObject:
 class DSLClass extends DSLObject:
 	## 类名
 	var name: String
-	## 基类, 可为 null
+	## 首个基类 (兼容字段, 多基类时为 bases[0], 无基类时为 null)
 	var superclass: DSLClass
+	## 直接基类数组 (DSLClass 对象, 无基类时为空)
+	var bases: Array = []
+	## C3 线性化序列 (含自身, 类创建时计算并缓存)
+	var mro: Array = []
 	## 方法名字 -> DSLFunction
 	var methods: Dictionary
 	## 类属性
@@ -9072,9 +9071,65 @@ class DSLClass extends DSLObject:
 		super._init()
 		name = p_name
 		superclass = p_superclass
+		bases = []
+		if p_superclass != null:
+			bases.append(p_superclass)
 		methods = p_methods
 		interp = p_interp
 		class_attrs = {}
+		_recompute_mro()
+
+	## 重新计算 C3 线性化 (基类变化后调用) [br]
+	## [returns] 线性化成功返回 true, 存在无法一致的顺序时返回 false
+	func _recompute_mro() -> bool:
+		var result = _compute_mro()
+		if result == null:
+			return false
+		mro = result
+		return true
+
+	## C3 线性化: L[C] = C + merge(L[B1], ..., L[Bn], [B1, ..., Bn]) [br]
+	## [returns] MRO 数组 (含自身), 基类顺序无法一致时返回 null
+	func _compute_mro():
+		var seqs: Array = []
+		for b in bases:
+			if b != null:
+				seqs.append(b.mro)
+		if bases.size() > 0:
+			seqs.append(bases.duplicate())
+		var result: Array = [self]
+		while true:
+			var nonempty: Array = []
+			for s in seqs:
+				if s.size() > 0:
+					nonempty.append(s)
+			seqs = nonempty
+			if seqs.is_empty():
+				break
+			var chosen = null
+			for s in seqs:
+				var head = s[0]
+				var ok = true
+				for s2 in seqs:
+					if s2.find(head) > 0:
+						ok = false
+						break
+				if ok:
+					chosen = head
+					break
+			if chosen == null:
+				return null
+			result.append(chosen)
+			var next_seqs: Array = []
+			for s in seqs:
+				if s.size() > 0 and s[0] == chosen:
+					var rest = s.slice(1)
+					if rest.size() > 0:
+						next_seqs.append(rest)
+				else:
+					next_seqs.append(s)
+			seqs = next_seqs
+		return result
 	
 	## 类的模块前缀 (用户类为 "__main__.", 内建类为空), 仅影响 repr
 	var module_prefix: String = ""
@@ -9110,26 +9165,20 @@ class DSLClass extends DSLObject:
 				_invoke_func(init_func, init_args, kwargs)
 		return instance
 	
-	## 判断类是否异常体系子类 (沿继承链查到 Exception)
+	## 判断类是否异常体系子类 (沿 MRO 查到 Exception)
 	func _inherits_exception(cls: DSLClass) -> bool:
-		var cur = cls
-		while cur != null:
-			if cur.name == "Exception":
+		for k in cls.mro:
+			if k.name == "Exception":
 				return true
-			cur = cur.superclass
 		return false
 
-	## 方法查找 (支持继承链) [br]
+	## 方法查找 (沿 MRO) [br]
 	## [param attr_name] 方法名称 [br]
 	## [returns] 找到的函数
 	func _lookup_method(attr_name: String) -> DSLObject:
-		if methods.has(attr_name):
-			return methods[attr_name]
-		var current = superclass
-		while current != null:
-			if current.methods.has(attr_name):
-				return current.methods[attr_name]
-			current = current.superclass
+		for k in mro:
+			if k.methods.has(attr_name):
+				return k.methods[attr_name]
 		return null
 	
 	## 统一的方法调用入口 [br]
@@ -9146,36 +9195,40 @@ class DSLClass extends DSLObject:
 			return interp.call_user_function(func_obj, args_ary, kw_args)
 		return func_obj.magic_call(args_ary, kw_args)
 	
-	## 属性访问 (方法查找 + 描述符协议 + 继承链) [br]
+	## 属性访问 (方法查找 + 描述符协议 + MRO) [br]
 	## [param attr_name] 属性名 [br]
-	## [returns] 方法 (经__get__ 描述符处理), 类属性, 或委托给父类/superclass
+	## [returns] 方法 (经__get__ 描述符处理), 类属性, 或 MRO 上游类的成员
 	func _dsl_getattribute(attr_name: String) -> DSLObject:
 		if attr_name == "__name__":
 			return DSLString.new(name)
-		if methods.has(attr_name):
-			var method = methods[attr_name]
-			if method is DSLBuiltinFunction:
-				return method
-			if method.has_method("__get__"):
-				return method.__get__(null, self)
-			return method
-		if class_attrs.has(attr_name):
-			return class_attrs[attr_name]
-		var current = superclass
-		while current != null:
-			if current.methods.has(attr_name):
-				var method = current.methods[attr_name]
+		for k in mro:
+			if k.methods.has(attr_name):
+				var method = k.methods[attr_name]
 				if method is DSLBuiltinFunction:
 					return method
 				if method.has_method("__get__"):
 					return method.__get__(null, self)
 				return method
-			if current.class_attrs.has(attr_name):
-				return current.class_attrs[attr_name]
-			current = current.superclass
+			if k.class_attrs.has(attr_name):
+				return k.class_attrs[attr_name]
+		# 类对象自带的内省成员 (用户定义的同名成员优先)
+		if attr_name == "mro":
+			return DSLBuiltinFunction.new("mro", Callable(self, "magic_mro"))
+		if attr_name == "__mro__":
+			var out: Array[DSLObject] = []
+			for k in mro:
+				out.append(k)
+			return DSLTuple.new(out)
 		# 查找失败: 报 AttributeError
 		last_error = "AttributeError: type object '%s' has no attribute '%s'" % [name, attr_name]
 		return null
+
+	## C.mro() 调用入口: 返回 MRO 列表
+	func magic_mro(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var out: Array[DSLObject] = []
+		for k in mro:
+			out.append(k)
+		return DSLList.new(out)
 	
 	## 设置类属性
 	func _dsl_setattr(attr_name: String, value: DSLObject):
@@ -9184,16 +9237,16 @@ class DSLClass extends DSLObject:
 ## DSL super() 代理对象, 用于调用父类方法 [br]
 ## 持有父类引用与绑定实例, 属性查找沿父类 MRO 并绑定到实例
 class DSLSuper extends DSLObject:
-	## 开始查找的类 (父类)
+	## 定义方法所在的类 (MRO 查找从其在目标 MRO 中的下一项开始)
 	var sup_cls: DSLClass = null
-	## 绑定的实例 (self)
+	## 绑定的实例或类 (super 的第二参数)
 	var sup_instance: DSLObject = null
 	## 解释器引用
 	var sup_interp: Interpreter = null
 
 	## 构造 super 代理 [br]
-	## [param p_cls] 父类 [br]
-	## [param p_instance] 绑定实例 [br]
+	## [param p_cls] 定义方法所在的类 [br]
+	## [param p_instance] 绑定的实例或类 [br]
 	## [param p_interp] 解释器引用
 	func _init(p_cls, p_instance, p_interp):
 		super._init()
@@ -9209,17 +9262,35 @@ class DSLSuper extends DSLObject:
 			return "<super: <class '%s'>>" % sup_cls.name
 		return "<super object>"
 
-	## 属性访问: 沿父类查找并绑定到实例 [br]
-	## 等价于 CPython super 代理的 __getattribute__
+	## MRO 查找所依据的类: 绑定目标为类时是它自身, 为实例时是它的类
+	func _mro_owner() -> DSLClass:
+		if sup_instance is DSLClass:
+			return sup_instance
+		if sup_instance != null and sup_instance.klass != null:
+			return sup_instance.klass
+		return sup_cls
+
+	## 属性访问: 沿目标 MRO 从定义类的下一项查找并绑定到实例 [br]
+	## 等价于 CPython super 代理的 __getattribute__, [br]
+	## 描述符的绑定类型为目标的类 (类方法由此绑定到目标类本身而非命中类)
 	func _dsl_getattribute(name: String) -> DSLObject:
 		if sup_cls == null:
 			last_error = "RuntimeError: super(): no class"
 			return DSLNone.new()
-		var method = sup_cls._dsl_getattribute(name)
-		if method != null and not (method is DSLNone):
-			if method.has_method("__get__"):
-				return method.__get__(sup_instance, sup_cls)
-			return method
+		var owner_cls = _mro_owner()
+		var mro: Array = owner_cls.mro
+		var start = mro.find(sup_cls)
+		for idx in range(start + 1, mro.size()):
+			var k: DSLClass = mro[idx]
+			if k.methods.has(name):
+				var method = k.methods[name]
+				if method is DSLBuiltinFunction:
+					return method
+				if method.has_method("__get__"):
+					return method.__get__(sup_instance, owner_cls)
+				return method
+			if k.class_attrs.has(name):
+				return k.class_attrs[name]
 		last_error = "AttributeError: 'super' object has no attribute '%s'" % name
 		return DSLNone.new()
 
@@ -11229,16 +11300,24 @@ class Parser:
 		if check(TokenType.LBRACKET):
 			if not _parse_type_params():
 				return null
-		var superclass = null
+		var base_exprs: Array = []
 		if match_types([TokenType.LPAREN]):
-			# 基类表达式 例如 Foo(Base)
-			superclass = primary()
+			# 基类表达式列表, 支持多继承: Foo(Base) / Foo(A, B) / Foo()
+			if not check(TokenType.RPAREN):
+				while true:
+					if report.has_error:
+						return null
+					base_exprs.append(primary())
+					if not match_types([TokenType.COMMA]):
+						break
+					if check(TokenType.RPAREN):
+						break
 			_consume_bracket_close(TokenType.RPAREN, "Expected ')'")
 		var colon = consume(TokenType.COLON, "Expected ':'")
 		if colon == null:
 			return null
 		var body = block()
-		return ClassStmt.new(name_tok.lexeme, superclass, body)
+		return ClassStmt.new(name_tok.lexeme, base_exprs, body)
 	
 	## 解析并丢弃泛型类型参数列表 [T, U] (PEP 695 语法) [br]
 	## 每个参数为名字, 可带绑定注解 (: 表达式) 与默认值 (= 表达式), 均只解析不求值 [br]
@@ -14345,15 +14424,13 @@ class Interpreter:
 			return false
 		return _is_registered_exception_class(exc.klass)
 
-	## 判断类是否在异常继承体系中 (沿基类链核对注册表) [br]
+	## 判断类是否在异常继承体系中 (沿 MRO 核对注册表) [br]
 	## [param cls] 待判断的类 [br]
 	## [returns] 是已注册异常类 (含其子类) 时返回 true
 	func _is_registered_exception_class(cls: DSLClass) -> bool:
-		var c = cls
-		while c != null:
-			if exception_hierarchy.has(c.name):
+		for k in cls.mro:
+			if exception_hierarchy.has(k.name):
 				return true
-			c = c.superclass
 		return false
 
 	## 将 from 子句的因果异常存入异常实例 [br]
@@ -14527,7 +14604,7 @@ class Interpreter:
 		var pos_args: Array[DSLObject] = []
 		for i in range(1, exc_args.size()):
 			pos_args.append(exc_args[i])
-		var msg = _exception_message(wrapper.klass.name, pos_args)
+		var msg = _exception_message(wrapper.klass, pos_args)
 		var exc = DSLException.new(msg, wrapper.klass.name, pos_args)
 		wrapper._wrapped = exc
 		wrapper.fields["args"] = DSLTuple.new(pos_args)
@@ -14537,18 +14614,19 @@ class Interpreter:
 		return DSLNone.new()
 
 	## 按 CPython 语义计算异常的 str() 结果 [br]
-	## 无参数为空串, 多参数为参数元组的 repr, 单参数时 KeyError 用 repr, 其余用 str [br]
-	## [param type_name] 异常类型名 [br]
+	## 无参数为空串, 多参数为参数元组的 repr, 单参数时 KeyError 及其子类用 repr, 其余用 str [br]
+	## [param cls] 异常类 (沿 MRO 判断 KeyError 的 repr 语义) [br]
 	## [param pos_args] 构造参数 [br]
 	## [returns] 异常消息
-	func _exception_message(type_name: String, pos_args: Array[DSLObject]) -> String:
+	func _exception_message(cls: DSLClass, pos_args: Array[DSLObject]) -> String:
 		if pos_args.size() == 0:
 			return ""
 		if pos_args.size() > 1:
 			var tup = DSLTuple.new(pos_args)
 			return tup._dsl_str()
-		if type_name == "KeyError":
-			return DSLObject._py_repr(pos_args[0])
+		for k in cls.mro:
+			if k.name == "KeyError":
+				return DSLObject._py_repr(pos_args[0])
 		return pos_args[0]._dsl_str()
 	
 	## 内置 object.__init__ 回调 [br]
@@ -17381,12 +17459,10 @@ class Interpreter:
 	func _match_args_info(cls: DSLObject, pos_count: int):
 		var match_args = null
 		if cls is DSLClass:
-			var current = cls as DSLClass
-			while current != null:
-				if current.class_attrs.has("__match_args__"):
-					match_args = current.class_attrs["__match_args__"]
+			for k in (cls as DSLClass).mro:
+				if k.class_attrs.has("__match_args__"):
+					match_args = k.class_attrs["__match_args__"]
 					break
-				current = current.superclass
 		var match_self = false
 		if match_args == null and cls is DSLClass and _has_match_self(cls as DSLClass):
 			match_self = true
@@ -17425,12 +17501,10 @@ class Interpreter:
 	## [returns] 具备时返回 true
 	func _has_match_self(cls: DSLClass) -> bool:
 		var match_self_types = ["int", "float", "str", "list", "dict", "tuple", "set", "frozenset", "bytes", "bytearray", "bool"]
-		var current = cls
-		while current != null:
+		for current in cls.mro:
 			# 内建类的 module_prefix 为空串, 用户脚本中的同名类不会误判
 			if match_self_types.has(current.name) and current.module_prefix == "":
 				return true
-			current = current.superclass
 		return false
 
 	## 判断语句是否含 yield 表达式 (供生成器侧子表达式记忆启用判定) [br]
@@ -19259,7 +19333,7 @@ class Interpreter:
 			if _current_class == null or _current_self == null:
 				raise_exception("RuntimeError", "super(): no arguments")
 				return null
-			return DSLSuper.new(_current_class.superclass, _current_self, self)
+			return DSLSuper.new(_current_class, _current_self, self)
 		if expr.arguments.size() == 2:
 			var cls_val = evaluate(expr.arguments[0])
 			if cls_val == null or not (cls_val is DSLClass):
@@ -19268,7 +19342,7 @@ class Interpreter:
 			var obj_val = evaluate(expr.arguments[1])
 			if obj_val == null:
 				return null
-			return DSLSuper.new(cls_val.superclass, obj_val, self)
+			return DSLSuper.new(cls_val, obj_val, self)
 		raise_exception("TypeError", "super() takes 0 or 2 arguments")
 		return null
 
@@ -20000,21 +20074,44 @@ class Interpreter:
 	## [param stmt] ClassStmt AST 节点 [br]
 	## [returns] 执行结果状态
 	func execute_class(stmt: ClassStmt) -> ExecResult:
-		var superclass_obj = null
-		if stmt.superclass:
-			var super_val = evaluate(stmt.superclass)
-			if not super_val is DSLClass:
+		var base_objs: Array = []
+		for base_expr in stmt.bases:
+			var base_val = evaluate(base_expr)
+			if _suspended:
+				_expr_evaluated = false
+				return ExecResult.SUSPENDED
+			if base_val == null:
+				return ExecResult.RAISE
+			if not base_val is DSLClass:
 				raise_exception("TypeError", "superclass must be a class")
 				return ExecResult.RAISE
-			superclass_obj = super_val
-			
-		if superclass_obj == null and stmt.name != "object":
-			superclass_obj = environment.get_val("object")
+			base_objs.append(base_val)
+		if base_objs.is_empty() and stmt.name != "object":
+			base_objs.append(environment.get_val("object"))
+		# 直接基类重复检查
+		for i in range(base_objs.size()):
+			for j in range(i + 1, base_objs.size()):
+				if base_objs[i] == base_objs[j]:
+					raise_exception("TypeError", "duplicate base class %s" % base_objs[i].name)
+					return ExecResult.RAISE
+		var superclass_obj = base_objs[0] if base_objs.size() > 0 else null
 		var methods = {}
 		var class_attrs = {}
 		# 提前创建 DSLClass 骨架, 使方法能引用其定义类 (super() 定位)
 		var class_obj = DSLClass.new(stmt.name, superclass_obj, {}, self)
 		class_obj.module_prefix = "__main__."
+		# 多基类: 记录直接基类并计算 C3 线性化, 冲突与布局检查先于类体执行
+		class_obj.bases = base_objs
+		if not class_obj._recompute_mro():
+			var names: Array = []
+			for b in base_objs:
+				names.append(b.name)
+			raise_exception("TypeError", "Cannot create a consistent method resolution
+order (MRO) for bases %s" % ", ".join(names))
+			return ExecResult.RAISE
+		if _has_layout_conflict(base_objs):
+			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
+			return ExecResult.RAISE
 		for body_stmt in stmt.body:
 			if body_stmt is FunctionStmt:
 				var target_name = body_stmt.name
@@ -20083,6 +20180,28 @@ class Interpreter:
 				return ExecResult.RAISE if report.has_error else ExecResult.ERROR
 			environment.set_val(stmt.name, dec_val)
 		return ExecResult.NORMAL
+
+	## 检查多基类的底层实例布局冲突 (对齐 CPython) [br]
+	## 每个直接基类的布局根取其 MRO 上首个内建布局类型, [br]
+	## 异常类统一视为同一布局, object / type 与用户类不贡献布局 [br]
+	## [param base_objs] 直接基类数组 [br]
+	## [returns] 存在两个以上不同布局根时返回 true
+	func _has_layout_conflict(base_objs: Array) -> bool:
+		var roots: Array = []
+		for b in base_objs:
+			var root = ""
+			for k in b.mro:
+				if k.name == "object" or k.name == "type":
+					break
+				if exception_hierarchy.has(k.name):
+					root = "BaseException"
+					break
+				if k.module_prefix == "":
+					root = k.name
+					break
+			if root != "" and not roots.has(root):
+				roots.append(root)
+		return roots.size() > 1
 
 	## 向 preamble 中定义的内置类型类注入对应的方法描述 [br]
 	## 根据 [param cls_name] 匹配目标类型 (str/list/tuple/dict/int) [br]
@@ -21171,13 +21290,8 @@ class Interpreter:
 			if cls.name == "object":
 				return DSLBool.new(true)
 			if obj.klass != null:
-				if obj.klass == cls:
+				if obj.klass.mro.has(cls):
 					return DSLBool.new(true)
-				var current = obj.klass.superclass
-				while current != null:
-					if current == cls:
-						return DSLBool.new(true)
-					current = current.superclass
 				return DSLBool.new(false)
 			# bool is a subclass of int in Python
 			if obj is DSLBool and cls.name == "int":
@@ -21191,13 +21305,8 @@ class Interpreter:
 					if item.name == "object":
 						return DSLBool.new(true)
 					if obj.klass != null:
-						if obj.klass == item:
+						if obj.klass.mro.has(item):
 							return DSLBool.new(true)
-						var current = obj.klass.superclass
-						while current != null:
-							if current == item:
-								return DSLBool.new(true)
-							current = current.superclass
 					elif obj._type_name() == item.name:
 						return DSLBool.new(true)
 					elif obj is DSLBool and item.name == "int":
@@ -21222,14 +21331,7 @@ class Interpreter:
 		if not (sup is DSLClass):
 			raise_exception("TypeError", "issubclass() arg 2 must be a class")
 			return null
-		if sub == sup:
-			return DSLBool.new(true)
-		var current = sub.superclass
-		while current != null:
-			if current == sup:
-				return DSLBool.new(true)
-			current = current.superclass
-		return DSLBool.new(false)
+		return DSLBool.new(sub.mro.has(sup))
 
 	## getattr(obj, name, default) - 获取对象属性 [br]
 	## 属性不存在时返回 default (若提供), 否则抛 AttributeError
@@ -21766,25 +21868,27 @@ class Interpreter:
 			raise_exception("TypeError", "type() argument 3 must be dict, not " + attrs_obj._type_name())
 			return null
 		# Determine superclass
-		var superclass = globals.get_val_safe("object")
+		var base_objs: Array = []
 		if bases_obj is DSLTuple:
-			if bases_obj.items.size() > 1:
-				raise_exception("TypeError", "multiple bases are not yet supported")
-				return null
-			if bases_obj.items.size() == 1:
-				var base = bases_obj.items[0]
-				if base is DSLClass:
-					superclass = base
+			for item in bases_obj.items:
+				if item is DSLClass:
+					base_objs.append(item)
 				else:
 					raise_exception("TypeError", "bases must be types")
 					return null
+			for i in range(base_objs.size()):
+				for j in range(i + 1, base_objs.size()):
+					if base_objs[i] == base_objs[j]:
+						raise_exception("TypeError", "duplicate base class %s" % base_objs[i].name)
+						return null
 		elif bases_obj is DSLClass:
-			superclass = bases_obj
-		elif bases_obj is DSLTuple and bases_obj.items.size() == 0:
-			pass # empty tuple, use object
+			base_objs.append(bases_obj)
 		else:
 			raise_exception("TypeError", "bases must be types")
 			return null
+		var superclass = base_objs[0] if base_objs.size() > 0 else globals.get_val_safe("object")
+		if superclass == null:
+			superclass = globals.get_val_safe("object")
 		# Build methods and class_attrs from attrs
 		var methods = {}
 		var class_attrs_dict = {}
@@ -21801,8 +21905,20 @@ class Interpreter:
 				class_attrs_dict[key_str] = val
 		var new_cls = DSLClass.new(name_obj.value, superclass, methods, self)
 		new_cls.module_prefix = "__main__."
+		if base_objs.size() > 0:
+			new_cls.bases = base_objs
 		new_cls.klass = globals.get_val_safe("type")
 		new_cls.class_attrs = class_attrs_dict
+		if not new_cls._recompute_mro():
+			var names: Array = []
+			for b in base_objs:
+				names.append(b.name)
+			raise_exception("TypeError", "Cannot create a consistent method resolution
+order (MRO) for bases %s" % ", ".join(names))
+			return null
+		if _has_layout_conflict(base_objs):
+			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
+			return null
 		globals.define(name_obj.value, new_cls)
 		return new_cls
 	
@@ -22037,15 +22153,13 @@ class Interpreter:
 				for k in raw.fields.keys():
 					names.append(str(k))
 			if raw.klass != null:
-				var cur = raw.klass
-				while cur != null:
+				for cur in raw.klass.mro:
 					for k in cur.methods.keys():
 						if not names.has(k):
 							names.append(k)
 					for k in cur.class_attrs.keys():
 						if not names.has(k):
 							names.append(k)
-					cur = cur.superclass
 			else:
 				# 内置类型实例 (无 klass 标记): 按类型名定位类型类, 收集其方法与类属性
 				var tn = raw._type_name()
@@ -22056,15 +22170,14 @@ class Interpreter:
 						tcls = gcls
 				if tcls == null and tn == "NoneType":
 					tcls = globals.get_val_safe("object")
-				var bcur = tcls
-				while bcur != null:
-					for k in bcur.methods.keys():
-						if not names.has(k):
-							names.append(k)
-					for k in bcur.class_attrs.keys():
-						if not names.has(k):
-							names.append(k)
-					bcur = bcur.superclass
+				if tcls != null:
+					for bcur in tcls.mro:
+						for k in bcur.methods.keys():
+							if not names.has(k):
+								names.append(k)
+						for k in bcur.class_attrs.keys():
+							if not names.has(k):
+								names.append(k)
 				# 实例级魔术方法描述符 (各类型懒初始化, 字段名后缀统一为 _magic_descriptors)
 				if _builtin_protos.has(tn):
 					var proto_obj = _builtin_protos[tn]
@@ -22081,15 +22194,13 @@ class Interpreter:
 					if not names.has("args"):
 						names.append("args")
 			if raw is DSLClass:
-				var cur_cls = raw
-				while cur_cls != null:
+				for cur_cls in raw.mro:
 					for k in cur_cls.methods.keys():
 						if not names.has(k):
 							names.append(k)
 					for k in cur_cls.class_attrs.keys():
 						if not names.has(k):
 							names.append(k)
-					cur_cls = cur_cls.superclass
 			if raw is DSLModule:
 				for k in raw.members.keys():
 					if not names.has(k):

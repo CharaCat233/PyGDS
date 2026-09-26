@@ -2,6 +2,37 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.6.0-alpha.5] - 2026-09-27
+
+本版实现：类的多继承。DSLClass 引入直接基类列表与 C3 线性化缓存，全部沿单父链遍历的查找点迁移为 MRO 迭代，`super()` 改为沿实例（或类）MRO 的协作式查找
+
+### 新增
+
+- **类的多继承（P1-42）**：`class C(A, B):` 与三参 `type(name, bases, dict)` 接受多个基类；`DSLClass` 新增 `bases`（直接基类数组）与 `mro`（C3 线性化序列，创建时计算并缓存）字段，类对象新增 `__mro__`（元组）与 `mro()`（列表）内省成员（用户同名成员优先）
+- **MRO 驱动的查找**：方法解析（`_lookup_method`）、类属性访问、isinstance / issubclass、异常匹配、`dir()`、类模式的 `__match_args__` 与 match-self 判定、异常体系核对、`__init__` 定位全部沿 MRO 进行，与「isinstance 为 True 则方法可查到」保持一致
+- **MRO 冲突与一致性检查**：直接基类重复报 `TypeError: duplicate base class A`；C3 线性化无法一致报 `TypeError: Cannot create a consistent method resolution order (MRO) for bases A, B`（文案含 CPython 的内嵌换行）；多个基类的底层实例布局不相容（如 `class C(list, dict)`）报 `TypeError: multiple bases have instance lay-out conflict`（异常类之间共享同一布局，可多基继承）；检查先于类体执行
+- **`super()` 沿 MRO 协作**：零参与双参 `super()` 从定义类在目标 MRO 中的下一项开始查找；类方法经 super 访问绑定到目标类本身（而非查找命中的类）；菱形继承下 `super().__init__()` 逐类恰好执行一次
+
+### 修复
+
+- **KeyError 子类的 `str()` 未按键 repr 输出**：`class KE(KeyError)` 的 `str(KE("m"))` 此前输出 `m`（按子类名走普通消息规则），现沿 MRO 识别 KeyError 语义输出 `'m'`（多继承下经 `class E1(KeyError, IndexError)` 暴露的既有边缘）
+
+### 破坏性变更 (Breaking Changes)
+
+- **`class C(A, B)` 从报错变为支持**：此前多基类直接报 `multiple bases are not yet supported`，现按 CPython 语义支持（行为增强，无兼容性影响）
+
+### 测试
+
+- 新增 3 个测试并入 `expected.json`（共 224 个用例全部通过，既有条目 `expected` 零变更）：行为类 `lang_class_mro`（多基查找顺序 / `__mro__` 与 `mro()` / isinstance / issubclass / dir / 冲突与重复基类拒绝）、`lang_class_diamond`（菱形 `__init__` 链逐类一次 / super() 协作 / 混合布局多基）、`lang_class_super_mro`（双参 super / 类方法 super 绑定 / 多基异常子类 / 类模式沿 MRO 取 `__match_args__` / 三参 type 多基）
+- 挂起测试 22 个用例通过；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md` 新增「多继承与 MRO」小节（示例双侧实测）
+- `docs/zh-CN/class_system.md` 与 `docs/en/class_system.md` 更新 DSLClass 结构与属性查找示例，新增「C3 线性化」与「多继承与 MRO」章节
+- README 与 README_EN 兼容矩阵多继承行改为完整，「已知问题与限制」章节标注 P1-42 已修复
+- 已知问题清单移除 P1-42；`CHANGELOG` 新增 `[0.6.0-alpha.5]` 版本节
+
 ## [0.6.0-alpha.4] - 2026-09-27
 
 本版实现 P1-40：f-string 同引号嵌套与嵌套 f-string（PEP 701，Python 3.12），词法层以状态机重写 f-string 扫描，并在收尾扫描中修复若干连带发现的 f-string 缺陷

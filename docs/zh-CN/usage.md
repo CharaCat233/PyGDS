@@ -1292,6 +1292,52 @@ print(super(Q, q).greet())      # parent
 
 > **注意**：`super()` 只能在类的方法内使用（静态方法中无 self/cls，会抛出 `RuntimeError: super(): no arguments`）。
 
+#### 多继承与 MRO
+
+支持多继承 `class C(A, B):`，方法与类属性的查找沿 C3 线性化序列（MRO）进行；类对象的 `__mro__`（元组）与 `mro()`（列表）可查看该序列。基类顺序无法一致时报 `TypeError: Cannot create a consistent method resolution order (MRO) for bases A, B`，直接基类重复报 `duplicate base class A`，多个基类的底层实例布局不相容（如 `list` 与 `dict`）报 `multiple bases have instance lay-out conflict`。`zero-arg super()` 与双参数形式均沿实例（或类）的 MRO 从定义类的下一项开始查找，配合 `super().__init__()` 可实现菱形继承下的协作式构造
+
+```python
+class A:
+    def who(self):
+        return "A"
+
+class B:
+    def who(self):
+        return "B"
+
+class C(A, B):
+    pass
+
+c = C()
+print(c.who())                              # A (MRO 靠前的 A 先命中)
+print([k.__name__ for k in C.__mro__])      # ['C', 'A', 'B', 'object']
+print(isinstance(c, A), isinstance(c, B))   # True True
+
+
+class Base:
+    def __init__(self):
+        self.steps = ["base"]
+        super().__init__()
+
+class Left(Base):
+    def __init__(self):
+        super().__init__()
+        self.steps.append("left")
+
+class Right(Base):
+    def __init__(self):
+        super().__init__()
+        self.steps.append("right")
+
+class Child(Left, Right):
+    def __init__(self):
+        super().__init__()
+        self.steps.append("child")
+
+print(Child().steps)                        # ['base', 'right', 'left', 'child']
+print([k.__name__ for k in Child.__mro__])  # ['Child', 'Left', 'Right', 'Base', 'object']
+```
+
 ### assert 断言
 
 ```python
