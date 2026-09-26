@@ -74,6 +74,9 @@ class Lexer:
 	var open_brackets: Array = []
 	## 未闭合括号的报错文本 (扫描完成时仍有未闭合括号时记录, 由解析层决定是否上报)
 	var unclosed_error: String = ""
+	## 表达式模式 (f-string 替换字段等子表达式通道): [br]
+	## 换行视为空白, 不产出 NEWLINE, 不触发缩进处理, 表达式可跨行书写含缩进续行与注释
+	var expression_mode: bool = false
 	
 	## 关键字映射
 	static var keywords = {
@@ -159,6 +162,8 @@ class Lexer:
 		
 	## 处理行首缩进, 生成 INDENT DEDENT
 	func handle_indent():
+		if expression_mode:
+			return
 		var spaces = 0
 		const TAB_SIZE = 8
 		while peek() == ' ' or peek() == '\t':
@@ -268,7 +273,8 @@ class Lexer:
 			'\n':
 				# 括号深度大于 0 时换行是隐式续行: 不产出 NEWLINE,
 				# 也不触发缩进处理 (at_line_start 保持 false, 缩进栈不被污染)
-				if paren_depth > 0:
+				# 表达式模式同理: 换行只是空白, 表达式由自身文法终结
+				if expression_mode or paren_depth > 0:
 					line += 1
 					column = 1
 				else:
@@ -855,6 +861,9 @@ class Lexer:
 			"rb", "rB", "Rb", "RB", "br", "Br", "bR", "BR"]
 		return prefixes.has(text)
 
+	## 标识符成分字符集 (前缀成词判定用)
+	const _IDENT_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
 	## 扫描带前缀的字符串字面量 (f-string / raw / bytes) [br]
 	## [param prefix] 前缀文本 (如 "f", "rf")
 	func scan_prefixed_string(prefix: String):
@@ -868,8 +877,28 @@ class Lexer:
 		if triple:
 			advance()
 			advance()
+		# f-string 经状态机扫描: 同引号嵌套与嵌套 f-string 不终止外层
+		if is_fstring:
+			var fs = _scan_fstring_machine(current, line, column, quote_char, triple, is_raw, false)
+			if fs == null:
+				return
+			var fs_arr: Array = fs
+			current = fs_arr[0]
+			line = fs_arr[1]
+			column = fs_arr[2]
+			add_token(TokenType.FSTRING, fs_arr[3])
+			return
+		if triple:
 			var content_start = current
 			while not is_at_end():
+				if peek() == '\\':
+					advance()
+					if not is_at_end():
+						if peek() == '\n':
+							line += 1
+							column = 1
+						advance()
+					continue
 				if peek() == quote_char and peek_next() == quote_char:
 					var saved = current
 					advance()
@@ -878,9 +907,7 @@ class Lexer:
 						advance()
 						var raw_body = source.substr(content_start, current - content_start - 3)
 						var is_bytes3 = prefix.find("b") != -1 or prefix.find("B") != -1
-						if is_fstring:
-							add_token(TokenType.FSTRING, _scan_fstring_parts(raw_body, quote_char, is_raw))
-						elif is_bytes3:
+						if is_bytes3:
 							var bytes_out3 = _unescape_bytes(raw_body, is_raw)
 							if bytes_out3.is_empty() and report.has_error:
 								return
@@ -899,6 +926,15 @@ class Lexer:
 
 		# 单行字符串
 		while peek() != quote_char and not is_at_end():
+			# 转义序列: 跳过反斜杠与下一字符, 被转义的引号不终止字符串
+			if peek() == '\\':
+				advance()
+				if not is_at_end():
+					if peek() == '\n':
+						line += 1
+						column = 1
+					advance()
+				continue
 			if peek() == '\n':
 				line += 1
 				column = 1
@@ -910,9 +946,7 @@ class Lexer:
 		var body_start = start + prefix.length() + 1
 		var raw_body = source.substr(body_start, current - body_start - 1)
 		var is_bytes = prefix.find("b") != -1 or prefix.find("B") != -1
-		if is_fstring:
-			add_token(TokenType.FSTRING, _scan_fstring_parts(raw_body, quote_char, is_raw))
-		elif is_bytes:
+		if is_bytes:
 			# b"..." 字面量: 直接按字节解码 (支持 NUL 字节, 非 ASCII 源字符报错)
 			var bytes_out = _unescape_bytes(raw_body, is_raw)
 			if bytes_out.is_empty() and report.has_error:
@@ -921,113 +955,290 @@ class Lexer:
 		else:
 			add_token(TokenType.STRING, _unescape_string(raw_body, is_raw))
 
-	## 扫描 f-string 主体, 拆分为字面量片段与替换字段 [br]
-	## 返回 parts 数组, 每个元素为 {"is_literal": bool, "text": String, "expr": String, "conv": String, "fmt": String} [br]
-	## [param body] 引号之间的原始内容 [br]
-	## [param quote_char] 引号字符 [br]
-	## [param is_raw] 是否原始字符串 [br]
-	## [returns] parts 数组
-	func _scan_fstring_parts(body: String, _quote_char: String, is_raw: bool) -> Array:
+	## PEP 701 f-string 状态机: 扫描 f-string 主体 (开引号之后) 直至闭引号 [br]
+	## 字面量模式与替换字段模式两态: 字面量中 {{ / }} 转义为花括号, \X 转义不终止字符串; [br]
+	## 字段内任意引号的字符串字面量 (含与外层同引号) 与 f 前缀的嵌套 f-string (递归定位) [br]
+	## 均不终止外层; 字段内跟踪 {} () [] 深度, 仅在 {} 深度 1 且括号深度 0 处识别 [br]
+	## !conv 与 :fmt; 嵌套格式说明符的花括号内为表达式上下文, 其中的字符串参与跳过 [br]
+	## [param start_idx] 开引号之后的起始索引 [br]
+	## [param base_line] 起始行号 (报错与行号推进) [br]
+	## [param base_col] 起始列号 [br]
+	## [param qch] 外层引号字符 [br]
+	## [param triple] 是否三引号 [br]
+	## [param is_raw] 是否 raw [br]
+	## [param nested] 嵌套调用 (位于外层 f-string 字段内): 仅定位结束引号, 不产出 parts [br]
+	## [returns] [结束索引 (闭引号之后), 结束行号, 结束列号, parts 数组], 出错返回 null (不写返回类型标注: 可返回 null)
+	func _scan_fstring_machine(start_idx: int, base_line: int, base_col: int, qch: String, triple: bool, is_raw: bool, nested: bool):
 		var parts: Array = []
 		var lit = ""
-		var i = 0
-		while i < body.length():
-			var ch = body[i]
-			if ch == '{':
-				# 转义的 {{ → 字面 {
-				if i + 1 < body.length() and body[i + 1] == '{':
-					lit += '{'
-					i += 2
-					continue
-				if lit != "":
-					parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
-					lit = ""
-				i += 1
-				var field = _scan_fstring_field(body, i)
-				if field == null:
-					return [ {"is_literal": true, "text": "", "expr": null, "conv": "", "fmt": ""}]
-				parts.append({"is_literal": false, "text": "", "expr": field.expr, "conv": field.conv, "fmt": field.fmt, "debug": field.get("debug", false)})
-				i = field.end
-			elif ch == '}':
-				if i + 1 < body.length() and body[i + 1] == '}':
-					lit += '}'
-					i += 2
-					continue
-				report.error("f-string: single '}' is not allowed")
-				return [ {"is_literal": true, "text": "", "expr": null, "conv": "", "fmt": ""}]
-			else:
-				lit += ch
-				i += 1
-		if lit != "":
-			parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
-		return parts
-
-	## 扫描 f-string 中的一个替换字段 {expr[!conv][:fmt]} [br]
-	## 从开括号后一位开始, 正确处理嵌套花括号与字段内字符串字面量 [br]
-	## [param body] f-string 主体 [br]
-	## [param start] 开括号后一位的索引 [br]
-	## [returns] {"expr": String, "conv": String, "fmt": String, "end": int}
-	func _scan_fstring_field(body: String, start: int) -> Dictionary:
+		var i = start_idx
+		var ln = base_line
+		var col = base_col
+		var in_field = false
+		var in_fmt = false
+		var depth = 0
+		var bracket = 0
+		var fmt_depth = 0
 		var expr_src = ""
 		var conv = ""
 		var fmt = ""
-		var debug = false
-		var i = start
-		var depth = 1
-		while i < body.length():
-			var ch = body[i]
-			if ch == '"' or ch == "'":
-				var skip = _skip_string_literal(body, i)
-				expr_src += body.substr(i, skip - i)
-				i = skip
-				continue
-			if ch == '{':
-				depth += 1
-				expr_src += ch
+		while i < source.length():
+			var ch = source[i]
+			if in_field and in_fmt:
+				# 格式说明符: 闭花括号按嵌套深度配对, 嵌套 {} 内为表达式上下文
+				if ch == '{':
+					fmt_depth += 1
+					fmt += ch
+					i += 1
+					col += 1
+					continue
+				if ch == '}':
+					if fmt_depth == 0:
+						var strip = _strip_debug_eq(expr_src)
+						if not nested:
+							if lit != "":
+								parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
+								lit = ""
+							parts.append({"is_literal": false, "text": "", "expr": strip[0], "conv": conv, "fmt": fmt, "debug": strip[1]})
+						i += 1
+						col += 1
+						in_field = false
+						expr_src = ""
+						conv = ""
+						fmt = ""
+						continue
+					fmt_depth -= 1
+					fmt += ch
+					i += 1
+					col += 1
+					continue
+				if fmt_depth > 0 and (ch == '"' or ch == "'"):
+					var skip = _fstring_skip_embedded(i, ln)
+					if skip < 0:
+						report.error("Unterminated string at line %d" % ln)
+						return null
+					for k in range(i, skip):
+						if source[k] == '\n':
+							ln += 1
+							col = 1
+						else:
+							col += 1
+					fmt += source.substr(i, skip - i)
+					i = skip
+					continue
+				fmt += ch
+				if ch == '\n':
+					ln += 1
+					col = 1
+				else:
+					col += 1
 				i += 1
+				continue
+			if in_field:
+				# 表达式模式: 字符串跳过, 括号与花括号深度跟踪, !conv 与 :fmt 定界
+				if ch == '"' or ch == "'":
+					var skip = _fstring_skip_embedded(i, ln)
+					if skip < 0:
+						report.error("Unterminated string at line %d" % ln)
+						return null
+					for k in range(i, skip):
+						if source[k] == '\n':
+							ln += 1
+							col = 1
+						else:
+							col += 1
+					expr_src += source.substr(i, skip - i)
+					i = skip
+					continue
+				if ch == '{':
+					depth += 1
+					expr_src += ch
+					i += 1
+					col += 1
+					continue
+				if ch == '}':
+					depth -= 1
+					if depth == 0:
+						var strip = _strip_debug_eq(expr_src)
+						if not nested:
+							if lit != "":
+								parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
+								lit = ""
+							parts.append({"is_literal": false, "text": "", "expr": strip[0], "conv": conv, "fmt": fmt, "debug": strip[1]})
+						i += 1
+						col += 1
+						in_field = false
+						expr_src = ""
+						conv = ""
+						continue
+					expr_src += ch
+					i += 1
+					col += 1
+					continue
+				if ch == '(' or ch == '[':
+					bracket += 1
+					expr_src += ch
+					i += 1
+					col += 1
+					continue
+				if ch == ')' or ch == ']':
+					if bracket > 0:
+						bracket -= 1
+					expr_src += ch
+					i += 1
+					col += 1
+					continue
+				if ch == '!' and depth == 1 and bracket == 0:
+					if conv != "":
+						report.error("f-string: expecting ':' or '}'")
+						return null
+					if i + 1 < source.length() and source[i + 1] in "rsa":
+						if i + 2 < source.length() and source[i + 2] == "=":
+							# != 属于表达式 (转换字符后不可紧跟 =)
+							expr_src += ch
+							i += 1
+							col += 1
+							continue
+						conv = source[i + 1]
+						i += 2
+						col += 2
+						continue
+					if i + 1 < source.length() and source[i + 1] == "=":
+						expr_src += ch
+						i += 1
+						col += 1
+						continue
+					var bad = source[i + 1] if i + 1 < source.length() else ""
+					report.error("f-string: invalid conversion character '%s': expected 's', 'r', or 'a'" % bad)
+					return null
+				if ch == ':' and depth == 1 and bracket == 0:
+					in_fmt = true
+					fmt_depth = 0
+					i += 1
+					col += 1
+					continue
+				expr_src += ch
+				if ch == '\n':
+					ln += 1
+					col = 1
+				else:
+					col += 1
+				i += 1
+				continue
+			# 字面量模式
+			if ch == '{':
+				if i + 1 < source.length() and source[i + 1] == '{':
+					lit += '{'
+					i += 2
+					col += 2
+					continue
+				if lit != "" and not nested:
+					parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
+				lit = ""
+				in_field = true
+				in_fmt = false
+				depth = 1
+				bracket = 0
+				expr_src = ""
+				conv = ""
+				fmt = ""
+				i += 1
+				col += 1
 				continue
 			if ch == '}':
-				depth -= 1
-				if depth == 0:
-					# 转换标志 (!r/!s/!a) 与格式说明符 (:fmt) 已在花括号内部解析
-					# 闭括号后遇到 ! 或 : 属于字段之外的普通文本, 原样保留
-					# 表达式末尾的单个 "=" 为调试说明符 (f"{x=}"), 排除 ==/!=/>=/<=
-					var strip = _strip_debug_eq(expr_src)
-					expr_src = strip[0]
-					debug = strip[1]
-					return {"expr": expr_src, "conv": conv, "fmt": fmt, "end": i + 1, "debug": debug}
-			if ch == '!' and depth == 1:
-				if i + 1 < body.length():
-					conv = body[i + 1]
+				if i + 1 < source.length() and source[i + 1] == '}':
+					lit += '}'
 					i += 2
+					col += 2
 					continue
-				i += 1
+				report.error("f-string: single '}' is not allowed")
+				return null
+			if ch == '\\':
+				lit += ch
+				if i + 1 < source.length():
+					lit += source[i + 1]
+					i += 2
+					col += 2
+				else:
+					i += 1
+					col += 1
 				continue
-			if ch == ':' and depth == 1:
-				i += 1
-				var fmt_start = i
-				var fmt_depth = 0
-				while i < body.length():
-					var fc = body[i]
-					if fc == '{':
-						fmt_depth += 1
-					elif fc == '}':
-						if fmt_depth == 0:
-							break
-						fmt_depth -= 1
+			if ch == qch:
+				if triple:
+					if not (i + 2 < source.length() and source[i + 1] == qch and source[i + 2] == qch):
+						lit += ch
+						i += 1
+						col += 1
+						continue
+					i += 3
+					col += 3
+				else:
 					i += 1
-				fmt = body.substr(fmt_start, i - fmt_start)
-				if i < body.length() and body[i] == '}':
-					i += 1
-				# 表达式末尾的单个 "=" 为调试说明符 (f"{x=:spec}")
-				var strip = _strip_debug_eq(expr_src)
-				expr_src = strip[0]
-				debug = strip[1]
-				return {"expr": expr_src, "conv": conv, "fmt": fmt, "end": i, "debug": debug}
-			expr_src += ch
+					col += 1
+				if lit != "" and not nested:
+					parts.append({"is_literal": true, "text": _unescape_string(lit, is_raw), "expr": null, "conv": "", "fmt": ""})
+				return [i, ln, col, null if nested else parts]
+			lit += ch
+			if ch == '\n':
+				ln += 1
+				col = 1
+			else:
+				col += 1
 			i += 1
-		report.error("f-string: unterminated replacement field")
-		return {"expr": expr_src, "conv": conv, "fmt": fmt, "end": body.length()}
+		if in_field:
+			report.error("f-string: unterminated replacement field")
+		else:
+			report.error("Unterminated string at line %d" % ln)
+		return null
+
+	## 跳过替换字段内的字符串字面量 (从引号字符起), 返回闭引号之后的索引 [br]
+	## 带有效 f 前缀的字符串按 f-string 状态机递归定位 (其字段内的引号与嵌套不终止), [br]
+	## 其余按普通字符串跳过 (识别三引号, 反斜杠转义的引号不终止) [br]
+	## [param i] 引号字符位置 [br]
+	## [param base_line] 起始行号 (递归报错定位) [br]
+	## [returns] 结束索引, 未闭合返回 -1
+	func _fstring_skip_embedded(i: int, base_line: int) -> int:
+		var q = source[i]
+		var prefix = _fstring_prefix_at(i)
+		var triple = i + 2 < source.length() and source[i + 1] == q and source[i + 2] == q
+		if prefix != "" and (prefix.contains("f") or prefix.contains("F")):
+			var nraw = prefix.contains("r") or prefix.contains("R")
+			var res = _scan_fstring_machine(i + 3 if triple else i + 1, base_line, 0, q, triple, nraw, true)
+			if res == null:
+				return -1
+			var res_arr: Array = res
+			return res_arr[0]
+		var j = i + 3 if triple else i + 1
+		if triple:
+			while j < source.length():
+				if source[j] == q and j + 2 < source.length() and source[j + 1] == q and source[j + 2] == q:
+					return j + 3
+				j += 1
+			return -1
+		while j < source.length():
+			if source[j] == '\\':
+				j += 2
+				continue
+			if source[j] == q:
+				return j + 1
+			j += 1
+		return -1
+
+	## 检测字段表达式内引号字符之前的字符串前缀 (f/r/b/u 组合, 须完整成词) [br]
+	## [param i] 引号字符位置 [br]
+	## [returns] 前缀文本, 无前缀时为空串
+	func _fstring_prefix_at(i: int) -> String:
+		var j = i
+		while j > 0 and source[j - 1].to_lower() in "rfbu":
+			j -= 1
+		var run = source.substr(j, i - j)
+		if run == "" or not _is_string_prefix(run):
+			return ""
+		if j > 0:
+			var prev = source[j - 1]
+			if _IDENT_CHARS.contains(prev):
+				return ""
+		return run
 
 	## 检测并剥离 f-string 表达式末尾的调试说明符 "=" [br]
 	## 若表达式以单个 "=" 结尾 (且前一字符不是 =/!/</>), 则剥离并标记为调试模式 [br]
@@ -1039,29 +1250,6 @@ class Lexer:
 			if prev != "=" and prev != "!" and prev != "<" and prev != ">":
 				return [src.substr(0, src.length() - 1), true]
 		return [src, false]
-
-	## 跳过字段表达式内的字符串字面量 (含三引号), 返回结束后的索引 [br]
-	## [param body] 字段源码 [br]
-	## [param start] 引号起始索引 [br]
-	## [returns] 字符串结束后的索引
-	func _skip_string_literal(body: String, start: int) -> int:
-		var q = body[start]
-		var i = start + 1
-		if i + 1 < body.length() and body[i] == q and body[i + 1] == q:
-			i += 2
-			while i < body.length():
-				if body[i] == q and i + 2 < body.length() and body[i + 1] == q and body[i + 2] == q:
-					return i + 3
-				i += 1
-			return i
-		while i < body.length():
-			if body[i] == '\\':
-				i += 2
-				continue
-			if body[i] == q:
-				return i + 1
-			i += 1
-		return i
 
 ## AST 节点
 class ASTNode:
@@ -12674,6 +12862,8 @@ class Parser:
 	## [returns] Expr 节点, 出错时返回 null
 	func parse_sub_expression(src: String) -> Expr:
 		var lexer = Lexer.new(report, src)
+		# 表达式模式: 字段内表达式可跨行书写 (含缩进续行与注释), 换行不产出 NEWLINE / INDENT
+		lexer.expression_mode = true
 		var toks = lexer.scan()
 		if report.has_error:
 			return null
@@ -19084,19 +19274,19 @@ class Interpreter:
 
 	## 按 Python f-string 格式说明符格式化值 [br]
 	## 支持对齐 (< > ^ =), 填充字符, 符号 (+ - 空格), 备用形式 (#), 零填充 (0), 宽度, 千分位逗号, 精度, 类型 (d f e g s x X o b c %) [br]
+	## 转换标志 (!r/!s/!a) 先于格式说明符生效, 格式说明符应用于转换后的值 [br]
 	## [param value] DSLObject 值 [br]
 	## [param conv] 转换标志 (s/r/a, 可空) [br]
 	## [param fmt] 格式说明符 [br]
 	## [returns] 格式化字符串
 	func _format_value(value: DSLObject, conv: String, fmt: String) -> String:
-		var is_numeric = _is_numeric_value(value)
-		# 转换标志优先于格式说明符
 		if conv == "r" or conv == "a":
 			var r = value.magic_repr([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-			return r.value if r is DSLString else value._dsl_str()
-		if conv == "s":
+			value = r if r is DSLString else DSLString.new(value._dsl_str())
+		elif conv == "s":
 			var st = value.magic_str([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-			return st.value if st is DSLString else value._dsl_str()
+			value = st if st is DSLString else DSLString.new(value._dsl_str())
+		var is_numeric = _is_numeric_value(value)
 		# 展开嵌套格式字段 (f"{x:{w}}" 中的 {w})
 		if fmt.find("{") != -1:
 			fmt = _expand_nested_format(fmt)
@@ -19239,6 +19429,8 @@ class Interpreter:
 	## [returns] Expr 节点, 出错时返回 null
 	func _parse_sub_expr(src: String) -> Expr:
 		var lexer = Lexer.new(report, src)
+		# 表达式模式: 字段内表达式可跨行书写 (含缩进续行与注释), 换行不产出 NEWLINE / INDENT
+		lexer.expression_mode = true
 		var toks = lexer.scan()
 		if report.has_error:
 			return null

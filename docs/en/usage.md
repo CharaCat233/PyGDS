@@ -455,6 +455,21 @@ p = 2
 print(f"{3.14159:.{p}f}")   # 3.14
 ```
 
+**Same-quote nesting** (PEP 701, Python 3.12+): string literals inside replacement fields may use the same quote as the outer f-string (triple quotes included), and nested f-strings may use any quotes with further nesting supported; field expressions support `!=` comparisons and slice colons, and may span multiple lines — multi-line expressions support indented continuation lines and inline comments (in both triple-quoted and single-quoted f-strings)
+
+```python
+d = {"k": 1}
+x = 42
+print(f"{d["k"]}")                  # 1
+print(f"nested {f"{x}"} end")       # nested 42 end
+print(f"{f"{d["k"]}"}")             # 1
+print(f"""{d["""k"""]}""")          # 1
+print(f"""{
+    x +
+    1
+}""")                               # 43
+```
+
 ### Conditional Statements
 
 ```python

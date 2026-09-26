@@ -135,7 +135,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Descriptor Protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
 | Magic Methods | ✅ Full | `__add__`/`__str__`/`__init__`, etc., registered at class level |
 | Operators | ✅ Full | Binary/unary/comparison/augmented all supported |
-| f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers, conversion flags, `=` debug specifier and nested format widths |
+| f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers, conversion flags, the `=` debug specifier and nested format widths, plus same-quote nesting and nested f-strings (PEP 701, Python 3.12+); replacement-field expressions support multiple lines (indented continuations and comments included) |
 | lambda | ✅ Full | Anonymous functions with default arguments and closures |
 | `super()` | ✅ Full | Call parent methods/constructors under single inheritance |
 | `getattr`/`setattr`/`delattr`/`hasattr` | ✅ Full | Built-in reflection functions |
@@ -190,7 +190,7 @@ The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nest
 
 ### P1 — Clear Errors or Missing Features
 
-Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3 to v0.5.0-alpha.5; P1-10 (`match` / `case`) was implemented in v0.6.0; P1-13 (re-evaluation of prefix subexpressions on `yield` resumption) was fixed in v0.5.0-alpha.7 to v0.5.0-alpha.8; P1-19 to P1-29 found by the same audit (implicit line continuation inside brackets, one-line compound statements, `try`/`else`, slice assignment, genexpr tuple elements, user-class subscript and conversion protocols, sequence ordering comparisons, `None` as a dict key, the `iter()` type name, and `hasattr`) were **all fixed in v0.5.0-alpha.6**; P1-33 (`raise ... from` exception chaining), P1-34 (arbitrary and parameterised decorators), P1-35 (`__name__`) and P1-39 (generic type parameter syntax) were fixed in v0.6.0-alpha.3; see the corresponding section of `CHANGELOG`
+Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3 to v0.5.0-alpha.5; P1-10 (`match` / `case`) was implemented in v0.6.0; P1-13 (re-evaluation of prefix subexpressions on `yield` resumption) was fixed in v0.5.0-alpha.7 to v0.5.0-alpha.8; P1-19 to P1-29 found by the same audit (implicit line continuation inside brackets, one-line compound statements, `try`/`else`, slice assignment, genexpr tuple elements, user-class subscript and conversion protocols, sequence ordering comparisons, `None` as a dict key, the `iter()` type name, and `hasattr`) were **all fixed in v0.5.0-alpha.6**; P1-33 (`raise ... from` exception chaining), P1-34 (arbitrary and parameterised decorators), P1-35 (`__name__`) and P1-39 (generic type parameter syntax) were fixed in v0.6.0-alpha.3; P1-40 (f-string same-quote nesting, PEP 701) was fixed in v0.6.0-alpha.4; see the corresponding section of `CHANGELOG`
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
