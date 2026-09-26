@@ -149,9 +149,8 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator/time; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter) |
 | `set` | ✅ Full | Literal `{1, 2}`, constructor, set operations and methods |
 | `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
-| `bytes` type | ✅ Full | `b"xy"` literals as a distinct `bytes` type; indexing/iteration yield integers, plus slicing, repetition and `in`, strictly distinct from `str` |
+| `bytes` type | ✅ Full | `b"xy"` literals and the `bytes()` constructor (zero-filled integer / iterable / string encoding / copy); method family `decode` / `hex` / `upper` / `lower` / `title` / `strip` family / `split` / `replace` / `find` / `index` / `count` / `startswith` / `endswith` / `join` / `center` / `ljust` / `rjust`; indexing/iteration yield integers, plus slicing, repetition and `in`, strictly distinct from `str` |
 | `range` type | ✅ Full | A distinct lazy `range` object supporting `len` / indexing / slicing / containment / iteration without materialising large ranges |
-| User-class iteration protocol | ✅ Full | A class defining `__iter__` / `__next__` can be iterated by `for` / `list()` and all consuming functions |
 | Multiple assignment targets | ✅ Full | `a[0], a[2] = a[2], a[0]`, `o.x, o.y = 1, 2`, including chained suffixes like `self.data[k] = v` |
 | `dict` views | ✅ Full | `keys()` / `values()` are iterable and support `len` and `in` |
 | Multiple Inheritance | ❌ Not Supported | Single inheritance only |

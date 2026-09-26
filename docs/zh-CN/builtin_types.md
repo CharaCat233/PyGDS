@@ -430,7 +430,7 @@ class DSLDictKeyIterator extends DSLIterator:
 
 ### int 方法
 
-#### `int.bit_length()` → `int`
+#### `int.bit_length() -> int`
 
 返回整数的二进制表示位数（不含符号与前导零）
 
@@ -440,7 +440,7 @@ class DSLDictKeyIterator extends DSLIterator:
 (5).bit_length()                    # 3
 ```
 
-#### `int.bit_count()` → `int`
+#### `int.bit_count() -> int`
 
 返回整数的二进制表示中 1 的个数
 
@@ -449,7 +449,7 @@ class DSLDictKeyIterator extends DSLIterator:
 (7).bit_count()                     # 3
 ```
 
-#### `int.to_bytes(length, byteorder, signed=False)` → `bytes`
+#### `int.to_bytes(length, byteorder, signed=False) -> bytes`
 
 按指定长度与字节序（`"big"` / `"little"`）转为字节串；值放不下报 `OverflowError: int too big to convert`，负数转无符号报 `OverflowError: can't convert negative int to unsigned`
 
@@ -458,7 +458,7 @@ class DSLDictKeyIterator extends DSLIterator:
 (16706).to_bytes(2, "big")          # b'AB'
 ```
 
-#### `int.hex()` → `str`
+#### `int.hex() -> str`
 
 返回整数的十六进制字符串（带 `0x` 前缀，负数带 `-`）
 
@@ -466,7 +466,7 @@ class DSLDictKeyIterator extends DSLIterator:
 (255).hex()                         # "0xff"
 ```
 
-#### `int.from_bytes(bytes, byteorder, signed=False)` → `int`
+#### `int.from_bytes(bytes, byteorder, signed=False) -> int`
 
 类方法：按指定字节序把字节串转为整数
 
@@ -478,7 +478,7 @@ int.from_bytes(b'AB', "little")      # 16961
 
 ### float 方法
 
-#### `float.is_integer()` → `bool`
+#### `float.is_integer() -> bool`
 
 浮点值是否为整数
 
@@ -488,7 +488,7 @@ int.from_bytes(b'AB', "little")      # 16961
 (1.5).is_integer()                  # False
 ```
 
-#### `float.as_integer_ratio()` → `tuple`
+#### `float.as_integer_ratio() -> tuple`
 
 返回精确的分数表示 `(分子, 分母)`；Infinity / NaN 报 `OverflowError`
 
@@ -502,21 +502,21 @@ int.from_bytes(b'AB', "little")      # 16961
 
 Python 对应签名在括号内给出，用于对照行为是否一致
 
-#### `str.upper()` → `str`
+#### `str.upper() -> str`
 
 ```python
 # Python: str.upper()
 "hello".upper()           # "HELLO"
 ```
 
-#### `str.lower()` → `str`
+#### `str.lower() -> str`
 
 ```python
 # Python: str.lower()
 "HELLO".lower()           # "hello"
 ```
 
-#### `str.strip(chars=None)` → `str`
+#### `str.strip(chars=None) -> str`
 
 ```python
 # Python: str.strip(chars=None)
@@ -524,7 +524,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "xxhelloxx".strip("x")    # "hello"
 ```
 
-#### `str.split(sep=None, maxsplit=-1)` → `list[str]`
+#### `str.split(sep=None, maxsplit=-1) -> list[str]`
 
 ```python
 # Python: str.split(sep=None, maxsplit=-1)
@@ -533,14 +533,14 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "a,b,c".split(",", 1)     # ["a", "b,c"]
 ```
 
-#### `str.join(iterable)` → `str`
+#### `str.join(iterable) -> str`
 
 ```python
 # Python: str.join(iterable)
 ",".join(["a", "b", "c"]) # "a,b,c"
 ```
 
-#### `str.replace(old, new)` → `str`
+#### `str.replace(old, new) -> str`
 
 ```python
 # Python: str.replace(old, new, count=-1)
@@ -549,7 +549,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 > **注意**：当前不支持 `count` 参数
 
-#### `str.find(sub)` → `int`
+#### `str.find(sub) -> int`
 
 ```python
 # Python: str.find(sub)
@@ -559,7 +559,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 > **注意**：当前不支持 `start`/`end` 范围参数
 
-#### `str.startswith(prefix)` → `bool`
+#### `str.startswith(prefix) -> bool`
 
 ```python
 # Python: str.startswith(prefix)
@@ -567,14 +567,14 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "hello".startswith("xx")  # False
 ```
 
-#### `str.endswith(suffix)` → `bool`
+#### `str.endswith(suffix) -> bool`
 
 ```python
 # Python: str.endswith(suffix)
 "hello".endswith("lo")    # True
 ```
 
-#### `str.lstrip(chars=None)` → `str`
+#### `str.lstrip(chars=None) -> str`
 
 ```python
 # Python: str.lstrip(chars=None)
@@ -582,21 +582,21 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "xxhello".lstrip("x")     # "hello"
 ```
 
-#### `str.rstrip(chars=None)` → `str`
+#### `str.rstrip(chars=None) -> str`
 
 ```python
 # Python: str.rstrip(chars=None)
 "hello  ".rstrip()        # "hello"
 ```
 
-#### `str.capitalize()` → `str`
+#### `str.capitalize() -> str`
 
 ```python
 # Python: str.capitalize()
 "hello world".capitalize() # "Hello world"
 ```
 
-#### `str.casefold()` → `str`
+#### `str.casefold() -> str`
 
 ```python
 # Python: str.casefold()
@@ -605,21 +605,21 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 > **注意**：当前等价于 `lower()`，未实现完整 Unicode case folding
 
-#### `str.title()` → `str`
+#### `str.title() -> str`
 
 ```python
 # Python: str.title()
 "hello world".title()     # "Hello World"
 ```
 
-#### `str.swapcase()` → `str`
+#### `str.swapcase() -> str`
 
 ```python
 # Python: str.swapcase()
 "Hello".swapcase()        # "hELLO"
 ```
 
-#### `str.count(sub, start=0, end=...)` → `int`
+#### `str.count(sub, start=0, end=...) -> int`
 
 ```python
 # Python: str.count(sub, start=0, end=len(str))
@@ -627,7 +627,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "hello".count("l", 0, 3)  # 1
 ```
 
-#### `str.isdigit()` → `bool`
+#### `str.isdigit() -> bool`
 
 ```python
 # Python: str.isdigit()
@@ -635,7 +635,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "abc".isdigit()           # False
 ```
 
-#### `str.isalpha()` → `bool`
+#### `str.isalpha() -> bool`
 
 ```python
 # Python: str.isalpha()
@@ -643,42 +643,42 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "abc123".isalpha()        # False
 ```
 
-#### `str.isalnum()` → `bool`
+#### `str.isalnum() -> bool`
 
 ```python
 # Python: str.isalnum()
 "abc123".isalnum()        # True
 ```
 
-#### `str.isspace()` → `bool`
+#### `str.isspace() -> bool`
 
 ```python
 # Python: str.isspace()
 "   ".isspace()           # True
 ```
 
-#### `str.islower()` → `bool`
+#### `str.islower() -> bool`
 
 ```python
 # Python: str.islower()
 "hello".islower()         # True
 ```
 
-#### `str.isupper()` → `bool`
+#### `str.isupper() -> bool`
 
 ```python
 # Python: str.isupper()
 "HELLO".isupper()         # True
 ```
 
-#### `str.istitle()` → `bool`
+#### `str.istitle() -> bool`
 
 ```python
 # Python: str.istitle()
 "Hello World".istitle()   # True
 ```
 
-#### `str.center(width, fillchar=' ')` → `str`
+#### `str.center(width, fillchar=' ') -> str`
 
 ```python
 # Python: str.center(width, fillchar=' ')
@@ -686,28 +686,28 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "hi".center(6, "-")       # "--hi--"
 ```
 
-#### `str.ljust(width, fillchar=' ')` → `str`
+#### `str.ljust(width, fillchar=' ') -> str`
 
 ```python
 # Python: str.ljust(width, fillchar=' ')
 "hi".ljust(6)             # "hi    "
 ```
 
-#### `str.rjust(width, fillchar=' ')` → `str`
+#### `str.rjust(width, fillchar=' ') -> str`
 
 ```python
 # Python: str.rjust(width, fillchar=' ')
 "hi".rjust(6)             # "    hi"
 ```
 
-#### `str.zfill(width)` → `str`
+#### `str.zfill(width) -> str`
 
 ```python
 # Python: str.zfill(width)
 "42".zfill(5)             # "00042"
 ```
 
-#### `str.rsplit(sep=None, maxsplit=-1)` → `list[str]`
+#### `str.rsplit(sep=None, maxsplit=-1) -> list[str]`
 
 ```python
 # Python: str.rsplit(sep=None, maxsplit=-1)
@@ -715,7 +715,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "a,b,c".rsplit(",", 1)    # ["a,b", "c"]
 ```
 
-#### `str.format(*args, **kwargs)` → `str`
+#### `str.format(*args, **kwargs) -> str`
 
 ```python
 # Python: str.format(*args, **kwargs)
@@ -738,7 +738,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 **转换标志**：`!r`（repr）、`!s`（str）、`!a`（ascii）；转义花括号 `{{` / `}}`
 
-#### `str.encode(encoding="utf-8")` → `bytes`
+#### `str.encode(encoding="utf-8") -> bytes`
 
 按编码把字符串转为字节串（支持 UTF-8）
 
@@ -747,7 +747,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "hi".encode()                       # b'hi'
 ```
 
-#### `str.format_map(mapping)` → `str`
+#### `str.format_map(mapping) -> str`
 
 与 `str.format` 相同，但通过映射对象提供命名占位符的值
 
@@ -762,7 +762,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 操作对象为字节串，涉及「子序列」的参数均接受 bytes；下标与区间语义与 str 对应方法一致
 
-#### `bytes.decode(encoding="utf-8")` → `str`
+#### `bytes.decode(encoding="utf-8") -> str`
 
 按编码把字节串转为字符串
 
@@ -771,7 +771,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 b'hi'.decode()                      # "hi"
 ```
 
-#### `bytes.hex(sep="")` → `str`
+#### `bytes.hex(sep="") -> str`
 
 返回小写十六进制字符串；可选 `sep` 作为字节间分隔符
 
@@ -781,7 +781,7 @@ b'AB'.hex()                         # "4142"
 b'AB'.hex(" ")                      # "41 42"
 ```
 
-#### `bytes.upper()` / `bytes.lower()` / `bytes.title()` → `bytes`
+#### `bytes.upper()` / `bytes.lower()` / `bytes.title() -> bytes`
 
 ASCII 大写 / 小写 / 词首大写
 
@@ -791,7 +791,7 @@ b'ABC'.lower()                      # b'abc'
 b'ab c'.title()                     # b'Ab C'
 ```
 
-#### `bytes.strip(chars=None)` / `bytes.lstrip(chars=None)` / `bytes.rstrip(chars=None)` → `bytes`
+#### `bytes.strip(chars=None)` / `bytes.lstrip(chars=None)` / `bytes.rstrip(chars=None) -> bytes`
 
 去除首尾（或单侧）字节，缺省去除 ASCII 空白（空格、制表、换行等），`chars` 可指定字节集合
 
@@ -800,7 +800,7 @@ b'  hi  '.strip()                   # b'hi'
 b'xxhixx'.strip(b'x')               # b'hi'
 ```
 
-#### `bytes.split(sep=None, maxsplit=-1)` → `list[bytes]`
+#### `bytes.split(sep=None, maxsplit=-1) -> list[bytes]`
 
 按 `sep`（bytes）分割，缺省按连续 ASCII 空白分割
 
@@ -809,7 +809,7 @@ b'a,b,c'.split(b',')                # [b'a', b'b', b'c']
 b'a b  c'.split()                   # [b'a', b'b', b'c']
 ```
 
-#### `bytes.replace(old, new, count=-1)` → `bytes`
+#### `bytes.replace(old, new, count=-1) -> bytes`
 
 替换子序列，`count` 限制替换次数
 
@@ -817,7 +817,7 @@ b'a b  c'.split()                   # [b'a', b'b', b'c']
 b'aaa'.replace(b'a', b'b')          # b'bbb'
 ```
 
-#### `bytes.find(sub, start=0, end=...)` → `int` / `bytes.index(...)` → `int`
+#### `bytes.find(sub, start=0, end=...) -> int` / `bytes.index(...) -> int`
 
 查找子序列首个下标；`find` 找不到返回 -1，`index` 报 `ValueError`；`bytes.count(sub)` 统计出现次数
 
@@ -826,13 +826,13 @@ b'hello'.find(b'll')                # 2
 b'hello'.count(b'l')                # 2
 ```
 
-#### `bytes.startswith(prefix)` / `bytes.endswith(suffix)` → `bool`
+#### `bytes.startswith(prefix)` / `bytes.endswith(suffix) -> bool`
 
 ```python
 b'abc'.startswith(b'ab')            # True
 ```
 
-#### `bytes.join(iterable)` → `bytes`
+#### `bytes.join(iterable) -> bytes`
 
 以自身为分隔符连接 bytes 可迭代对象
 
@@ -840,7 +840,7 @@ b'abc'.startswith(b'ab')            # True
 b'-'.join([b'a', b'b'])             # b'a-b'
 ```
 
-#### `bytes.center(width, fillchar=b' ')` / `bytes.ljust(...)` / `bytes.rjust(...)` → `bytes`
+#### `bytes.center(width, fillchar=b' ')` / `bytes.ljust(...)` / `bytes.rjust(...) -> bytes`
 
 宽度对齐（居中 / 左对齐 / 右对齐），`fillchar` 为填充字节
 
@@ -852,21 +852,21 @@ b'hi'.rjust(4)                      # b'  hi'
 
 ### list 方法
 
-#### `list.append(x)` → `None`
+#### `list.append(x) -> None`
 
 ```python
 # Python: list.append(x)
 lst = [1, 2]; lst.append(3)  # [1, 2, 3]
 ```
 
-#### `list.extend(iterable)` → `None`
+#### `list.extend(iterable) -> None`
 
 ```python
 # Python: list.extend(iterable)
 lst = [1, 2]; lst.extend([3, 4])  # [1, 2, 3, 4]
 ```
 
-#### `list.pop(index=-1)` → `object`
+#### `list.pop(index=-1) -> object`
 
 ```python
 # Python: list.pop(index=-1)
@@ -874,21 +874,21 @@ lst = [1, 2, 3]; lst.pop()     # 3, lst → [1, 2]
 lst.pop(0)                      # 1, lst → [2]
 ```
 
-#### `list.remove(x)` → `None`
+#### `list.remove(x) -> None`
 
 ```python
 # Python: list.remove(x)
 lst = [1, 2, 3]; lst.remove(2)  # [1, 3]
 ```
 
-#### `list.insert(index, x)` → `None`
+#### `list.insert(index, x) -> None`
 
 ```python
 # Python: list.insert(index, x)
 lst = [1, 2]; lst.insert(0, 0)  # [0, 1, 2]
 ```
 
-#### `list.index(x)` → `int`
+#### `list.index(x) -> int`
 
 ```python
 # Python: list.index(x, start=0, end=len(list))
@@ -897,14 +897,14 @@ lst = [1, 2]; lst.insert(0, 0)  # [0, 1, 2]
 
 > **注意**：当前不支持 `start`/`end` 范围参数
 
-#### `list.count(x)` → `int`
+#### `list.count(x) -> int`
 
 ```python
 # Python: list.count(x)
 [1, 2, 2, 3].count(2)           # 2
 ```
 
-#### `list.sort(*, key=None, reverse=False)` → `None`
+#### `list.sort(*, key=None, reverse=False) -> None`
 
 ```python
 # Python: list.sort(*, key=None, reverse=False)
@@ -913,21 +913,21 @@ lst.sort(reverse=True)              # [3, 2, 1]
 lst.sort(key=lambda x: -x)          # 支持 key 函数
 ```
 
-#### `list.reverse()` → `None`
+#### `list.reverse() -> None`
 
 ```python
 # Python: list.reverse()
 lst = [1, 2, 3]; lst.reverse()      # [3, 2, 1]
 ```
 
-#### `list.clear()` → `None`
+#### `list.clear() -> None`
 
 ```python
 # Python: list.clear()
 lst = [1, 2, 3]; lst.clear()        # []
 ```
 
-#### `list.copy()` → `list`
+#### `list.copy() -> list`
 
 ```python
 # Python: list.copy()
@@ -938,7 +938,7 @@ lst = [1, 2, 3]; lst.copy()         # [1, 2, 3] (浅拷贝)
 
 ### dict 方法
 
-#### `dict.get(key, default=None)` → `object`
+#### `dict.get(key, default=None) -> object`
 
 ```python
 # Python: dict.get(key, default=None)
@@ -946,7 +946,7 @@ d = {"a": 1}; d.get("a")            # 1
 d.get("b", 0)                       # 0
 ```
 
-#### `dict.pop(key, default=...)` → `object`
+#### `dict.pop(key, default=...) -> object`
 
 ```python
 # Python: dict.pop(key, default=...)
@@ -954,7 +954,7 @@ d = {"a": 1}; d.pop("a")            # 1, d → {}
 d.pop("b", 0)                       # 0
 ```
 
-#### `dict.update(other, **kwargs)` → `None`
+#### `dict.update(other, **kwargs) -> None`
 
 ```python
 # Python: dict.update(other, **kwargs)
@@ -962,49 +962,49 @@ d = {"a": 1}; d.update({"b": 2})    # {"a": 1, "b": 2}
 d.update([("c", 3)])                # {"a": 1, "b": 2, "c": 3}
 ```
 
-#### `dict.clear()` → `None`
+#### `dict.clear() -> None`
 
 ```python
 # Python: dict.clear()
 d = {"a": 1}; d.clear()             # {}
 ```
 
-#### `dict.copy()` → `dict`
+#### `dict.copy() -> dict`
 
 ```python
 # Python: dict.copy()
 d = {"a": 1}; d.copy()              # {"a": 1} (浅拷贝)
 ```
 
-#### `dict.setdefault(key, default=None)` → `object`
+#### `dict.setdefault(key, default=None) -> object`
 
 ```python
 # Python: dict.setdefault(key, default=None)
 d = {"a": 1}; d.setdefault("b", 0)  # 0, d → {"a": 1, "b": 0}
 ```
 
-#### `dict.popitem()` → `tuple`
+#### `dict.popitem() -> tuple`
 
 ```python
 # Python: dict.popitem()
 d = {"a": 1, "b": 2}; d.popitem()   # ("b", 2), d → {"a": 1}
 ```
 
-#### `dict.keys()` → `view`
+#### `dict.keys() -> view`
 
 ```python
 # Python: dict.keys()
 d = {"a": 1, "b": 2}; d.keys()      # dict_keys(["a", "b"])
 ```
 
-#### `dict.values()` → `view`
+#### `dict.values() -> view`
 
 ```python
 # Python: dict.values()
 d = {"a": 1, "b": 2}; d.values()    # dict_values([1, 2])
 ```
 
-#### `dict.items()` → `view`
+#### `dict.items() -> view`
 
 返回 `dict_items` 视图对象，支持 `len()`、成员判定（`(k, v) in d.items()`）、迭代与 `repr`（`dict_items([...])`）；视图相等按集合语义（与顺序无关）
 
@@ -1019,14 +1019,14 @@ len(d.items())                      # 2
 
 ### tuple 方法
 
-#### `tuple.count(x)` → `int`
+#### `tuple.count(x) -> int`
 
 ```python
 # Python: tuple.count(x)
 (1, 2, 2, 3).count(2)              # 2
 ```
 
-#### `tuple.index(x)` → `int`
+#### `tuple.index(x) -> int`
 
 ```python
 # Python: tuple.index(x, start=0, end=len(tuple))
@@ -1037,49 +1037,49 @@ len(d.items())                      # 2
 
 ### set 方法
 
-#### `set.add(x)` → `None`
+#### `set.add(x) -> None`
 
 ```python
 # Python: set.add(x)
 s = {1, 2}; s.add(3)          # {1, 2, 3}
 ```
 
-#### `set.remove(x)` → `None`
+#### `set.remove(x) -> None`
 
 ```python
 # Python: set.remove(x)
 s = {1, 2, 3}; s.remove(2)    # {1, 3}; 不存在抛 KeyError
 ```
 
-#### `set.discard(x)` → `None`
+#### `set.discard(x) -> None`
 
 ```python
 # Python: set.discard(x)
 s = {1, 2, 3}; s.discard(9)   # 不存在不报错
 ```
 
-#### `set.pop()` → `object`
+#### `set.pop() -> object`
 
 ```python
 # Python: set.pop()
 s = {1, 2, 3}; s.pop()        # 弹出任意元素, 空集合抛 KeyError
 ```
 
-#### `set.clear()` → `None`
+#### `set.clear() -> None`
 
 ```python
 # Python: set.clear()
 s = {1, 2}; s.clear()         # set()
 ```
 
-#### `set.copy()` → `set`
+#### `set.copy() -> set`
 
 ```python
 # Python: set.copy()
 s = {1, 2}; s.copy()          # {1, 2} (浅拷贝)
 ```
 
-#### `set.union(other)` → `set`
+#### `set.union(other) -> set`
 
 `other` 可为任意可迭代对象（集合运算方法族同此约定）
 
@@ -1089,7 +1089,7 @@ s = {1, 2}; s.copy()          # {1, 2} (浅拷贝)
 {1, 2}.union([9])             # {1, 2, 9}
 ```
 
-#### `set.intersection(other)` → `set`
+#### `set.intersection(other) -> set`
 
 ```python
 # Python: set.intersection(other)
@@ -1097,42 +1097,42 @@ s = {1, 2}; s.copy()          # {1, 2} (浅拷贝)
 {1, 2}.intersection([1, 3])   # {1}
 ```
 
-#### `set.difference(other)` → `set`
+#### `set.difference(other) -> set`
 
 ```python
 # Python: set.difference(other)
 {1, 2, 3}.difference({2})     # {1, 3} (同 a - b)
 ```
 
-#### `set.symmetric_difference(other)` → `set`
+#### `set.symmetric_difference(other) -> set`
 
 ```python
 # Python: set.symmetric_difference(other)
 {1, 2}.symmetric_difference({2, 3})   # {1, 3} (同 a ^ b)
 ```
 
-#### `set.isdisjoint(other)` → `bool`
+#### `set.isdisjoint(other) -> bool`
 
 ```python
 # Python: set.isdisjoint(other)
 {1, 2}.isdisjoint({3, 4})     # True
 ```
 
-#### `set.issubset(other)` → `bool`
+#### `set.issubset(other) -> bool`
 
 ```python
 # Python: set.issubset(other)
 {1, 2}.issubset({1, 2, 3})    # True (同 a <= b)
 ```
 
-#### `set.issuperset(other)` → `bool`
+#### `set.issuperset(other) -> bool`
 
 ```python
 # Python: set.issuperset(other)
 {1, 2, 3}.issuperset({1})     # True (同 a >= b)
 ```
 
-#### `set.update(other)` → `None`
+#### `set.update(other) -> None`
 
 并集并入自身；`other` 可为任意可迭代对象（原地更新族同此约定）
 
@@ -1141,7 +1141,7 @@ s = {1, 2}; s.copy()          # {1, 2} (浅拷贝)
 st = {1, 2}; st.update([3])   # {1, 2, 3}
 ```
 
-#### `set.intersection_update(other)` → `None`
+#### `set.intersection_update(other) -> None`
 
 保留同时出现在 `other` 中的元素
 
@@ -1149,7 +1149,7 @@ st = {1, 2}; st.update([3])   # {1, 2, 3}
 st = {1, 2}; st.intersection_update({2, 3})   # {2}
 ```
 
-#### `set.difference_update(other)` → `None`
+#### `set.difference_update(other) -> None`
 
 移除 `other` 中出现的元素
 
@@ -1157,7 +1157,7 @@ st = {1, 2}; st.intersection_update({2, 3})   # {2}
 st = {1, 2}; st.difference_update([2])        # {1}
 ```
 
-#### `set.symmetric_difference_update(other)` → `None`
+#### `set.symmetric_difference_update(other) -> None`
 
 仅保留「只在其中一侧出现」的元素
 

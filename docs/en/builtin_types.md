@@ -425,7 +425,7 @@ Iterates over a string character by character.
 
 ### int Methods
 
-#### `int.bit_length()` → `int`
+#### `int.bit_length() -> int`
 
 Returns the number of bits in the binary representation of the integer (excluding the sign and leading zeros)
 
@@ -435,7 +435,7 @@ Returns the number of bits in the binary representation of the integer (excludin
 (5).bit_length()                    # 3
 ```
 
-#### `int.bit_count()` → `int`
+#### `int.bit_count() -> int`
 
 Returns the number of ones in the binary representation of the integer
 
@@ -444,7 +444,7 @@ Returns the number of ones in the binary representation of the integer
 (7).bit_count()                     # 3
 ```
 
-#### `int.to_bytes(length, byteorder, signed=False)` → `bytes`
+#### `int.to_bytes(length, byteorder, signed=False) -> bytes`
 
 Converts to a byte string of the given length and byte order (`"big"` / `"little"`); values that do not fit raise `OverflowError: int too big to convert`, negative values in unsigned mode raise `OverflowError: can't convert negative int to unsigned`
 
@@ -453,7 +453,7 @@ Converts to a byte string of the given length and byte order (`"big"` / `"little
 (16706).to_bytes(2, "big")          # b'AB'
 ```
 
-#### `int.hex()` → `str`
+#### `int.hex() -> str`
 
 Returns the hexadecimal string of the integer (with the `0x` prefix, `-` for negatives)
 
@@ -461,7 +461,7 @@ Returns the hexadecimal string of the integer (with the `0x` prefix, `-` for neg
 (255).hex()                         # "0xff"
 ```
 
-#### `int.from_bytes(bytes, byteorder, signed=False)` → `int`
+#### `int.from_bytes(bytes, byteorder, signed=False) -> int`
 
 Class method: converts a byte string to an integer using the given byte order
 
@@ -473,7 +473,7 @@ int.from_bytes(b'AB', "little")      # 16961
 
 ### float Methods
 
-#### `float.is_integer()` → `bool`
+#### `float.is_integer() -> bool`
 
 Whether the float value is integral
 
@@ -483,7 +483,7 @@ Whether the float value is integral
 (1.5).is_integer()                  # False
 ```
 
-#### `float.as_integer_ratio()` → `tuple`
+#### `float.as_integer_ratio() -> tuple`
 
 Returns the exact fractional representation `(numerator, denominator)`; Infinity / NaN raise `OverflowError`
 
@@ -497,21 +497,21 @@ Returns the exact fractional representation `(numerator, denominator)`; Infinity
 
 The Python equivalent signature is given in parentheses for behavioral comparison.
 
-#### `str.upper()` → `str`
+#### `str.upper() -> str`
 
 ```python
 # Python: str.upper()
 "hello".upper()           # "HELLO"
 ```
 
-#### `str.lower()` → `str`
+#### `str.lower() -> str`
 
 ```python
 # Python: str.lower()
 "HELLO".lower()           # "hello"
 ```
 
-#### `str.strip(chars=None)` → `str`
+#### `str.strip(chars=None) -> str`
 
 ```python
 # Python: str.strip(chars=None)
@@ -519,7 +519,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "xxhelloxx".strip("x")    # "hello"
 ```
 
-#### `str.split(sep=None, maxsplit=-1)` → `list[str]`
+#### `str.split(sep=None, maxsplit=-1) -> list[str]`
 
 ```python
 # Python: str.split(sep=None, maxsplit=-1)
@@ -528,14 +528,14 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "a,b,c".split(",", 1)     # ["a", "b,c"]
 ```
 
-#### `str.join(iterable)` → `str`
+#### `str.join(iterable) -> str`
 
 ```python
 # Python: str.join(iterable)
 ",".join(["a", "b", "c"]) # "a,b,c"
 ```
 
-#### `str.replace(old, new)` → `str`
+#### `str.replace(old, new) -> str`
 
 ```python
 # Python: str.replace(old, new, count=-1)
@@ -544,7 +544,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 
 > **Note**: The `count` parameter is not currently supported.
 
-#### `str.find(sub)` → `int`
+#### `str.find(sub) -> int`
 
 ```python
 # Python: str.find(sub)
@@ -554,7 +554,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 
 > **Note**: The `start`/`end` range parameters are not currently supported.
 
-#### `str.startswith(prefix)` → `bool`
+#### `str.startswith(prefix) -> bool`
 
 ```python
 # Python: str.startswith(prefix)
@@ -562,14 +562,14 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "hello".startswith("xx")  # False
 ```
 
-#### `str.endswith(suffix)` → `bool`
+#### `str.endswith(suffix) -> bool`
 
 ```python
 # Python: str.endswith(suffix)
 "hello".endswith("lo")    # True
 ```
 
-#### `str.lstrip(chars=None)` → `str`
+#### `str.lstrip(chars=None) -> str`
 
 ```python
 # Python: str.lstrip(chars=None)
@@ -577,21 +577,21 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "xxhello".lstrip("x")     # "hello"
 ```
 
-#### `str.rstrip(chars=None)` → `str`
+#### `str.rstrip(chars=None) -> str`
 
 ```python
 # Python: str.rstrip(chars=None)
 "hello  ".rstrip()        # "hello"
 ```
 
-#### `str.capitalize()` → `str`
+#### `str.capitalize() -> str`
 
 ```python
 # Python: str.capitalize()
 "hello world".capitalize() # "Hello world"
 ```
 
-#### `str.casefold()` → `str`
+#### `str.casefold() -> str`
 
 ```python
 # Python: str.casefold()
@@ -600,21 +600,21 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 
 > **Note**: Currently equivalent to `lower()`. Full Unicode case folding is not implemented.
 
-#### `str.title()` → `str`
+#### `str.title() -> str`
 
 ```python
 # Python: str.title()
 "hello world".title()     # "Hello World"
 ```
 
-#### `str.swapcase()` → `str`
+#### `str.swapcase() -> str`
 
 ```python
 # Python: str.swapcase()
 "Hello".swapcase()        # "hELLO"
 ```
 
-#### `str.count(sub, start=0, end=...)` → `int`
+#### `str.count(sub, start=0, end=...) -> int`
 
 ```python
 # Python: str.count(sub, start=0, end=len(str))
@@ -622,7 +622,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "hello".count("l", 0, 3)  # 1
 ```
 
-#### `str.isdigit()` → `bool`
+#### `str.isdigit() -> bool`
 
 ```python
 # Python: str.isdigit()
@@ -630,7 +630,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "abc".isdigit()           # False
 ```
 
-#### `str.isalpha()` → `bool`
+#### `str.isalpha() -> bool`
 
 ```python
 # Python: str.isalpha()
@@ -638,42 +638,42 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "abc123".isalpha()        # False
 ```
 
-#### `str.isalnum()` → `bool`
+#### `str.isalnum() -> bool`
 
 ```python
 # Python: str.isalnum()
 "abc123".isalnum()        # True
 ```
 
-#### `str.isspace()` → `bool`
+#### `str.isspace() -> bool`
 
 ```python
 # Python: str.isspace()
 "   ".isspace()           # True
 ```
 
-#### `str.islower()` → `bool`
+#### `str.islower() -> bool`
 
 ```python
 # Python: str.islower()
 "hello".islower()         # True
 ```
 
-#### `str.isupper()` → `bool`
+#### `str.isupper() -> bool`
 
 ```python
 # Python: str.isupper()
 "HELLO".isupper()         # True
 ```
 
-#### `str.istitle()` → `bool`
+#### `str.istitle() -> bool`
 
 ```python
 # Python: str.istitle()
 "Hello World".istitle()   # True
 ```
 
-#### `str.center(width, fillchar=' ')` → `str`
+#### `str.center(width, fillchar=' ') -> str`
 
 ```python
 # Python: str.center(width, fillchar=' ')
@@ -681,28 +681,28 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "hi".center(6, "-")       # "--hi--"
 ```
 
-#### `str.ljust(width, fillchar=' ')` → `str`
+#### `str.ljust(width, fillchar=' ') -> str`
 
 ```python
 # Python: str.ljust(width, fillchar=' ')
 "hi".ljust(6)             # "hi    "
 ```
 
-#### `str.rjust(width, fillchar=' ')` → `str`
+#### `str.rjust(width, fillchar=' ') -> str`
 
 ```python
 # Python: str.rjust(width, fillchar=' ')
 "hi".rjust(6)             # "    hi"
 ```
 
-#### `str.zfill(width)` → `str`
+#### `str.zfill(width) -> str`
 
 ```python
 # Python: str.zfill(width)
 "42".zfill(5)             # "00042"
 ```
 
-#### `str.rsplit(sep=None, maxsplit=-1)` → `list[str]`
+#### `str.rsplit(sep=None, maxsplit=-1) -> list[str]`
 
 ```python
 # Python: str.rsplit(sep=None, maxsplit=-1)
@@ -710,7 +710,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "a,b,c".rsplit(",", 1)    # ["a,b", "c"]
 ```
 
-#### `str.format(*args, **kwargs)` → `str`
+#### `str.format(*args, **kwargs) -> str`
 
 ```python
 # Python: str.format(*args, **kwargs)
@@ -733,7 +733,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 
 **Conversion flags**: `!r` (repr), `!s` (str), `!a` (ascii); escaped braces `{{` / `}}`
 
-#### `str.encode(encoding="utf-8")` → `bytes`
+#### `str.encode(encoding="utf-8") -> bytes`
 
 Encodes the string into bytes (UTF-8 supported)
 
@@ -742,7 +742,7 @@ Encodes the string into bytes (UTF-8 supported)
 "hi".encode()                       # b'hi'
 ```
 
-#### `str.format_map(mapping)` → `str`
+#### `str.format_map(mapping) -> str`
 
 Same as `str.format`, but takes the values for named placeholders from a mapping object
 
@@ -757,7 +757,7 @@ Same as `str.format`, but takes the values for named placeholders from a mapping
 
 Operate on byte strings; parameters described as "subsequence" accept bytes; index and range semantics match the corresponding `str` methods
 
-#### `bytes.decode(encoding="utf-8")` → `str`
+#### `bytes.decode(encoding="utf-8") -> str`
 
 Decodes the byte string into a string
 
@@ -766,7 +766,7 @@ Decodes the byte string into a string
 b'hi'.decode()                      # "hi"
 ```
 
-#### `bytes.hex(sep="")` → `str`
+#### `bytes.hex(sep="") -> str`
 
 Returns the lowercase hexadecimal string; the optional `sep` is inserted between bytes
 
@@ -776,7 +776,7 @@ b'AB'.hex()                         # "4142"
 b'AB'.hex(" ")                      # "41 42"
 ```
 
-#### `bytes.upper()` / `bytes.lower()` / `bytes.title()` → `bytes`
+#### `bytes.upper()` / `bytes.lower()` / `bytes.title() -> bytes`
 
 ASCII upper / lower / title case
 
@@ -786,7 +786,7 @@ b'ABC'.lower()                      # b'abc'
 b'ab c'.title()                     # b'Ab C'
 ```
 
-#### `bytes.strip(chars=None)` / `bytes.lstrip(chars=None)` / `bytes.rstrip(chars=None)` → `bytes`
+#### `bytes.strip(chars=None)` / `bytes.lstrip(chars=None)` / `bytes.rstrip(chars=None) -> bytes`
 
 Strips bytes from both ends (or one side); the default strips ASCII whitespace (space, tabs, newlines, etc.); `chars` specifies a set of bytes
 
@@ -795,7 +795,7 @@ b'  hi  '.strip()                   # b'hi'
 b'xxhixx'.strip(b'x')               # b'hi'
 ```
 
-#### `bytes.split(sep=None, maxsplit=-1)` → `list[bytes]`
+#### `bytes.split(sep=None, maxsplit=-1) -> list[bytes]`
 
 Splits on `sep` (bytes); the default splits on runs of ASCII whitespace
 
@@ -804,7 +804,7 @@ b'a,b,c'.split(b',')                # [b'a', b'b', b'c']
 b'a b  c'.split()                   # [b'a', b'b', b'c']
 ```
 
-#### `bytes.replace(old, new, count=-1)` → `bytes`
+#### `bytes.replace(old, new, count=-1) -> bytes`
 
 Replaces a subsequence; `count` limits the number of replacements
 
@@ -812,7 +812,7 @@ Replaces a subsequence; `count` limits the number of replacements
 b'aaa'.replace(b'a', b'b')          # b'bbb'
 ```
 
-#### `bytes.find(sub, start=0, end=...)` → `int` / `bytes.index(...)` → `int`
+#### `bytes.find(sub, start=0, end=...) -> int` / `bytes.index(...) -> int`
 
 Finds the first index of a subsequence; `find` returns -1 when not found, `index` raises `ValueError`; `bytes.count(sub)` counts occurrences
 
@@ -821,13 +821,13 @@ b'hello'.find(b'll')                # 2
 b'hello'.count(b'l')                # 2
 ```
 
-#### `bytes.startswith(prefix)` / `bytes.endswith(suffix)` → `bool`
+#### `bytes.startswith(prefix)` / `bytes.endswith(suffix) -> bool`
 
 ```python
 b'abc'.startswith(b'ab')            # True
 ```
 
-#### `bytes.join(iterable)` → `bytes`
+#### `bytes.join(iterable) -> bytes`
 
 Joins an iterable of bytes using itself as the separator
 
@@ -835,7 +835,7 @@ Joins an iterable of bytes using itself as the separator
 b'-'.join([b'a', b'b'])             # b'a-b'
 ```
 
-#### `bytes.center(width, fillchar=b' ')` / `bytes.ljust(...)` / `bytes.rjust(...)` → `bytes`
+#### `bytes.center(width, fillchar=b' ')` / `bytes.ljust(...)` / `bytes.rjust(...) -> bytes`
 
 Width alignment (center / left / right), `fillchar` is the pad byte
 
@@ -847,21 +847,21 @@ b'hi'.rjust(4)                      # b'  hi'
 
 ### list Methods
 
-#### `list.append(x)` → `None`
+#### `list.append(x) -> None`
 
 ```python
 # Python: list.append(x)
 lst = [1, 2]; lst.append(3)  # [1, 2, 3]
 ```
 
-#### `list.extend(iterable)` → `None`
+#### `list.extend(iterable) -> None`
 
 ```python
 # Python: list.extend(iterable)
 lst = [1, 2]; lst.extend([3, 4])  # [1, 2, 3, 4]
 ```
 
-#### `list.pop(index=-1)` → `object`
+#### `list.pop(index=-1) -> object`
 
 ```python
 # Python: list.pop(index=-1)
@@ -869,21 +869,21 @@ lst = [1, 2, 3]; lst.pop()     # 3, lst → [1, 2]
 lst.pop(0)                      # 1, lst → [2]
 ```
 
-#### `list.remove(x)` → `None`
+#### `list.remove(x) -> None`
 
 ```python
 # Python: list.remove(x)
 lst = [1, 2, 3]; lst.remove(2)  # [1, 3]
 ```
 
-#### `list.insert(index, x)` → `None`
+#### `list.insert(index, x) -> None`
 
 ```python
 # Python: list.insert(index, x)
 lst = [1, 2]; lst.insert(0, 0)  # [0, 1, 2]
 ```
 
-#### `list.index(x)` → `int`
+#### `list.index(x) -> int`
 
 ```python
 # Python: list.index(x, start=0, end=len(list))
@@ -892,14 +892,14 @@ lst = [1, 2]; lst.insert(0, 0)  # [0, 1, 2]
 
 > **Note**: The `start`/`end` range parameters are not currently supported.
 
-#### `list.count(x)` → `int`
+#### `list.count(x) -> int`
 
 ```python
 # Python: list.count(x)
 [1, 2, 2, 3].count(2)           # 2
 ```
 
-#### `list.sort(*, key=None, reverse=False)` → `None`
+#### `list.sort(*, key=None, reverse=False) -> None`
 
 ```python
 # Python: list.sort(*, key=None, reverse=False)
@@ -908,21 +908,21 @@ lst.sort(reverse=True)              # [3, 2, 1]
 lst.sort(key=lambda x: -x)          # key function supported
 ```
 
-#### `list.reverse()` → `None`
+#### `list.reverse() -> None`
 
 ```python
 # Python: list.reverse()
 lst = [1, 2, 3]; lst.reverse()      # [3, 2, 1]
 ```
 
-#### `list.clear()` → `None`
+#### `list.clear() -> None`
 
 ```python
 # Python: list.clear()
 lst = [1, 2, 3]; lst.clear()        # []
 ```
 
-#### `list.copy()` → `list`
+#### `list.copy() -> list`
 
 ```python
 # Python: list.copy()
@@ -933,7 +933,7 @@ lst = [1, 2, 3]; lst.copy()         # [1, 2, 3] (shallow copy)
 
 ### dict Methods
 
-#### `dict.get(key, default=None)` → `object`
+#### `dict.get(key, default=None) -> object`
 
 ```python
 # Python: dict.get(key, default=None)
@@ -941,7 +941,7 @@ d = {"a": 1}; d.get("a")            # 1
 d.get("b", 0)                       # 0
 ```
 
-#### `dict.pop(key, default=...)` → `object`
+#### `dict.pop(key, default=...) -> object`
 
 ```python
 # Python: dict.pop(key, default=...)
@@ -949,7 +949,7 @@ d = {"a": 1}; d.pop("a")            # 1, d → {}
 d.pop("b", 0)                       # 0
 ```
 
-#### `dict.update(other, **kwargs)` → `None`
+#### `dict.update(other, **kwargs) -> None`
 
 ```python
 # Python: dict.update(other, **kwargs)
@@ -957,49 +957,49 @@ d = {"a": 1}; d.update({"b": 2})    # {"a": 1, "b": 2}
 d.update([("c", 3)])                # {"a": 1, "b": 2, "c": 3}
 ```
 
-#### `dict.clear()` → `None`
+#### `dict.clear() -> None`
 
 ```python
 # Python: dict.clear()
 d = {"a": 1}; d.clear()             # {}
 ```
 
-#### `dict.copy()` → `dict`
+#### `dict.copy() -> dict`
 
 ```python
 # Python: dict.copy()
 d = {"a": 1}; d.copy()              # {"a": 1} (shallow copy)
 ```
 
-#### `dict.setdefault(key, default=None)` → `object`
+#### `dict.setdefault(key, default=None) -> object`
 
 ```python
 # Python: dict.setdefault(key, default=None)
 d = {"a": 1}; d.setdefault("b", 0)  # 0, d → {"a": 1, "b": 0}
 ```
 
-#### `dict.popitem()` → `tuple`
+#### `dict.popitem() -> tuple`
 
 ```python
 # Python: dict.popitem()
 d = {"a": 1, "b": 2}; d.popitem()   # ("b", 2), d → {"a": 1}
 ```
 
-#### `dict.keys()` → `view`
+#### `dict.keys() -> view`
 
 ```python
 # Python: dict.keys()
 d = {"a": 1, "b": 2}; d.keys()      # dict_keys(["a", "b"])
 ```
 
-#### `dict.values()` → `view`
+#### `dict.values() -> view`
 
 ```python
 # Python: dict.values()
 d = {"a": 1, "b": 2}; d.values()    # dict_values([1, 2])
 ```
 
-#### `dict.items()` → `view`
+#### `dict.items() -> view`
 
 Returns a `dict_items` view object supporting `len()`, membership tests (`(k, v) in d.items()`), iteration and `repr` (`dict_items([...])`); view equality follows set semantics (order-independent)
 
@@ -1014,14 +1014,14 @@ len(d.items())                      # 2
 
 ### tuple Methods
 
-#### `tuple.count(x)` → `int`
+#### `tuple.count(x) -> int`
 
 ```python
 # Python: tuple.count(x)
 (1, 2, 2, 3).count(2)              # 2
 ```
 
-#### `tuple.index(x)` → `int`
+#### `tuple.index(x) -> int`
 
 ```python
 # Python: tuple.index(x, start=0, end=len(tuple))
@@ -1032,49 +1032,49 @@ len(d.items())                      # 2
 
 ### set Methods
 
-#### `set.add(x)` → `None`
+#### `set.add(x) -> None`
 
 ```python
 # Python: set.add(x)
 s = {1, 2}; s.add(3)          # {1, 2, 3}
 ```
 
-#### `set.remove(x)` → `None`
+#### `set.remove(x) -> None`
 
 ```python
 # Python: set.remove(x)
 s = {1, 2, 3}; s.remove(2)    # {1, 3}; raises KeyError if missing
 ```
 
-#### `set.discard(x)` → `None`
+#### `set.discard(x) -> None`
 
 ```python
 # Python: set.discard(x)
 s = {1, 2, 3}; s.discard(9)   # no error if missing
 ```
 
-#### `set.pop()` → `object`
+#### `set.pop() -> object`
 
 ```python
 # Python: set.pop()
 s = {1, 2, 3}; s.pop()        # pops an arbitrary element, raises KeyError on empty
 ```
 
-#### `set.clear()` → `None`
+#### `set.clear() -> None`
 
 ```python
 # Python: set.clear()
 s = {1, 2}; s.clear()         # set()
 ```
 
-#### `set.copy()` → `set`
+#### `set.copy() -> set`
 
 ```python
 # Python: set.copy()
 s = {1, 2}; s.copy()          # {1, 2} (shallow copy)
 ```
 
-#### `set.union(other)` → `set`
+#### `set.union(other) -> set`
 
 `other` may be any iterable (this applies to the whole set-operation method family)
 
@@ -1084,7 +1084,7 @@ s = {1, 2}; s.copy()          # {1, 2} (shallow copy)
 {1, 2}.union([9])             # {1, 2, 9}
 ```
 
-#### `set.intersection(other)` → `set`
+#### `set.intersection(other) -> set`
 
 ```python
 # Python: set.intersection(other)
@@ -1092,42 +1092,42 @@ s = {1, 2}; s.copy()          # {1, 2} (shallow copy)
 {1, 2}.intersection([1, 3])   # {1}
 ```
 
-#### `set.difference(other)` → `set`
+#### `set.difference(other) -> set`
 
 ```python
 # Python: set.difference(other)
 {1, 2, 3}.difference({2})     # {1, 3} (same as a - b)
 ```
 
-#### `set.symmetric_difference(other)` → `set`
+#### `set.symmetric_difference(other) -> set`
 
 ```python
 # Python: set.symmetric_difference(other)
 {1, 2}.symmetric_difference({2, 3})   # {1, 3} (same as a ^ b)
 ```
 
-#### `set.isdisjoint(other)` → `bool`
+#### `set.isdisjoint(other) -> bool`
 
 ```python
 # Python: set.isdisjoint(other)
 {1, 2}.isdisjoint({3, 4})     # True
 ```
 
-#### `set.issubset(other)` → `bool`
+#### `set.issubset(other) -> bool`
 
 ```python
 # Python: set.issubset(other)
 {1, 2}.issubset({1, 2, 3})    # True (same as a <= b)
 ```
 
-#### `set.issuperset(other)` → `bool`
+#### `set.issuperset(other) -> bool`
 
 ```python
 # Python: set.issuperset(other)
 {1, 2, 3}.issuperset({1})     # True (same as a >= b)
 ```
 
-#### `set.update(other)` → `None`
+#### `set.update(other) -> None`
 
 Union in place; `other` may be any iterable (this applies to the in-place update family)
 
@@ -1136,7 +1136,7 @@ Union in place; `other` may be any iterable (this applies to the in-place update
 st = {1, 2}; st.update([3])   # {1, 2, 3}
 ```
 
-#### `set.intersection_update(other)` → `None`
+#### `set.intersection_update(other) -> None`
 
 Keeps only the elements also present in `other`
 
@@ -1144,7 +1144,7 @@ Keeps only the elements also present in `other`
 st = {1, 2}; st.intersection_update({2, 3})   # {2}
 ```
 
-#### `set.difference_update(other)` → `None`
+#### `set.difference_update(other) -> None`
 
 Removes the elements present in `other`
 
@@ -1152,7 +1152,7 @@ Removes the elements present in `other`
 st = {1, 2}; st.difference_update([2])        # {1}
 ```
 
-#### `set.symmetric_difference_update(other)` → `None`
+#### `set.symmetric_difference_update(other) -> None`
 
 Keeps only the elements present in exactly one side
 

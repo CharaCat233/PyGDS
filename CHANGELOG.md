@@ -2,9 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
-## [Unreleased]
+## [0.5.0] - 2026-09-26
 
-当前无待发布条目。其余已知问题与功能缺口见 README 的「已知问题与限制」章节，或在仓库 `tests/已知问题清单.md` 查看带复现脚本的完整清单
+### 文档
+
+- `docs/zh-CN` 与 `docs/en` 三份核心文档（builtin / builtin_types / usage）同步 v0.5.0-alpha.7 / alpha.8 的行为变化：`iter()` 的真迭代器语义（生成器返回自身、活动视图、字典迭代中增删键报 `RuntimeError`）、`type()` 对用户类返回 `<class 'type'>`、新增 `bytes()` 构造函数与 `bytes` 方法族、`format()` / `dir()` 内建、`str.encode` / `str.format_map`、`int` / `float` 方法族、集合原地更新族与可迭代实参、`dict_items` 视图相等语义
+- 方法签名统一为 Python 注释风格
+- README 兼容矩阵补全：`bytes` 行补充构造函数与方法族，新增「用户类排序比较」行（`__lt__` / `__gt__` 参与排序与 `min` / `max`，含反射语义）
+
+其余已知问题与功能缺口见 README 的「已知问题与限制」章节，或在仓库 `tests/已知问题清单.md` 查看带复现脚本的完整清单
 
 ## [0.5.0-alpha.8] - 2026-09-26
 

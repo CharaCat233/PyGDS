@@ -149,9 +149,8 @@ dsl.run()
 | 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator/time；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter，time 提供 sleep/time/time_ns/monotonic/perf_counter） |
 | `set` | ✅ 完整 | 字面量 `{1, 2}`、构造、集合运算与方法 |
 | `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
-| `bytes` 类型 | ✅ 完整 | `b"xy"` 字面量，独立的 `bytes` 类型；索引/迭代产出整数、切片、重复、`in`，与 `str` 严格区分 |
+| `bytes` 类型 | ✅ 完整 | `b"xy"` 字面量与 `bytes()` 构造（整数零填充 / 可迭代 / 字符串编码 / 拷贝）；方法族 `decode` / `hex` / `upper` / `lower` / `title` / `strip` 家族 / `split` / `replace` / `find` / `index` / `count` / `startswith` / `endswith` / `join` / `center` / `ljust` / `rjust`；索引/迭代产出整数、切片、重复、`in`，与 `str` 严格区分 |
 | `range` 类型 | ✅ 完整 | 独立的惰性 `range` 对象，支持 `len` / 索引 / 切片 / 成员判定 / 迭代，大范围不展开内存 |
-| 用户类迭代协议 | ✅ 完整 | 定义 `__iter__` / `__next__` 的类可被 `for` / `list()` / 各消费函数迭代 |
 | 多重赋值目标 | ✅ 完整 | `a[0], a[2] = a[2], a[0]`、`o.x, o.y = 1, 2`，含链式后缀 `self.data[k] = v` |
 | `dict` 视图 | ✅ 完整 | `keys()` / `values()` 可迭代且有 `len` 与 `in` |
 | 多继承 | ❌ 不支持 | 仅支持单继承 |
