@@ -263,8 +263,16 @@
         "source": "case 1:\n    pass\n",
         "expected": "SyntaxError: invalid syntax\n"
     },
+    "err_match_double_colon": {
+        "source": "def f(x):\n    match x:\n        case 1::\n            pass\n",
+        "expected": "SyntaxError: invalid syntax\n"
+    },
     "err_match_dstar": {
         "source": "def f(x):\n    match x:\n        case {**r, \"a\": v}:\n            pass\n",
+        "expected": "SyntaxError: invalid syntax\n"
+    },
+    "err_match_dstar_alone": {
+        "source": "def f(x):\n    match x:\n        case {**}:\n            pass\n",
         "expected": "SyntaxError: invalid syntax\n"
     },
     "err_match_dstar_wild": {
@@ -278,6 +286,14 @@
     "err_match_dup_key": {
         "source": "def f(x):\n    match x:\n        case {1: a, 1.0: b}:\n            pass\n",
         "expected": "SyntaxError: mapping pattern checks duplicate key (1.0)\n"
+    },
+    "err_match_extra_token": {
+        "source": "def f(x):\n    match x:\n        case 1 1:\n            pass\n",
+        "expected": "SyntaxError: invalid syntax\n"
+    },
+    "err_match_guard_missing": {
+        "source": "def f(x):\n    match x:\n        case 1 if:\n            pass\n",
+        "expected": "SyntaxError: invalid syntax\n"
     },
     "err_match_kw_dup": {
         "source": "def f(x):\n    match x:\n        case P(x=1, x=2):\n            pass\n",
@@ -307,8 +323,16 @@
         "source": "def f(x):\n    match x:\n        case _:\n            return 1\n        case 2:\n            return 2\n",
         "expected": "SyntaxError: wildcard makes remaining patterns unreachable\n"
     },
+    "err_match_star_alone": {
+        "source": "def f(x):\n    match x:\n        case *:\n            pass\n",
+        "expected": "SyntaxError: invalid syntax\n"
+    },
     "err_match_star_top": {
         "source": "def f(x):\n    match x:\n        case *a:\n            pass\n",
+        "expected": "SyntaxError: invalid syntax\n"
+    },
+    "err_match_unclosed_pattern": {
+        "source": "def f(x):\n    match x:\n        case [a, b:\n            pass\n",
         "expected": "SyntaxError: invalid syntax\n"
     },
     "err_mismatch": {
@@ -354,6 +378,10 @@
     "err_specificity": {
         "source": "# Error: 多层特异性匹配\n\nbase2_caught = False\nmid_caught = False\nleaf_caught = False\ntry:\n    x = 1 / 0\nexcept ZeroDivisionError:\n    leaf_caught = True\nexcept ArithmeticError:\n    mid_caught = True\nexcept Exception:\n    base2_caught = True\nprint(leaf_caught, mid_caught, base2_caught)\n",
         "expected": "True False False\n"
+    },
+    "err_ternary_no_else": {
+        "source": "x = 1 if 2\n",
+        "expected": "SyntaxError: expected 'else' after 'if' expression\n"
     },
     "err_tuple": {
         "source": "# Error: 元组 except 语法\n\ntuple_caught = False\ntry:\n    raise ValueError(\"tuple test\")\nexcept (TypeError, ValueError):\n    tuple_caught = True\nprint(tuple_caught)\n",
@@ -475,6 +503,10 @@
         "source": "# dict 合并运算符 | 与 ** 解包测试 (Python 3.9+)\n\n# 基础合并\nd1 = {\"a\": 1, \"b\": 2}\nd2 = {\"b\": 3, \"c\": 4}\nprint(d1 | d2)              # {'a': 1, 'b': 3, 'c': 4} (右侧覆盖左侧同键)\n\n# |= 增强赋值 (原地合并)\nd3 = {\"a\": 1}\nd3 |= d2\nprint(d3)                   # {'a': 1, 'b': 3, 'c': 4}\n\n# 合并不改变原字典\nprint(d1)                   # {'a': 1, 'b': 2}\nprint(d2)                   # {'b': 3, 'c': 4}\n\n# 多个合并\nprint(d1 | d2 | {\"z\": 9})   # {'a': 1, 'b': 3, 'c': 4, 'z': 9}\n\n# {**a, **b} 字典字面量解包\nprint({**d1, **d2})         # {'a': 1, 'b': 3, 'c': 4}\nprint({**d1, \"z\": 9})       # {'a': 1, 'b': 2, 'z': 9}\nprint({\"z\": 9, **d1})       # {'z': 9, 'a': 1, 'b': 2}\n\n# 混合: 显式键覆盖解包值\nprint({**d1, \"a\": 100})     # {'a': 100, 'b': 2}\nprint({\"a\": 100, **d1})     # {'a': 1, 'b': 2} (后者覆盖)\n\n# dict.fromkeys 类方法\nprint(dict.fromkeys([\"a\", \"b\"], 0))     # {'a': 0, 'b': 0}\nprint(dict.fromkeys([1, 2]))            # {1: None, 2: None}\nprint(dict.fromkeys(\"ab\", \"x\"))         # {'a': 'x', 'b': 'x'}\n\nprint(\"done\")\n",
         "expected": "{'a': 1, 'b': 3, 'c': 4}\n{'a': 1, 'b': 3, 'c': 4}\n{'a': 1, 'b': 2}\n{'b': 3, 'c': 4}\n{'a': 1, 'b': 3, 'c': 4, 'z': 9}\n{'a': 1, 'b': 3, 'c': 4}\n{'a': 1, 'b': 2, 'z': 9}\n{'z': 9, 'a': 1, 'b': 2}\n{'a': 100, 'b': 2}\n{'a': 1, 'b': 2}\n{'a': 0, 'b': 0}\n{1: None, 2: None}\n{'a': 'x', 'b': 'x'}\ndone\n"
     },
+    "lang_dict_view_live": {
+        "source": "# dict 视图实时性: 修改后视图反映新内容, 迭代中增删键报错 (v0.6.0-alpha.2)\n\n# 视图实时性: 修改后视图反映新内容\nd = {\"a\": 1}\nkv = d.keys()\nd[\"b\"] = 2\nprint(list(kv))\nprint(kv)\nprint(len(kv), bool(kv))\nd[\"a\"] = 99\nprint(list(kv))\nd.pop(\"b\")\nprint(list(kv), kv)\n\n# 值视图与键值对视图同样实时\nd2 = {\"x\": 1}\nvv = d2.values()\niv = d2.items()\nd2[\"y\"] = 2\nprint(list(vv), list(iv))\nd2[\"x\"] = 10\nprint(list(vv), list(iv))\nprint(len(vv), len(iv))\n\n# 迭代中增删键报 RuntimeError (可捕获), 值替换不触发\nd3 = {\"a\": 1, \"b\": 2}\nit = iter(d3.keys())\nd3[\"c\"] = 3\ntry:\n    print(list(it))\nexcept RuntimeError:\n    print(\"keys-mutate\")\n\nd4 = {\"a\": 1, \"b\": 2}\nit2 = iter(d4.values())\nd4.pop(\"a\")\ntry:\n    print(list(it2))\nexcept RuntimeError:\n    print(\"values-mutate\")\n\nd5 = {\"a\": 1, \"b\": 2}\nit3 = iter(d5.items())\nd5[\"a\"] = 100\nprint(list(it3))\n\n# for 循环直接迭代视图\nd6 = {\"p\": 1, \"q\": 2}\nfor v in d6.values():\n    print(\"for-v\", v)\nfor pair in d6.items():\n    print(\"for-i\", pair)\n\n# 复合键经迭代还原 (元组键不被编码污染)\nd7 = {(1, 2): \"x\", \"a\": 1}\nprint(list(d7))\nprint(list(d7.keys()))\nprint(list(d7.items()))\nfor k in d7:\n    print(k, type(k).__name__)\n\n# 复合键经 copy / update 传播\nd8 = {(1, 2): \"t\"}\nd9 = d8.copy()\nprint(list(d9))\nd10 = {}\nd10.update(d8)\nprint(list(d10), list(d10.keys()))\n\nprint(\"done_view\")\n",
+        "expected": "['a', 'b']\ndict_keys(['a', 'b'])\n2 True\n['a', 'b']\n['a'] dict_keys(['a'])\n[1, 2] [('x', 1), ('y', 2)]\n[10, 2] [('x', 10), ('y', 2)]\n2 2\nkeys-mutate\nvalues-mutate\n[('a', 100), ('b', 2)]\nfor-v 1\nfor-v 2\nfor-i ('p', 1)\nfor-i ('q', 2)\n[(1, 2), 'a']\n[(1, 2), 'a']\n[((1, 2), 'x'), ('a', 1)]\n(1, 2) tuple\na str\n[(1, 2)]\n[(1, 2)] [(1, 2)]\ndone_view\n"
+    },
     "lang_dunder_conv": {
         "source": "# Feature: 用户类 __int__ / __float__ 转换协议\n\nclass C:\n    def __int__(self):\n        return 42\n    def __float__(self):\n        return 1.5\n\nprint(int(C()))\nprint(float(C()))\n\nclass D:\n    def __int__(self):\n        return 'bad'\n\ntry:\n    int(D())\nexcept TypeError:\n    print('TE')\n",
         "expected": "42\n1.5\nTE\n"
@@ -494,6 +526,10 @@
     "lang_exc_str": {
         "source": "# 异常 str / repr / args 与 CPython 对齐测试\n\n# 单参数: str 取参数, repr 带类型名\ntry:\n    raise ValueError(\"plain\")\nexcept ValueError as e:\n    print(\"1\", str(e), repr(e), e.args)\n\n# 无参数: str 为空串, repr 为空括号\ntry:\n    raise ValueError()\nexcept ValueError as e:\n    print(\"2\", repr(str(e)), repr(e), e.args)\n\n# 多参数: str 为参数元组\ntry:\n    raise ValueError(\"a\", \"b\")\nexcept ValueError as e:\n    print(\"3\", str(e), repr(e), e.args)\n\n# KeyError 是特例: str 用参数的 repr\ntry:\n    raise KeyError(\"k\")\nexcept KeyError as e:\n    print(\"4\", str(e), repr(e), e.args)\n\n# KeyError 非字符串参数\ntry:\n    raise KeyError(1)\nexcept KeyError as e:\n    print(\"5\", str(e), repr(e), e.args)\n\ntry:\n    raise KeyError()\nexcept KeyError as e:\n    print(\"6\", repr(str(e)), repr(e), e.args)\n\n# 字典取值缺失: 键按 repr 显示\nd = {\"a\": 1}\ntry:\n    d[\"b\"]\nexcept KeyError as e:\n    print(\"7\", str(e), e.args)\n\ntry:\n    d[2]\nexcept KeyError as e:\n    print(\"8\", str(e), e.args)\n\n# 其余字典/集合方法的 KeyError 文案\ntry:\n    {}.popitem()\nexcept KeyError as e:\n    print(\"9\", str(e))\n\ntry:\n    set().pop()\nexcept KeyError as e:\n    print(\"10\", str(e))\n\ntry:\n    {}.pop(\"z\")\nexcept KeyError as e:\n    print(\"11\", str(e))\n\ntry:\n    del {}[\"z\"]\nexcept KeyError as e:\n    print(\"12\", str(e))\n\n# 非 KeyError 异常仍用 str 语义\ntry:\n    raise TypeError(1, 2)\nexcept TypeError as e:\n    print(\"13\", str(e), repr(e))\n\n\n\n# range 对象不可变 (与 CPython 一致)\nr = range(3)\ntry:\n    r[0] = 9\nexcept TypeError as e:\n    print(\"14\", e)\n\ntry:\n    del r[0]\nexcept TypeError as e:\n    print(\"15\", e)\n\nlst2 = [1, 2, 3]\nlst2[0] = 9\ndel lst2[0]\nprint(\"16\", lst2)\n\nprint(\"done\")\n",
         "expected": "1 plain ValueError('plain') ('plain',)\n2 '' ValueError() ()\n3 ('a', 'b') ValueError('a', 'b') ('a', 'b')\n4 'k' KeyError('k') ('k',)\n5 1 KeyError(1) (1,)\n6 '' KeyError() ()\n7 'b' ('b',)\n8 2 (2,)\n9 'popitem(): dictionary is empty'\n10 'pop from an empty set'\n11 'z'\n12 'z'\n13 (1, 2) TypeError(1, 2)\n14 'range' object does not support item assignment\n15 'range' object doesn't support item deletion\n16 [2, 3]\ndone\n"
+    },
+    "lang_exception_repr": {
+        "source": "# 异常对象 args/str/repr 与 repr 引号选择 (v0.6.0-alpha.2)\n\n# 直接构造\ne = ValueError(\"boom\")\nprint(e.args)\nprint(str(e))\nprint(repr(e))\nprint(str(ValueError()), repr(ValueError()))\ne2 = ValueError(\"a\", 42)\nprint(e2.args, str(e2), repr(e2))\n\n# 非字符串参数\ne3 = ValueError(7)\nprint(e3.args, str(e3), repr(e3))\n\n# raise 后捕获\ntry:\n    raise ValueError(\"raised\")\nexcept ValueError as err:\n    print(err.args, str(err), repr(err))\n\n# 名称查找错误\ntry:\n    print(no_such_name)\nexcept NameError as ne:\n    print(ne.args, str(ne), repr(ne))\n\n# KeyError 的 str 用 repr\ntry:\n    {}[\"k\"]\nexcept KeyError as ke:\n    print(str(ke), repr(ke))\n\n# 用户异常继承\nclass MyErr(Exception):\n    pass\nme = MyErr(\"custom\")\nprint(me.args, str(me), repr(me))\ntry:\n    raise MyErr(\"boom\")\nexcept MyErr as m2:\n    print(m2.args, str(m2))\n\n# __init__ 覆盖时 args 仍随构造参数记录 (BaseException.__new__ 语义)\nclass CErr(Exception):\n    def __init__(self, code):\n        self.code = code\nce = CErr(7)\nprint(ce.args, ce.code)\n\n# args 属性存在于继承链任意层级\nclass Sub(MyErr):\n    pass\nprint(Sub(\"s\").args)\n\n# repr 引号选择: 含单引号用双引号包裹, 含双引号用单引号, 都含用单引号转义\nprint(repr(\"it's\"))\nprint(repr('say \"hi\"'))\nprint(repr(\"both ' and \\\"\"))\nprint(repr([\"a\", \"b'c\"]))\nprint(repr((\"x\",)))\nprint(repr({\"k\": \"v'w\"}))\nprint(repr(\"\"))\n\n# 异常消息含引号\ntry:\n    raise ValueError(\"has 'quote'\")\nexcept ValueError as qe:\n    print(repr(qe))\n\nprint(\"done_exc_repr\")\n",
+        "expected": "('boom',)\nboom\nValueError('boom')\n ValueError()\n('a', 42) ('a', 42) ValueError('a', 42)\n(7,) 7 ValueError(7)\n('raised',) raised ValueError('raised')\n(\"name 'no_such_name' is not defined\",) name 'no_such_name' is not defined NameError(\"name 'no_such_name' is not defined\")\n'k' KeyError('k')\n('custom',) custom MyErr('custom')\n('boom',) boom\n(7,) 7\n('s',)\n\"it's\"\n'say \"hi\"'\n'both \\' and \"'\n['a', \"b'c\"]\n('x',)\n{'k': \"v'w\"}\n''\nValueError(\"has 'quote'\")\ndone_exc_repr\n"
     },
     "lang_floordiv_mod": {
         "source": "# 负数整除与取模语义 (// 向负无穷取整, % 符号跟随除数)\n\nprint(-7 // 2, -7 % 2)\nprint(7 // -2, 7 % -2)\nprint(-1 // 3, -1 % 3)\nprint(1 // -3, 1 % -3)\nprint(-5 // 2, -5 % 2)\nprint(-7.0 % 2, 7 % -2.0)\nprint(-7.0 // 2)\nprint(divmod(-7, 2), divmod(7, -2))\nprint(divmod(-7.0, 2), divmod(7.0, -2))\nprint(divmod(-4611686018427387904, 2))\nprint(True // -1, True % -2, False % -2)\nprint(-8 // 2, -8 % 2)\nprint(0 // -3, 0 % -3)\nprint(-5.5 % 2.0)\n",
@@ -754,6 +790,14 @@
     "lang_try_else": {
         "source": "# Feature: try / else 子句 (else 体正常结束时执行, 其异常不被本 try 捕获)\n\ntry:\n    x = 1\nexcept ValueError:\n    print('exc')\nelse:\n    print('else')\n\ntry:\n    x = 1\nexcept ValueError:\n    print('exc2')\nelse:\n    print('else2')\nfinally:\n    print('fin2')\n\ntry:\n    raise ValueError('boom')\nexcept ValueError:\n    print('caught')\nelse:\n    print('not-reached')\nfinally:\n    print('fin3')\n\ndef f():\n    try:\n        return 'ret'\n    except ValueError:\n        pass\n    else:\n        print('else-not-on-return')\n    finally:\n        print('fin-on-return')\nprint(f())\n\ntry:\n    v = 10\nexcept ValueError:\n    pass\nelse:\n    v += 5\nprint(v)\n\ntry:\n    try:\n        pass\n    except ValueError:\n        pass\n    else:\n        raise ValueError('inner-else')\nexcept ValueError as e:\n    print('outer caught:', e)\n\nprint('done')\n",
         "expected": "else\nelse2\nfin2\ncaught\nfin3\nfin-on-return\nret\n15\nouter caught: inner-else\ndone\n"
+    },
+    "lang_tuple_subscript": {
+        "source": "# 元组下标: 字典的复合键写法 (v0.6.0-alpha.2)\n\n# 基本元组键\nd = {(1, 2): \"a\", (3,): \"b\", 5: \"c\"}\nprint(d[1, 2])\nprint(d[3,])\nprint(d[5])\n\n# 元组键赋值 / 增强赋值 / 删除\nd[1, 2] = \"z\"\nprint(d[1, 2])\nd[1, 2] += \"!\"\nprint(d[1, 2])\ndel d[3,]\nprint(d[(1, 2)], d[5])\n\n# 与元组变量等价\nt = (1, 2)\nprint(d[t], d[(1, 2)], d[1, 2] == d[t])\nprint((1, 2) in d)\n\n# 嵌套元组与混合元素\nn = {((1, 2), 3): \"deep\"}\nprint(n[(1, 2), 3])\nm = {(\"a\", 1): \"s\", (2.5, True): \"f\"}\nprint(m[\"a\", 1], m[2.5, True])\n\n# 三元素与尾逗号\ntri = {(1, 2, 3): \"tri\"}\nprint(tri[1, 2, 3])\nprint(tri[1, 2, 3,])\n\n# 非字典容器的元组下标报错\ns = \"abc\"\ntry:\n    print(s[1, 2])\nexcept TypeError:\n    print(\"str-typeerr\")\nlst = [1, 2, 3]\ntry:\n    print(lst[1, 2])\nexcept TypeError:\n    print(\"list-typeerr\")\n\n# 下标元组内的表达式\nd2 = {(1 + 1, 2 * 3): \"calc\"}\nprint(d2[2, 6])\nx = 1\nprint(d2[x + 1, x * 6])\n\n# 复合键不与普通键冲突\nmixed = {1: \"int\", (1,): \"tup\", \"1\": \"str\"}\nprint(mixed[1], mixed[1,], mixed[\"1\"])\n\nprint(\"done_tuple_sub\")\n",
+        "expected": "a\nb\nc\nz\nz!\nz! c\nz! z! True\nTrue\ndeep\ns f\ntri\ntri\nstr-typeerr\nlist-typeerr\ncalc\ncalc\nint tup str\ndone_tuple_sub\n"
+    },
+    "lang_type_dir_hex": {
+        "source": "# type 身份语义, dir 内置实例, range 方法, float.hex (v0.6.0-alpha.2)\n\n# type 名字是类对象本身\nprint(type)\nprint(type(5), type(\"s\"), type([1]))\n\n# 类是 type 的实例\nclass C:\n    pass\nprint(isinstance(C, type), type(C) is type, type(type) is type)\nprint(isinstance(int, type), isinstance(5, type), isinstance(len, type))\n\n# type 三参动态建类\nA = type(\"A\", (object,), {\"x\": 1})\na = A()\nprint(type(a) is A, a.x)\nB = type(\"B\", (), {})\nprint(isinstance(B(), B))\n\ntry:\n    type()\nexcept TypeError as e:\n    print(\"t0:\", e)\ntry:\n    type(1, 2)\nexcept TypeError as e:\n    print(\"t2:\", e)\n\n# type 与 issubclass\nprint(issubclass(C, object), issubclass(C, type))\n\n# dir 对内置类型实例列出方法\nprint(\"append\" in dir([]), \"sort\" in dir([]), \"__eq__\" in dir([]))\nprint(\"bit_length\" in dir(5), \"__add__\" in dir(5), \"x\" in dir(5))\nprint(\"keys\" in dir({}), \"get\" in dir({}))\nprint(\"lower\" in dir(\"s\"), \"decode\" in dir(b\"ab\"))\nprint(\"args\" in dir(ValueError()))\nprint(dir([]) == sorted(dir([])))\n\n# dir 对用户类实例不变\nclass D:\n    def method(self):\n        return 1\nprint(\"method\" in dir(D()), \"append\" in dir(D()))\n\n# range 的 count / index\nprint(range(10).count(3), range(10).count(99))\nprint(range(0, 20, 5).index(10), range(4).index(0))\ntry:\n    range(3).index(9)\nexcept ValueError as e:\n    print(\"vr:\", e)\nprint(\"count\" in dir(range(3)), \"index\" in dir(range(3)))\n\n# float.hex\nprint((1.5).hex())\nprint((3.0).hex())\nprint((-2.5).hex())\nprint((0.1).hex())\nprint((0.0).hex(), (-0.0).hex())\nprint((255.0).hex())\nprint(1e-300.hex())\nprint((2.2250738585072014e-308).hex())\nprint((2.2250738585072014e-308 / 4).hex())\nprint(float(\"inf\").hex(), float(\"-inf\").hex(), float(\"nan\").hex())\nprint((1024.0).hex())\n\nprint(\"done_alpha2_a\")\n",
+        "expected": "<class 'type'>\n<class 'int'> <class 'str'> <class 'list'>\nTrue True True\nTrue False False\nTrue 1\nTrue\nt0: type() takes 1 or 3 arguments\nt2: type() takes 1 or 3 arguments\nTrue False\nTrue True True\nTrue True False\nTrue True\nTrue True\nTrue\nTrue\nTrue False\n1 0\n2 0\nvr: 9 is not in range\nTrue True\n0x1.8000000000000p+0\n0x1.8000000000000p+1\n-0x1.4000000000000p+1\n0x1.999999999999ap-4\n0x0.0p+0 -0x0.0p+0\n0x1.fe00000000000p+7\n0x1.56e1fc2f8f359p-997\n0x1.0000000000000p-1022\n0x0.4000000000000p-1022\ninf -inf nan\n0x1.0000000000000p+10\ndone_alpha2_a\n"
     },
     "lang_types2": {
         "source": "# 类型行为补全测试: bytes / range / dict 视图\n\n# === bytes 是独立类型 ===\nb = b\"xy\"\nprint(type(b).__name__)\nprint(b)\nprint(len(b))\nprint(b[0], b[1])\nprint(list(b))\nprint(b == b\"xy\", b == \"xy\")\nprint(b\"abc\" + b\"d\")\nprint(b\"hello\"[1:3])\nprint(b\"hello\"[::-1])\nprint(b\"a\" * 3)\nprint(120 in b\"xy\")\nprint(len(b\"\"))\nprint(b\"\" == b\"\")\n\n# bytes 与 str 不可混用\ntry:\n    b\"a\" + \"b\"\nexcept TypeError as e:\n    print(\"concat:\", e)\n\n# === range 是独立类型 ===\nr = range(5)\nprint(type(r).__name__)\nprint(r)\nprint(len(r))\nprint(list(r))\nprint(r[0], r[4], r[-1])\nprint(range(2, 8), len(range(2, 8)))\nprint(range(0, 10, 3), list(range(0, 10, 3)))\nprint(range(10, 0, -3), list(range(10, 0, -3)))\nprint(range(0), len(range(0)), list(range(0)))\nprint(range(3) == range(3), range(3) == range(4))\nprint(3 in range(5), 5 in range(5), 4 in range(0, 10, 2))\nprint(repr(range(3)), repr(range(0, 10, 2)))\n# 切片\nprint(range(10)[2:5], list(range(10)[2:5]))\nprint(range(10)[::-1], list(range(5)[::-1]))\nprint(range(10)[::2])\nprint(range(10)[-3:])\n# range 惰性: 大范围无需展开\nprint(len(range(1000000)))\n# 不可变\ntry:\n    range(3)[0] = 9\nexcept TypeError as e:\n    print(\"assign:\", e)\ntry:\n    del range(3)[0]\nexcept TypeError as e:\n    print(\"delete:\", e)\ntry:\n    range(1, 2, 0)\nexcept ValueError as e:\n    print(\"step:\", e)\n# 消费\nprint(list(reversed(range(3))))\nprint(sorted(range(3, 0, -1)))\nprint(max(range(5)), min(range(5)), sum(range(5)))\n\n# === dict 视图可迭代且有 len ===\nd = {\"a\": 1, \"b\": 2, \"c\": 3}\nprint(len(d.keys()), len(d.values()))\nprint(sorted(d.keys()))\nprint(sorted(d.values()))\nprint(list(d.items()))\nprint(\"b\" in d.keys(), \"z\" in d.keys())\nprint(2 in d.values(), 9 in d.values())\nprint(type(d.keys()).__name__, type(d.values()).__name__)\nprint(repr(d.keys()))\nprint(repr(d.values()))\nfor k in d.keys():\n    print(\"key\", k)\nfor v in d.values():\n    print(\"val\", v)\nprint(d.keys() == d.keys())\nprint(set(d.keys()) == {\"a\", \"b\", \"c\"})\n\nprint(\"done\")\n",

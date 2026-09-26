@@ -196,11 +196,11 @@ len(range(1000000))      # 1000000 (不展开)
 
 ### `type(obj)`
 
-对应 Python `type()`，返回对象的类型对象
+对应 Python `type()`，返回对象的类型对象。`type` 名字绑定到类型类自身（`print(type)` 输出 `<class 'type'>`，`isinstance(int, type)` 为 `True`）
 
 - 对于内置值对象，返回对应的类型类（从内置类型表查找）
 - 对用户类（类对象本身），返回 `type` 类型类
-- 三参数形式 `type(name, bases, dict)` 动态创建类
+- 三参数形式 `type(name, bases, dict)` 动态创建类（dict 中的函数成为方法，其余值为类属性）
 
 ```python
 type(42)                 # <class 'int'>
@@ -209,6 +209,8 @@ class C:
     pass
 type(C)                  # <class 'type'>
 type(C()).__name__       # "C"
+isinstance(int, type)    # True
+type(C) is type          # True
 ```
 
 ### `id(obj)`
@@ -527,7 +529,8 @@ getattr(p, "y", "gone")         # "gone"
 
 - 用户类实例：实例属性 + 类方法 + 类属性（含继承链）
 - 类对象：类方法与类属性；模块：模块成员
-- 已知限制：内置类型字面量实例（如 `[]`）暂返回空列表
+- 内置类型实例（如 `[]`、`5`、`{}`）：按类型收集方法名（含已实现的魔术方法）
+- 无参调用：返回当前作用域的用户定义名（排序）
 
 ```python
 class C:
@@ -535,6 +538,7 @@ class C:
         return "hi"
 
 dir(C)                   # ["greet", ...] (排序后的名字列表)
+"append" in dir([])      # True
 ```
 
 ### `map(func, iterable, ...)`

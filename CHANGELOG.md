@@ -2,6 +2,40 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.6.0-alpha.2] - 2026-09-26
+
+本版实现已知问题清单中 P2-9 ~ P2-15 全部条目（type 身份语义、`dir()` 内置实例、`float.hex()`、字典视图实时性、match 模式错误文案、异常对象 `args`/`str`/`repr`、元组下标），并在收尾扫描中修复若干连带发现的问题
+
+### 新增
+
+- **type 身份语义（P2-9）**：`type` 名字绑定到类型类自身（`print(type)` 输出 `<class 'type'>`），`type(x)` 与 `type(name, bases, dict)` 经类调用分派（`__new__` 分发 1 参 / 3 参形式）；`isinstance(int, type)`、`type(C) is type` 与 CPython 一致；用户类实例化时挂 type 类引用（`isinstance(C, type)` 为 True）
+- **`dir()` 内置类型实例（P2-10）**：`dir([])` / `dir(5)` / `dir({})` 等不再返回空列表，按类型名定位类型类并沿继承链收集方法、类属性与实例级魔术方法描述符名（结果排序）；`dir(None)` 按 object 层方法列出；`dir()` 无参返回当前作用域的用户定义名（排除内建注册名）
+- **`float.hex()`（P2-11）**：返回 IEEE 754 双精度十六进制浮点字符串（`0x1.8000000000000p+0`），自实现 frexp 式分解与次规格数处理，覆盖 `±0.0` / `±inf` / `nan` / 最小规格数 / 次规格数
+- **range 的 `count` / `index`**：`range(10).count(3)` / `range(3).index(9)`（后者不存在时按 CPython 报 `ValueError: 9 is not in range`）；range 字面量实例的方法查找经 range 类型类解析
+- **异常对象 `args` / `str` / `repr`（P2-14）**：异常实例携带 `args` 元组（含用户异常子类，构造参数确定即记录，对齐 `BaseException.__new__` 语义）；`str(e)` 返回消息（多参数为元组 repr，`KeyError` 用键 repr，无参为空串），`repr(e)` 为 `TypeName('msg')` 格式；DSLException 直连分支同样支持
+- **元组下标（P2-15）**：`d[1, 2]` 以元组作字典键（下标与赋值目标两条解析路径），支持尾逗号、嵌套元组、增强赋值与 `del`；非字典容器的元组下标按 CPython 报 `TypeError`
+- **字典视图实时性（P2-12）**：`d.keys()` / `d.values()` / `d.items()` 持有源字典引用，`len` / `bool` / 成员判定 / 相等 / `repr` 实时反映字典内容；视图迭代期间增删键按 CPython 报 `RuntimeError: dictionary changed size during iteration`（值替换不触发）；新增字典值与键值对活迭代器
+
+### 修复
+
+- **复合键迭代产出内部编码字符串**：`iter(d)` / `for k in d` / 视图对元组键 / 冻结集合键 / 用户类键的字典此前产出 `'tuple:|1|2'` 这类内部编码（静默错值），现经「规范化键 → 原始键对象」映射还原为真实键对象；映射随 `_key_to_variant` 写入自动登记，`copy` / `update` / `clear` / `popitem` 等同步维护
+- **字符串内转义引号提前终止**：`"a \"b\""` 此前在词法层提前结束字符串（报续行 / 未闭合错误），单行与三引号字符串扫描现跳过转义序列，被转义的引号不参与结束判定
+- **repr 字符串引号选择**：`repr("it's")` 此前输出无效格式 `'it's'`，现按 CPython 规则选择引号（优先单引号，内容含单引号且不含双引号时用双引号包裹，仅转义包裹引号本身），`str` / `list` / `tuple` / `dict` / `set` / 容器嵌套全部对齐
+- **`type()` 三参建类的类属性键**：`type("A", (), {"x": 1})` 此前把字典内部键的 `"s:"` 前缀带入类属性名（`A.x` 报 AttributeError），现还原为真实键名；类属性与方法分流不再把非函数值误判为可调用
+- **`case` 子句与括号未闭合的优先级（P2-13）**：`case [a, b:` 等模式内未闭合括号此前报 `'[' was never closed`，现解析层在关闭括号失败处还原报错（模式内冒号按 CPython 报 `invalid syntax`，文件末尾未闭合仍报 `was never closed`）；`case 1 1:` / `case *:` / `case {**}` / `case 1 as:` / `case 1 if:` / `case 1::` / `match x 1:` 的文案与 CPython 对齐，`case 1`（缺冒号）报 `expected ':'`，`match x if x:` 报 `invalid syntax`；三元表达式缺 else 的文案对齐为 `expected 'else' after 'if' expression`
+
+### 破坏性变更 (Breaking Changes)
+
+- **异常对象的 `str(e)` / `repr(e)` 语义变更**：`str(e)` 从返回异常类型名改为返回消息文本（无参为空串），依赖旧格式的代码需改用 `type(e).__name__`
+- **`print(type)` 等类型对象显示变更**：`type` 从内建函数变为类对象（`<built-in function type>` → `<class 'type'>`）；`type(x)` 调用结果不变
+- **`dir()` 输出变更**：内置类型实例从返回空列表改为返回方法名列表；`dir()` 无参从返回全部内建名改为仅返回用户定义名
+- **部分语法错误文案变更**：`case` 模式内的错误从行号前缀格式改为 CPython 的 `invalid syntax` / `expected ':'` 格式；此前静默通过的 `{1: a, 1.0: b}`（映射重复键）等已在 alpha.1 报错
+
+### 测试
+
+- 新增 11 个测试并入 `expected.json`：行为类 `lang_type_dir_hex`（type 身份 / dir 内置实例 / range 方法 / float.hex）、`lang_dict_view_live`（视图实时性 / 迭代失效 / 复合键还原）、`lang_exception_repr`（args / str / repr / 引号选择 / 用户异常 / `__init__` 覆盖）、`lang_tuple_subscript`（元组键全形态）；错误类 `err_match_extra_token` / `err_match_star_alone` / `err_match_dstar_alone` / `err_match_guard_missing` / `err_match_double_colon` / `err_match_unclosed_pattern` / `err_ternary_no_else`，共 215 个用例全部通过，既有条目 `expected` 零变更，挂起测试 22 个用例通过
+- 差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
 ## [0.6.0-alpha.1] - 2026-09-26
 
 本版实现 `match` / `case` 结构化模式匹配（Python 3.10+，基线对齐 CPython 3.12 的匹配语义与语法错误文案）。`match` / `case` 按软关键字处理，既有以 `match` / `case` 命名的标识符不受影响

@@ -963,6 +963,19 @@ d["age"] = None
 d.pop("age")
 d.update({"x": 1})
 
+# Tuple subscript: comma-separated indices form a tuple key
+point = {(1, 2): "a", (3,): "b"}
+print(point[1, 2])        # a
+point[3,] = "c"
+print(point[(3,)])
+
+# Dictionary views (keys/values/items) reflect the dict contents live
+kv = d.keys()
+d["new"] = 1
+print(len(kv))            # includes the new key
+# Adding or removing keys while iterating a view raises
+# RuntimeError: dictionary changed size during iteration
+
 # Dictionary iteration
 for key in d:
     print(key, d[key])

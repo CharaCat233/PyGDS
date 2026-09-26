@@ -169,6 +169,8 @@ dsl.run()
 >
 > **⚠️ 破坏性变更（v0.5.0-alpha.1）**：`sleep()` 已迁移到 `time` 模块，须 `import time` 后用 `time.sleep(n)` 调用；裸 `sleep()` 不再存在（与 CPython 一致，CPython 也没有内置的裸 `sleep`）
 >
+> **⚠️ 破坏性变更（v0.6.0-alpha.2）**：异常对象的 `str(e)` 改为返回消息文本（此前为异常类型名，无参为空串），`repr(e)` 为 `TypeName('msg')` 格式，`e.args` 返回参数元组；`type` 变为类对象（`print(type)` 输出 `<class 'type'>`）；`dir()` 无参仅返回用户定义名，内置类型实例返回方法名列表
+>
 > **⚠️ 破坏性变更（v0.5.0-alpha.4）**：`async` / `await` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；同时 `return` / `break` / `continue` 出现在函数体外或循环体会报 `SyntaxError`（此前被静默忽略）；若旧代码以 `async` / `await` 命名变量，需改名
 >
 > 已知的行为差异与功能缺失（含 `yield` 恢复重复求值、`send` / `throw` 不转发、多重赋值目标、用户类迭代协议等）已移至下方「已知问题与限制」章节

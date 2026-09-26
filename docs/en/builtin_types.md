@@ -499,6 +499,18 @@ Returns the exact fractional representation `(numerator, denominator)`; Infinity
 (0.5).as_integer_ratio()            # (1, 2)
 ```
 
+#### `float.hex() -> str`
+
+Returns the IEEE 754 double-precision hexadecimal floating-point string (implicit leading 1 + 13 hexadecimal fraction digits + power-of-two exponent); `±inf` prints `inf` / `-inf`, `nan` prints `nan`
+
+```python
+# Python: float.hex()
+(1.5).hex()                         # 0x1.8000000000000p+0
+(3.0).hex()                         # 0x1.8000000000000p+1
+(0.1).hex()                         # 0x1.999999999999ap-4
+(0.0).hex()                         # 0x0.0p+0
+(-2.5).hex()                        # -0x1.4000000000000p+1
+```
 ### str Methods
 
 The Python equivalent signature is given in parentheses for behavioral comparison.

@@ -961,6 +961,18 @@ d["age"] = None
 d.pop("age")
 d.update({"x": 1})
 
+# 元组下标: 逗号分隔的多个下标以元组作字典键
+point = {(1, 2): "a", (3,): "b"}
+print(point[1, 2])        # a
+point[3,] = "c"
+print(point[(3,)])
+
+# 字典视图 (keys/values/items) 实时反映字典内容
+kv = d.keys()
+d["new"] = 1
+print(len(kv))            # 含新增键
+# 视图迭代期间增删键报 RuntimeError: dictionary changed size during iteration
+
 # 字典迭代
 for key in d:
     print(key, d[key])

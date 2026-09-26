@@ -202,6 +202,8 @@ Corresponds to Python `type()`, returning the type object of the given object.
 - For user classes (the class object itself), returns the `type` type class.
 - The three-argument form `type(name, bases, dict)` creates a class dynamically.
 
+The `type` name is bound to the type class itself (`print(type)` prints `<class 'type'>`)
+
 ```python
 type(42)                 # <class 'int'>
 type("hello")            # <class 'str'>
@@ -527,7 +529,10 @@ Corresponds to Python `dir()`, listing the accessible attribute and method names
 
 - User class instances: instance attributes + class methods + class attributes (including the inheritance chain).
 - Class objects: class methods and class attributes; modules: module members.
-- Known limitation: built-in type literal instances (such as `[]`) currently return an empty list.
+- Built-in type instances (such as `[]`, `5`, `{}`): collect method names by type (including implemented magic methods).
+- No-arg call: returns user-defined names of the current scope (sorted).
+
+Built-in type instances (such as `[]`) list the type method names; a no-arg call returns user-defined names of the current scope
 
 ```python
 class C:
