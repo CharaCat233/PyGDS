@@ -3,7 +3,7 @@ extends Node
 
 ## Token 类型
 enum TokenType {
-	PLUS, MINUS, STAR, SLASH, DOUBLESLASH, STARSTAR, PERCENT, DOT,
+	PLUS, MINUS, STAR, SLASH, DOUBLESLASH, STARSTAR, PERCENT, DOT, ELLIPSIS,
 	EQUAL, GREATER, LESS, BANG, PIPE, BITAND, LESS_LESS, GREATER_GREATER, CARET, TILDE,
 	LPAREN, RPAREN, LBRACKET, RBRACKET,
 	LBRACE, RBRACE, COMMA, COLON, NEWLINE,
@@ -193,7 +193,13 @@ class Lexer:
 			at_line_start = false
 		var c = advance()
 		match c:
-			'.': add_token(TokenType.DOT)
+			'.':
+				if peek() == '.' and peek_next() == '.':
+					advance()
+					advance()
+					add_token(TokenType.ELLIPSIS)
+				else:
+					add_token(TokenType.DOT)
 			'+':
 				if match_char('='):
 					add_token(TokenType.PLUS_EQ)
@@ -2695,6 +2701,9 @@ class DSLObject:
 					return res
 				if res is DSLSeqIterator:
 					return res._ensure_driver()
+			# 旧式迭代协议: 仅定义 __getitem__ 的对象按连续下标迭代, 以 IndexError 结束
+			if klass._lookup_method("__getitem__") != null:
+				return DSLGetItemIterator.new(self)
 		last_error = "TypeError: '%s' object is not iterable" % [_type_name()]
 		return null
 	
@@ -2813,12 +2822,41 @@ class DSLObject:
 					return result._dsl_iter()
 				if result is DSLGenerator:
 					return result._dsl_iter()
+		# 旧式迭代协议: 仅定义 __getitem__ 的对象按连续下标迭代, 以 IndexError 结束
+		if klass != null and klass._lookup_method("__getitem__") != null:
+			return DSLGetItemIterator.new(self)
 		# 未定义 __iter__ 但定义了 __next__ 的对象自身也可迭代
 		var self_next = klass._lookup_method("__next__") if klass != null else null
 		if self_next != null:
 			return DSLUserIterator.new(self)
 		last_error = "TypeError: '%s' object is not iterable" % [_type_name()]
 		return null
+	
+	## 判断自身是否为用户类实例描述符 (所属类沿 MRO 定义了 __get__) [br]
+	## [returns] 是用户描述符时返回 true
+	func _is_user_descriptor() -> bool:
+		return klass != null and klass._lookup_method("__get__") != null
+	
+	## 以描述符身份调用自身的 __get__ (经所属类的方法分派) [br]
+	## [param instance] 绑定实例 (类访问时传 null) [br]
+	## [param owner] 所属类 [br]
+	## [returns] __get__ 的返回值
+	func _call_user_descriptor_get(instance, owner: DSLClass) -> DSLObject:
+		var get_method = klass._lookup_method("__get__")
+		if get_method == null:
+			return null
+		var inst_arg: DSLObject = instance if instance != null else DSLBuiltinFunction._wrap_static(null)
+		return klass._invoke_func(get_method, [self, inst_arg, owner] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+	
+	## 以描述符身份调用自身的 __set__ [br]
+	## [param instance] 绑定实例 [br]
+	## [param value] 要写入的值 [br]
+	## [returns] __set__ 的返回值
+	func _call_user_descriptor_set(instance: DSLObject, value: DSLObject) -> DSLObject:
+		var set_method = klass._lookup_method("__set__")
+		if set_method == null:
+			return null
+		return klass._invoke_func(set_method, [self, instance, value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 	
 	func _dsl_getattribute(name: String) -> DSLObject:
 		if fields != null and fields.has(name):
@@ -2831,6 +2869,9 @@ class DSLObject:
 			if method != null and not (method is DSLNone):
 				if method.has_method("__get__"):
 					return method.__get__(self, klass)
+				# 用户类实例描述符: 以实例绑定调用其 __get__
+				if method._is_user_descriptor():
+					return method._call_user_descriptor_get(self, klass)
 				return method
 			# Fallback: call __getattr__ if defined
 			var getattr_method = klass._lookup_method("__getattr__")
@@ -2848,6 +2889,10 @@ class DSLObject:
 				klass.last_error = ""
 			if prop != null and not (prop is DSLNone) and prop.has_method("__set__"):
 				prop.__set__(self, value)
+				return
+			# 用户类实例数据描述符: __set__ 优先于实例字段
+			if prop != null and prop._is_user_descriptor() and prop.klass._lookup_method("__set__") != null:
+				prop._call_user_descriptor_set(self, value)
 				return
 			var method = klass._lookup_method("__setattr__")
 			if method != null:
@@ -3087,6 +3132,29 @@ class DSLNone extends DSLObject:
 	## repr(None) == 'None' (基类 magic_repr 不查 _dsl_str, 需单独覆写)
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new("None")
+
+## DSL Ellipsis 单例类型, 对应 Python 的 ... (Ellipsis)
+class DSLEllipsis extends DSLObject:
+	## 单例缓存
+	static var _singleton: DSLEllipsis
+
+	## 获取单例
+	static func get_singleton() -> DSLEllipsis:
+		if _singleton == null:
+			_singleton = DSLEllipsis.new()
+		return _singleton
+
+	func _type_name() -> String:
+		return "ellipsis"
+
+	func _dsl_str() -> String:
+		return "Ellipsis"
+
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new("Ellipsis")
+
+	func _dsl_bool() -> bool:
+		return true
 
 ## DSL 切片类型, 对应 Python Slice, 用于切片操作 start:stop:step
 class DSLSlice extends DSLObject:
@@ -9208,6 +9276,7 @@ class DSLClass extends DSLObject:
 					return method
 				if method.has_method("__get__"):
 					return method.__get__(null, self)
+				# 用户类实例描述符: 原样返回, 类访问与实例访问分别绑定
 				return method
 			if k.class_attrs.has(attr_name):
 				return k.class_attrs[attr_name]
@@ -9270,6 +9339,39 @@ class DSLSuper extends DSLObject:
 			return sup_instance.klass
 		return sup_cls
 
+	## 属性写入: 对应 CPython super 代理的 __setattr__ [br]
+	## 先经 __get__ 取出候选值, 仅当候选值自身可写 (__set__) 时写入, 否则报 AttributeError; [br]
+	## 未找到成员时回退到实例的普通属性写入
+	func _dsl_setattr(name: String, value: DSLObject):
+		if sup_cls == null:
+			last_error = "RuntimeError: super(): no class"
+			return
+		var owner_cls = _mro_owner()
+		var mro: Array = owner_cls.mro
+		var start = mro.find(sup_cls)
+		var found = null
+		for idx in range(start + 1, mro.size()):
+			var k: DSLClass = mro[idx]
+			if k.methods.has(name):
+				found = k.methods[name]
+				break
+			if k.class_attrs.has(name):
+				found = k.class_attrs[name]
+				break
+		if found == null:
+			if sup_instance != null:
+				sup_instance._dsl_setattr(name, value)
+				return
+			last_error = "AttributeError: 'super' object has no attribute '%s'" % name
+			return
+		var candidate = found
+		if candidate.has_method("__get__"):
+			candidate = candidate.__get__(sup_instance, owner_cls)
+		if candidate != null and candidate.has_method("__set__"):
+			candidate.__set__(sup_instance, value)
+			return
+		last_error = "AttributeError: 'super' object has no attribute '%s'" % name
+	
 	## 属性访问: 沿目标 MRO 从定义类的下一项查找并绑定到实例 [br]
 	## 等价于 CPython super 代理的 __getattribute__, [br]
 	## 描述符的绑定类型为目标的类 (类方法由此绑定到目标类本身而非命中类)
@@ -9761,6 +9863,65 @@ class DSLListIterator extends DSLIterator:
 		var res = items[index]
 		index += 1
 		return res
+
+## 旧式迭代协议驱动器, 按 0, 1, 2 ... 连续下标调用目标的 __getitem__ [br]
+## 目标方法抛出 IndexError 时结束迭代, 其余错误经解释器异常通道上报
+class DSLGetItemIterator extends DSLIterator:
+	## 迭代目标
+	var target: DSLObject
+	## 下一个下标
+	var index: int = 0
+	## 结束标记 (IndexError 已遇到)
+	var finished: bool = false
+	## 预取的元素
+	var pending: DSLObject = null
+	## 预取有效标记
+	var has_pending: bool = false
+	
+	## 构造下标迭代器 [br]
+	## [param t] 定义了 __getitem__ 的目标对象
+	func _init(t):
+		target = t
+	
+	func has_next() -> bool:
+		if finished or has_pending:
+			return has_pending
+		_fetch()
+		return has_pending
+	
+	func next() -> DSLObject:
+		if not has_pending:
+			if finished:
+				return DSLNone.new()
+			_fetch()
+		has_pending = false
+		return pending
+	
+	## 取下一个元素: 命中 IndexError (用户 raise 或内部站点) 时结束迭代
+	func _fetch():
+		var v = target._dsl_getitem(DSLInteger.new(index))
+		if v == null:
+			# 用户方法内 raise 的 IndexError 经 report / last_exception 通道传播
+			var ip = Interpreter.active
+			if ip != null and ip.report.has_error and ip.last_exception != null and ip.last_exception._type_name() == "IndexError":
+				ip.report.clear_error()
+				ip.last_exception = null
+				finished = true
+				return
+			# 内部站点的 last_error 通道
+			var err = target.last_error
+			target.last_error = ""
+			target.last_error_args.clear()
+			if err.begins_with("IndexError"):
+				finished = true
+				return
+			if err != "" and ip != null:
+				ip.raise_exception_from_last_error(err)
+			finished = true
+			return
+		index += 1
+		pending = v
+		has_pending = true
 
 ## DSLDict 键迭代器 [br]
 ## 迭代字典的键, 并将 Variant 键自动包装为 DSLObject
@@ -11408,12 +11569,39 @@ class Parser:
 			if target is WalrusExpr:
 				report.error("SyntaxError: cannot delete named expression")
 				return null
-			targets.append(target)
+			# 括号 / 方括号包裹的目标元组: 展开为多个目标 (del (a, b) / del [a, b])
+			if target is TupleLiteral or target is ListLiteral:
+				if not _flatten_del_target(target, targets):
+					return null
+			elif target is Literal:
+				report.error("SyntaxError: cannot delete literal")
+				return null
+			else:
+				targets.append(target)
 			if not match_types([TokenType.COMMA]):
 				break
 		_expect_statement_end()
 		skip_newlines()
 		return DelStmt.new(targets)
+	
+	## 展开 del 的元组 / 列表字面量目标 (仅允许名称, 下标与属性形式) [br]
+	## [param node] TupleLiteral 或 ListLiteral [br]
+	## [param out] 输出目标数组 [br]
+	## [returns] 展开成功返回 true
+	func _flatten_del_target(node, out: Array[Expr]) -> bool:
+		for element in node.elements:
+			if element is TupleLiteral or element is ListLiteral:
+				if not _flatten_del_target(element, out):
+					return false
+			elif element is WalrusExpr:
+				report.error("SyntaxError: cannot delete named expression")
+				return false
+			elif element is Literal or element is Binary:
+				report.error("SyntaxError: cannot delete literal")
+				return false
+			else:
+				out.append(element)
+		return true
 
 	## 解析 import 语句: import math / import math as m / import a, b [br]
 	## [returns] ImportStmt 节点, 出错时返回 null
@@ -12476,6 +12664,8 @@ class Parser:
 	func primary():
 		if match_types([TokenType.INTEGER, TokenType.FLOAT, TokenType.STRING, TokenType.TRUE, TokenType.FALSE, TokenType.NULL]):
 			return finish_call_or_index(Literal.new(previous().literal))
+		if match_types([TokenType.ELLIPSIS]):
+			return finish_call_or_index(Literal.new(DSLEllipsis.get_singleton()))
 		if match_types([TokenType.FSTRING]):
 			return finish_call_or_index(parse_fstring_expr(previous().literal))
 		if match_types([TokenType.IDENTIFIER]):
@@ -14549,25 +14739,140 @@ class Interpreter:
 	## [param right] 右操作数 [br]
 	## [returns] 计算结果, 不支持的运算符返回 null
 	func _aug_assign_compute(left: DSLObject, op: Token, right: DSLObject) -> DSLObject:
+		# 原地方法 (__iadd__ 等) 优先于普通二元方法, 返回值替换原绑定 (CPython 语义)
+		var inplace = _inplace_method_name(op.type)
+		if inplace != "":
+			var r = _call_magic_or_fallback(left, inplace, [right], func(): return null)
+			if _suspended:
+				return null
+			if r != null:
+				return r
+			if report.has_error:
+				return null
 		match op.type:
 			TokenType.PLUS_EQ:
-				return _call_magic_or_fallback(left, "__add__", [right], func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__add__", "__radd__", func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.MINUS_EQ:
-				return _call_magic_or_fallback(left, "__sub__", [right], func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__sub__", "__rsub__", func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.STAR_EQ:
-				return _call_magic_or_fallback(left, "__mul__", [right], func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__mul__", "__rmul__", func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.SLASH_EQ:
-				return _call_magic_or_fallback(left, "__truediv__", [right], func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__truediv__", "__rtruediv__", func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.DOUBLESLASH_EQ:
-				return _call_magic_or_fallback(left, "__floordiv__", [right], func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__floordiv__", "__rfloordiv__", func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.STARSTAR_EQ:
-				return _call_magic_or_fallback(left, "__pow__", [right], func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__pow__", "__rpow__", func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PERCENT_EQ:
-				return _call_magic_or_fallback(left, "__mod__", [right], func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PIPE_EQ:
-				return _call_magic_or_fallback(left, "__or__", [right], func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				return _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			_:
 				return null
+	
+	## 增强赋值运算符对应的原地方法名 [br]
+	## [param op_type] 运算符类型 [br]
+	## [returns] 方法名 (如 __iadd__), 无对应时为空串
+	func _inplace_method_name(op_type: TokenType) -> String:
+		match op_type:
+			TokenType.PLUS_EQ:
+				return "__iadd__"
+			TokenType.MINUS_EQ:
+				return "__isub__"
+			TokenType.STAR_EQ:
+				return "__imul__"
+			TokenType.SLASH_EQ:
+				return "__itruediv__"
+			TokenType.DOUBLESLASH_EQ:
+				return "__ifloordiv__"
+			TokenType.STARSTAR_EQ:
+				return "__ipow__"
+			TokenType.PERCENT_EQ:
+				return "__imod__"
+			TokenType.PIPE_EQ:
+				return "__ior__"
+			_:
+				return ""
+	
+	## 带反射的二元算术/位运算分派 [br]
+	## 先走左操作数的普通方法 (含内建 fallback), 失败且无真实异常时尝试右操作数的反射方法 [br]
+	## [param left] 左操作数 [br]
+	## [param right] 右操作数 [br]
+	## [param dunder] 左操作数方法名 (如 __add__) [br]
+	## [param rdunder] 右操作数反射方法名 (如 __radd__) [br]
+	## [param fallback] 左操作数内建回退 (返回 DSLObject) [br]
+	## [returns] 运算结果, 双方都无法处理时返回 null (last_error 记录在操作数上)
+	func _binary_with_reflect(left: DSLObject, right: DSLObject, dunder: String, rdunder: String, fallback: Callable) -> DSLObject:
+		var r = _call_magic_or_fallback(left, dunder, [right], fallback)
+		if _suspended:
+			return null
+		if r != null:
+			# 左侧尝试可能残留「不支持」的 last_error, 成功后必须清除
+			left.last_error = ""
+			return r
+		if report.has_error:
+			return null
+		if right.klass != null and right.klass._lookup_method(rdunder) != null:
+			var rr = _call_magic_or_fallback(right, rdunder, [left], func(): return null)
+			if _suspended:
+				return null
+			if rr != null:
+				left.last_error = ""
+				right.last_error = ""
+			return rr
+		return null
+	
+	## 带反射的相等比较分派 [br]
+	## 左操作数未定义该比较方法 (内建类型) 且右操作数定义了时, 先走右操作数 (CPython 的 NotImplemented 语义) [br]
+	## [param left] 左操作数 [br]
+	## [param right] 右操作数 [br]
+	## [param dunder] 比较方法名 (__eq__ / __ne__) [br]
+	## [param fallback] 左操作数内建回退 (返回 DSLObject) [br]
+	## [returns] 比较结果
+	func _compare_with_reflect(left: DSLObject, right: DSLObject, dunder: String, fallback: Callable) -> DSLObject:
+		var left_has = left.klass != null and left.klass._lookup_method(dunder) != null
+		var right_has = right.klass != null and right.klass._lookup_method(dunder) != null
+		if not left_has and right_has:
+			var r = _call_magic_or_fallback(right, dunder, [left], func(): return null)
+			if _suspended:
+				return null
+			if r != null:
+				left.last_error = ""
+				right.last_error = ""
+				return r
+			if report.has_error:
+				return null
+		return _call_magic_or_fallback(left, dunder, [right], fallback)
+	
+	## 在类体作用域内预求值方法的默认参数 (定义期一次, 结果存入语句元数据) [br]
+	## [param fstmt] 方法声明 [br]
+	## [param class_env] 类体作用域
+	func _fill_method_defaults(fstmt: FunctionStmt, class_env: DSLEnvironment):
+		var vals: Array = []
+		for p in fstmt.params:
+			if p.is_args or p.is_kwargs:
+				vals.append(null)
+				continue
+			if p.default_value != null:
+				var prev_env = environment
+				environment = class_env
+				var val = evaluate(p.default_value)
+				environment = prev_env
+				vals.append(val)
+			else:
+				vals.append(null)
+		fstmt.set_meta("_defaults", vals)
+	
+	## 把预求值的默认参数写入函数对象 (无缓存时按参数表填 null) [br]
+	## [param fstmt] 方法声明 [br]
+	## [param func_obj] 目标函数对象
+	func _apply_method_defaults(fstmt: FunctionStmt, func_obj: DSLFunction):
+		if fstmt.has_meta("_defaults"):
+			var vals = fstmt.get_meta("_defaults")
+			for v in vals:
+				func_obj.default_values.append(v)
+		else:
+			for p in fstmt.params:
+				func_obj.default_values.append(null)
 	
 	## 检查异常是否匹配 except 子句中指定的类型 [br]
 	## [param exc] 被抛出的异常实例 [br]
@@ -14929,6 +15234,10 @@ class Interpreter:
 		_define_exception("UnicodeError", "ValueError")
 
 		_register_modules()
+		# ellipsis 类型类: type(...) 的返回值 (与 CPython 一致, 不是内建名)
+		var ellipsis_class = DSLClass.new("ellipsis", null, {}, self)
+		ellipsis_class.klass = type_class
+		_builtin_type_classes["ellipsis"] = ellipsis_class
 		_builtin_name_snapshot.assign(globals.values.keys())
 	
 	## 注册内置模块到模块注册表 [br]
@@ -15216,6 +15525,7 @@ class Interpreter:
 		var mod = DSLModule.new("collections")
 		mod.members["Counter"] = _make_builtin("Counter", Callable(self, "_col_counter"))
 		mod.members["defaultdict"] = _make_builtin("defaultdict", Callable(self, "_col_defaultdict"))
+		mod.members["namedtuple"] = _make_builtin("namedtuple", Callable(self, "_col_namedtuple"))
 		return mod
 
 	## 创建 string 模块 (字符串常量) [br]
@@ -17060,6 +17370,194 @@ class Interpreter:
 				counter.inner.dict[vkey] = DSLInteger.new(1)
 		return counter
 
+	## collections.namedtuple(typename, field_names) - 生成带命名字段的元组子类 [br]
+	## field_names 接受空白 / 逗号分隔的字符串或字符串可迭代对象 [br]
+	## [param args] [typename, field_names] [br]
+	## [returns] 生成的 DSLClass
+	func _col_namedtuple(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "namedtuple() takes exactly 2 arguments (%d given)" % args.size())
+			return null
+		var name = args[0]._dsl_str()
+		var spec = args[1]
+		var fields: Array[String] = []
+		if spec is DSLString:
+			for part in spec.value.replace(",", " ").split(" "):
+				if part != "":
+					fields.append(part)
+		else:
+			var it = spec._dsl_iter()
+			if it == null:
+				raise_exception("TypeError", "field_names must be a string or iterable of strings")
+				return null
+			while it.has_next():
+				fields.append(it.next()._dsl_str())
+				if it.suspended:
+					return null
+		if fields.is_empty():
+			raise_exception("ValueError", "namedtuple() needs at least one field name")
+			return null
+		var tuple_class = globals.get_val_safe("tuple")
+		var methods = {}
+		# 覆写 tuple 的 __new__ (其返回 DSLTuple 会绕过命名字段初始化), 用 object 的实例构造
+		var object_class = globals.get_val_safe("object")
+		methods["__new__"] = object_class.methods["__new__"]
+		methods["__init__"] = DSLMethodDescriptor.new("__init__", Callable(self, "_nt_init").bind(fields))
+		methods["__getitem__"] = DSLMethodDescriptor.new("__getitem__", Callable(self, "_nt_getitem").bind(fields))
+		methods["__len__"] = DSLMethodDescriptor.new("__len__", Callable(self, "_nt_len").bind(fields))
+		methods["__iter__"] = DSLMethodDescriptor.new("__iter__", Callable(self, "_nt_iter").bind(fields))
+		methods["__repr__"] = DSLMethodDescriptor.new("__repr__", Callable(self, "_nt_repr").bind(fields))
+		methods["__eq__"] = DSLMethodDescriptor.new("__eq__", Callable(self, "_nt_eq").bind(fields, tuple_class))
+		methods["_asdict"] = DSLMethodDescriptor.new("_asdict", Callable(self, "_nt_asdict").bind(fields))
+		var cls = DSLClass.new(name, tuple_class, methods, self)
+		cls.module_prefix = "__main__."
+		cls.klass = globals.get_val_safe("type")
+		var field_names: Array[DSLObject] = []
+		for f in fields:
+			field_names.append(DSLString.new(f))
+		cls.class_attrs["_fields"] = DSLTuple.new(field_names)
+		cls.class_attrs["_make"] = DSLMethodDescriptor.new("_make", Callable(self, "_nt_make").bind(fields, cls))
+		cls.class_attrs["_replace"] = DSLMethodDescriptor.new("_replace", Callable(self, "_nt_replace").bind(fields, cls))
+		return cls
+	
+	## namedtuple 实例的 _nt_values 提取 [br]
+	## [param inst] 实例 [br]
+	## [param fields] 字段名数组 [br]
+	## [returns] 按字段顺序排列的值数组
+	func _nt_values(inst: DSLObject, fields: Array[String]) -> Array:
+		var out: Array = []
+		for f in fields:
+			out.append(inst.fields[f])
+		return out
+	
+	## namedtuple 的 __init__ [br]
+	## [param args] [wrapper, 位置字段值...] [br]
+	## [param kwargs] 按字段名的关键字赋值 [br]
+	## [param fields] 字段名数组
+	func _nt_init(args: Array, kwargs, fields: Array[String]) -> DSLObject:
+		var wrapper = args[0]
+		var values = {}
+		var consumed = 0
+		for i in range(fields.size()):
+			if args.size() - 1 > i:
+				values[fields[i]] = args[i + 1]
+				consumed += 1
+		if args.size() - 1 > fields.size():
+			raise_exception("TypeError", "%s.__new__() takes %d positional arguments but %d were given" % [wrapper.klass.name, fields.size() + 1, args.size()])
+			return null
+		for k in kwargs:
+			if not fields.has(k):
+				raise_exception("TypeError", "%s() got an unexpected keyword argument '%s'" % [wrapper.klass.name, k])
+				return null
+			values[k] = kwargs[k]
+		for f in fields:
+			if not values.has(f):
+				raise_exception("TypeError", "%s.__new__() missing 1 required positional argument: '%s'" % [wrapper.klass.name, f])
+				return null
+		for f in fields:
+			wrapper.fields[f] = values[f]
+		return DSLNone.new()
+	
+	## namedtuple 的 __getitem__ (整数下标, 负数回绕)
+	func _nt_getitem(args: Array, _kwargs, fields: Array[String]) -> DSLObject:
+		var self_obj = args[0]
+		var idx_obj = args[1]
+		if idx_obj is DSLSlice:
+			raise_exception("TypeError", "slice is not supported on namedtuple fields here")
+			return null
+		if not (idx_obj is DSLInteger):
+			raise_exception("TypeError", "tuple indices must be integers")
+			return null
+		var idx: int = idx_obj.value
+		if idx < 0:
+			idx += fields.size()
+		if idx < 0 or idx >= fields.size():
+			raise_exception("IndexError", "tuple index out of range")
+			return null
+		return self_obj.fields[fields[idx]]
+	
+	## namedtuple 的 __len__
+	func _nt_len(args: Array, _kwargs, fields: Array[String]) -> DSLObject:
+		return DSLInteger.new(fields.size())
+	
+	## namedtuple 的 __iter__
+	func _nt_iter(args: Array, _kwargs, fields: Array[String]):
+		var vals: Array[DSLObject] = []
+		for f in fields:
+			vals.append(args[0].fields[f])
+		var lst = DSLList.new(vals)
+		return DSLSeqIterator.new(lst, "tuple_iterator")
+	
+	## namedtuple 的 __repr__: Point(x=1, y=2) 形式
+	func _nt_repr(args: Array, _kwargs, fields: Array[String]) -> DSLObject:
+		var parts = ""
+		for i in range(fields.size()):
+			if i > 0:
+				parts += ", "
+			parts += fields[i] + "=" + DSLObject._py_repr(args[0].fields[fields[i]])
+		return DSLString.new(args[0].klass.name + "(" + parts + ")")
+	
+	## namedtuple 的 __eq__: 与元组 / 同族实例按值比较
+	func _nt_eq(args: Array, _kwargs, fields: Array[String], tuple_class: DSLClass) -> DSLObject:
+		var self_obj = args[0]
+		var other = DSLObject._unwrap_dsl(args[1])
+		var other_vals: Array = []
+		if other is DSLTuple:
+			other_vals = other.items
+		elif other.klass != null and other.klass.mro.has(tuple_class):
+			var it = other._dsl_iter()
+			while it.has_next():
+				other_vals.append(it.next())
+				if it.suspended:
+					return null
+		else:
+			return DSLBool.new(false)
+		var mine = _nt_values(self_obj, fields)
+		if mine.size() != other_vals.size():
+			return DSLBool.new(false)
+		for i in range(mine.size()):
+			if not mine[i]._dsl_eq(other_vals[i]):
+				return DSLBool.new(false)
+		return DSLBool.new(true)
+	
+	## namedtuple 的 _asdict
+	func _nt_asdict(args: Array, _kwargs, fields: Array[String]) -> DSLObject:
+		var d = DSLDict.new()
+		for f in fields:
+			d._dsl_setitem(DSLString.new(f), args[0].fields[f])
+		return d
+	
+	## namedtuple 的 _make: 由可迭代对象构造实例
+	func _nt_make(args: Array, _kwargs, fields: Array[String], cls: DSLClass) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "_make() takes exactly 1 argument (%d given)" % args.size())
+			return null
+		var it = args[0]._dsl_iter()
+		if it == null:
+			raise_exception("TypeError", "%s._make expects an iterable" % cls.name)
+			return null
+		var vals: Array[DSLObject] = []
+		while it.has_next():
+			vals.append(it.next())
+			if it.suspended:
+				return null
+		return cls.magic_call(vals, {} as Dictionary[String, DSLObject])
+	
+	## namedtuple 的 _replace: 以关键字覆盖部分字段后构造新实例
+	func _nt_replace(args: Array, kwargs, fields: Array[String], cls: DSLClass) -> DSLObject:
+		var self_obj = args[0]
+		var vals: Array[DSLObject] = []
+		for f in fields:
+			if kwargs.has(f):
+				vals.append(kwargs[f])
+			else:
+				vals.append(self_obj.fields[f])
+		for k in kwargs:
+			if not fields.has(k):
+				raise_exception("ValueError", "Got unexpected field names: %s" % k)
+				return null
+		return cls.magic_call(vals, {} as Dictionary[String, DSLObject])
+	
 	## collections.defaultdict(default_factory) - 缺失键自动调用工厂创建
 	func _col_defaultdict(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 1 or args.size() > 2:
@@ -18145,19 +18643,19 @@ class Interpreter:
 		var result: DSLObject = null
 		match op_token.type:
 			TokenType.PLUS:
-				result = _call_magic_or_fallback(left, "__add__", [right], func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__add__", "__radd__", func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.MINUS:
-				result = _call_magic_or_fallback(left, "__sub__", [right], func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__sub__", "__rsub__", func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.STAR:
-				result = _call_magic_or_fallback(left, "__mul__", [right], func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__mul__", "__rmul__", func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.SLASH:
-				result = _call_magic_or_fallback(left, "__truediv__", [right], func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__truediv__", "__rtruediv__", func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.DOUBLESLASH:
-				result = _call_magic_or_fallback(left, "__floordiv__", [right], func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__floordiv__", "__rfloordiv__", func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.STARSTAR:
-				result = _call_magic_or_fallback(left, "__pow__", [right], func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__pow__", "__rpow__", func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PERCENT:
-				result = _call_magic_or_fallback(left, "__mod__", [right], func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.LESS_LESS:
 				result = _call_magic_or_fallback(left, "__lshift__", [right], func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.GREATER_GREATER:
@@ -18165,7 +18663,7 @@ class Interpreter:
 			TokenType.CARET:
 				result = _call_magic_or_fallback(left, "__xor__", [right], func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PIPE:
-				result = _call_magic_or_fallback(left, "__or__", [right], func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.BITAND:
 				result = _call_magic_or_fallback(left, "__and__", [right], func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.EQUAL_EQUAL:
@@ -18325,12 +18823,24 @@ class Interpreter:
 		if expr is AugAssign:
 			var current = environment.get_val(expr.name)
 			if current == null:
+				# get_val 只写了报告错误: 转为异常实例, 使 except 能按类型捕获
+				if last_exception == null and report.has_error and report.last_error != "":
+					var aug_err = report.last_error
+					report.clear_error()
+					raise_exception_from_last_error(aug_err)
 				return null
 			var value = evaluate(expr.value)
 			if value == null:
 				return null
 			var result = _aug_assign_compute(current, expr.operator, value)
 			if result == null:
+				if report.has_error:
+					return null
+				if current.last_error != "":
+					raise_exception_from_last_error(current.last_error, current.last_error_args)
+					current.last_error = ""
+					return null
+				raise_exception("TypeError", "unsupported operand type(s) for %s" % expr.operator.lexeme)
 				return null
 			environment.set_val(expr.name, result)
 			return result
@@ -18341,33 +18851,57 @@ class Interpreter:
 				return null
 			var current = obj._dsl_getattribute(expr.name)
 			if current == null or report.has_error:
+				if current == null and obj.last_error != "":
+					raise_exception_from_last_error(obj.last_error, obj.last_error_args)
+					obj.last_error = ""
 				return null
 			var value = evaluate(expr.value)
 			if value == null:
 				return null
 			var result = _aug_assign_compute(current, expr.operator, value)
 			if result == null:
+				if report.has_error:
+					return null
+				raise_exception("TypeError", "unsupported operand type(s) for %s" % expr.operator.lexeme)
 				return null
 			obj._dsl_setattr(expr.name, result)
+			if obj.last_error != "":
+				raise_exception_from_last_error(obj.last_error, obj.last_error_args)
+				obj.last_error = ""
+				return null
 			return result
 		
 		if expr is AugAssignItem:
 			var obj = evaluate(expr.object)
 			if obj == null:
 				return null
-			var idx = evaluate(expr.index)
+			var idx
+			if expr.index is SliceExpr:
+				idx = _eval_slice_value(expr.index)
+			else:
+				idx = evaluate(expr.index)
 			if idx == null:
 				return null
 			var current = obj._dsl_getitem(idx)
 			if current == null or report.has_error:
+				if current == null and obj.last_error != "":
+					raise_exception_from_last_error(obj.last_error, obj.last_error_args)
+					obj.last_error = ""
 				return null
 			var value = evaluate(expr.value)
 			if value == null:
 				return null
 			var result = _aug_assign_compute(current, expr.operator, value)
 			if result == null:
+				if report.has_error:
+					return null
+				raise_exception("TypeError", "unsupported operand type(s) for %s" % expr.operator.lexeme)
 				return null
 			obj._dsl_setitem(idx, result)
+			if obj.last_error != "":
+				raise_exception_from_last_error(obj.last_error, obj.last_error_args)
+				obj.last_error = ""
+				return null
 			return result
 		
 		if expr is UnpackAssign:
@@ -18431,6 +18965,28 @@ class Interpreter:
 			var _use_memo = _bin_gen != null and (_bin_gen._yv_replay or _bin_gen._pending_yield_index > 0)
 			if not _use_memo and _bin_gen != null and _stmt_has_yield:
 				_use_memo = true
+			# 短路求值: and / or 先求左操作数, 按真值决定是否求值右操作数
+			if expr.operator.type == TokenType.AND or expr.operator.type == TokenType.OR:
+				var sc_left = null
+				if _use_memo:
+					sc_left = _bin_gen._yv_memo(expr.left, 0, func(): return evaluate(expr.left))
+				else:
+					sc_left = evaluate(expr.left)
+				if sc_left == null:
+					return null
+				sc_left.last_error = ""
+				# and: 左为真才取右; or: 左为假才取右
+				var take_right: bool = sc_left._dsl_bool() if expr.operator.type == TokenType.AND else not sc_left._dsl_bool()
+				if not take_right:
+					return sc_left
+				var sc_right = null
+				if _use_memo:
+					sc_right = _bin_gen._yv_memo(expr.right, 1, func(): return evaluate(expr.right))
+				else:
+					sc_right = evaluate(expr.right)
+				if sc_right == null:
+					return null
+				return sc_right
 			var left = null
 			var right = null
 			if _use_memo:
@@ -18448,19 +19004,19 @@ class Interpreter:
 			right.last_error = ""
 			match expr.operator.type:
 				TokenType.PLUS:
-					result = _call_magic_or_fallback(left, "__add__", [right], func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__add__", "__radd__", func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.MINUS:
-					result = _call_magic_or_fallback(left, "__sub__", [right], func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__sub__", "__rsub__", func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.STAR:
-					result = _call_magic_or_fallback(left, "__mul__", [right], func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__mul__", "__rmul__", func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.SLASH:
-					result = _call_magic_or_fallback(left, "__truediv__", [right], func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__truediv__", "__rtruediv__", func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.DOUBLESLASH:
-					result = _call_magic_or_fallback(left, "__floordiv__", [right], func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__floordiv__", "__rfloordiv__", func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.STARSTAR:
-					result = _call_magic_or_fallback(left, "__pow__", [right], func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__pow__", "__rpow__", func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.PERCENT:
-					result = _call_magic_or_fallback(left, "__mod__", [right], func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.LESS_LESS:
 					result = _call_magic_or_fallback(left, "__lshift__", [right], func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.GREATER_GREATER:
@@ -18468,13 +19024,13 @@ class Interpreter:
 				TokenType.CARET:
 					result = _call_magic_or_fallback(left, "__xor__", [right], func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.PIPE:
-					result = _call_magic_or_fallback(left, "__or__", [right], func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.BITAND:
 					result = _call_magic_or_fallback(left, "__and__", [right], func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.EQUAL_EQUAL:
-					result = _call_magic_or_fallback(left, "__eq__", [right], func(): return left.magic_eq([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _compare_with_reflect(left, right, "__eq__", func(): return left.magic_eq([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.NOT_EQUAL:
-					result = _call_magic_or_fallback(left, "__ne__", [right], func(): return left.magic_ne([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _compare_with_reflect(left, right, "__ne__", func(): return left.magic_ne([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.GREATER:
 					result = _call_magic_or_fallback(left, "__gt__", [right], func(): return left.magic_gt([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.GREATER_EQUAL:
@@ -18503,7 +19059,8 @@ class Interpreter:
 				return null
 			# 左侧不会做该运算时, 按 CPython 语义试右侧的反射版本 (__rmul__ 等):
 			# 使 1 * "ab"、2 * [1] 这类「序列在右」的写法也能成立
-			if result == null and not _is_unsupported_reflected_op(expr.operator.type):
+			# 用户方法内已抛出真实异常时不得重试反射或改写错误, 原样向上传播
+			if result == null and not report.has_error and last_exception == null and not _is_unsupported_reflected_op(expr.operator.type):
 				# 左侧的尝试可能已在 last_error 留下「运算数类型不支持」的记录,
 				# 反射版本若成功, 该记录必须清除, 否则会被当作真实错误抛出
 				# 反射版本若给出更贴切的文案 (如序列重复的次数类型错误), 以它为准
@@ -18516,6 +19073,8 @@ class Interpreter:
 				if result != null:
 					return result
 				left.last_error = saved_left_err
+			if result == null and (report.has_error or last_exception != null):
+				return null
 			if left.last_error != "" or right.last_error != "":
 				raise_exception_from_last_error(left.last_error if left.last_error else right.last_error)
 				return null
@@ -18707,6 +19266,12 @@ class Interpreter:
 			if obj.last_error != "":
 				raise_exception_from_last_error(obj.last_error, obj.last_error_args)
 				return null
+			# 类名.属性 命中用户描述符: 以 (null, 类) 调用 __get__ (实例访问已在基类绑定)
+			if obj is DSLClass and result != null and result._is_user_descriptor():
+				var bound = result._call_user_descriptor_get(null, obj)
+				if _suspended:
+					return null
+				return bound
 			return result
 		
 		if expr is SetAttr:
@@ -20022,7 +20587,9 @@ class Interpreter:
 		var saved_class = _current_class
 		var saved_self = _current_self
 		_current_class = function._defining_class
-		if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
+		# 普通方法 / 类方法 / property 的 getter / setter / deleter 首参为 self, 供零参 super() 定位
+		# 静态方法 (2) 与顶层函数没有 self
+		if args.size() > 0 and function.method_type != 2:
 			_current_self = args[0]
 		else:
 			_current_self = null
@@ -20097,6 +20664,9 @@ class Interpreter:
 		var superclass_obj = base_objs[0] if base_objs.size() > 0 else null
 		var methods = {}
 		var class_attrs = {}
+		# 类体作用域: 方法默认参数与类体内推导式等定义期求值可读取类体变量,
+		# 方法体本身仍只沿外层作用域解析 (CPython 的类作用域细则)
+		var class_env = DSLEnvironment.new(report, environment)
 		# 提前创建 DSLClass 骨架, 使方法能引用其定义类 (super() 定位)
 		var class_obj = DSLClass.new(stmt.name, superclass_obj, {}, self)
 		class_obj.module_prefix = "__main__."
@@ -20115,11 +20685,15 @@ order (MRO) for bases %s" % ", ".join(names))
 		for body_stmt in stmt.body:
 			if body_stmt is FunctionStmt:
 				var target_name = body_stmt.name
+				_fill_method_defaults(body_stmt, class_env)
+				if _suspended:
+					return ExecResult.SUSPENDED
 				if body_stmt.method_type == 3:
 					# @property getter
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
 					func_obj._defining_class = class_obj
+					_apply_method_defaults(body_stmt, func_obj)
 					var prop = DSLProperty.new(body_stmt.name, func_obj, self)
 					methods[body_stmt.name] = prop
 				elif body_stmt.method_type == 4:
@@ -20127,6 +20701,7 @@ order (MRO) for bases %s" % ", ".join(names))
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
 					func_obj._defining_class = class_obj
+					_apply_method_defaults(body_stmt, func_obj)
 					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
 					target_name = prop_name
 					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
@@ -20141,6 +20716,7 @@ order (MRO) for bases %s" % ", ".join(names))
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
 					func_obj._defining_class = class_obj
+					_apply_method_defaults(body_stmt, func_obj)
 					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
 					target_name = prop_name
 					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
@@ -20154,6 +20730,7 @@ order (MRO) for bases %s" % ", ".join(names))
 					var func_obj = DSLFunction.new(body_stmt, environment)
 					func_obj._cls_interp = self
 					func_obj._defining_class = class_obj
+					_apply_method_defaults(body_stmt, func_obj)
 					methods[body_stmt.name] = func_obj
 				if not body_stmt.decorators.is_empty():
 					var dec_val = _apply_decorators(body_stmt.decorators, methods[target_name])
@@ -20164,10 +20741,16 @@ order (MRO) for bases %s" % ", ".join(names))
 					methods[target_name] = dec_val
 			elif body_stmt is ExpressionStmt and body_stmt.expression is Assign:
 				var assign = body_stmt.expression as Assign
+				var prev_env = environment
+				environment = class_env
 				var val = evaluate(assign.value)
+				environment = prev_env
+				if _suspended:
+					return ExecResult.SUSPENDED
 				if val == null:
 					return ExecResult.ERROR
 				class_attrs[assign.name] = val
+				class_env.define(assign.name, val)
 		class_obj.methods = methods
 		class_obj.class_attrs = class_attrs
 		class_obj.klass = globals.get_val_safe("type")
@@ -20766,6 +21349,10 @@ order (MRO) for bases %s" % ", ".join(names))
 			if not key_func._dsl_is_callable():
 				raise_exception("TypeError", "'%s' object is not callable" % key_func._type_name())
 				return null
+		var default_val = null
+		var has_default = kwargs.has("default")
+		if has_default:
+			default_val = kwargs["default"]
 		if args.size() == 0:
 			raise_exception("TypeError", "%s() takes at least 1 argument" % fname)
 			return null
@@ -20776,6 +21363,8 @@ order (MRO) for bases %s" % ", ".join(names))
 				obj = obj._wrapped
 			if obj is DSLList or obj is DSLTuple:
 				if obj.items.size() == 0:
+					if has_default:
+						return default_val
 					raise_exception("ValueError", "%s() arg is an empty sequence" % fname)
 					return null
 				candidates = obj.items
@@ -20788,6 +21377,8 @@ order (MRO) for bases %s" % ", ".join(names))
 					if iter.suspended:
 						# 消费中途挂起: 交由语句重放, 不能当作空序列
 						return null
+					if has_default:
+						return default_val
 					raise_exception("ValueError", "%s() arg is an empty sequence" % fname)
 					return null
 				while iter.has_next():

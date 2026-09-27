@@ -135,12 +135,13 @@ func _exception_init(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSL
     var pos_args: Array[DSLObject] = []
     for i in range(1, exc_args.size()):
         pos_args.append(exc_args[i])        # Collect positional arguments
-    var msg = ""
-    if pos_args.size() > 0:
-        msg = pos_args[0]._dsl_str()        # First argument = message
+    var msg = _exception_message(wrapper.klass, pos_args)  # Message per the str() rules
     var exc = DSLException.new(msg, wrapper.klass.name, pos_args)
     wrapper._wrapped = exc                  # Store DSLException in _wrapped
     wrapper.fields["args"] = DSLTuple.new(pos_args)  # Store arguments in args
+    # Cause-chain defaults: without a from clause __cause__ is None, __suppress_context__ is False
+    wrapper.fields["__cause__"] = _wrap(null)
+    wrapper.fields["__suppress_context__"] = _wrap(false)
     return DSLNone.new()
 ```
 
@@ -208,7 +209,7 @@ Matching CPython, `_exception_init` derives the message from the argument count 
 | one | the argument's `str` | `TypeError('bad type')` | `('bad type',)` |
 | several | tuple of arguments | `TypeError('a', 'b')` | `('a', 'b')` |
 
-`KeyError` is the exception: `str(e)` uses the **repr** of its argument (`KeyError("k")` shows `'k'`, `KeyError(1)` shows `1`, and `{}.popitem()` shows `'popitem(): dictionary is empty'`).
+`KeyError` is the exception: `str(e)` uses the **repr** of its argument (`KeyError("k")` shows `'k'`, `KeyError(1)` shows `1`, and `{}.popitem()` shows `'popitem(): dictionary is empty'`). The exception is determined along the exception class's (or a user subclass's) MRO — instances of `class KE(KeyError)` likewise show the key repr.
 
 Internal interpreter sites (dict lookup, `pop` / `popitem`, set `remove` / `pop`, and so on) carry errors through `last_error`; `KeyError` sites also record the original argument object in `last_error_args`, so that `raise_exception_from_last_error` keeps `str`, `repr` and `args` mutually consistent.
 

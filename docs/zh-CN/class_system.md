@@ -197,7 +197,7 @@ MyClass(args...)
 DSLClass.magic_call(args, kwargs)
     ↓
     1. _lookup_method("__new__")
-       → 在继承链上查找 __new__
+       → 沿 MRO 查找 __new__
        → 默认落在 object.__new__（api_object_new）
     ↓
     2. _invoke_func(new_func, [class, ...args], kwargs)
@@ -209,7 +209,7 @@ DSLClass.magic_call(args, kwargs)
        → 否 → 直接返回 instance
     ↓
     4. _lookup_method("__init__")
-       → 在继承链上查找 __init__
+       → 沿 MRO 查找 __init__
        → 默认落在 object.__init__（pass）或类型的 api_*_init
     ↓
     5. _invoke_func(init_func, [instance, ...args], kwargs)
@@ -280,8 +280,8 @@ func api_int_init(args, _kwargs):
 当用户定义类时，若未指定基类，在 `PyGDS.Interpreter.execute_class` 中会自动设置基类为 `object`
 
 ```gdscript
-if superclass_obj == null and stmt.name != "object":
-    superclass_obj = environment.get_val("object")
+if base_objs.is_empty() and stmt.name != "object":
+    base_objs.append(environment.get_val("object"))
 ```
 
 这样：
@@ -291,11 +291,11 @@ class Foo:       # 等价于 class Foo(object):
     pass
 ```
 
-而 `object` 类自身的基类为 `null`，标志着继承链的终点
+而 `object` 类自身没有基类（`bases` 为空、MRO 仅含自身），标志着继承链的终点
 
 ### `object` 类的初始化
 
-`object` 类通过 `execute_class` 处理，此时 `superclass_obj == null` 且 `stmt.name == "object"`，因此不会被赋予任何基类
+`object` 类通过 `execute_class` 处理，此时 `base_objs == []` 且 `stmt.name == "object"`，因此不会被赋予任何基类
 
 ---
 
@@ -309,12 +309,13 @@ class Foo:       # 等价于 class Foo(object):
 
 `PyGDS.Interpreter.execute_class` 处理用户定义的类（包括 `object` 自身）
 
-1. **求值基类**：若 `ClassStmt` 有 `superclass` 表达式，求值得到 `DSLClass`；否则默认为 `object`
-2. **收集方法和类属性**：
+1. **求值基类列表**：逐个求值 `ClassStmt.bases` 中的表达式并校验为 `DSLClass`；列表为空且类名非 `object` 时默认补 `object`
+2. **一致性检查**（先于类体执行）：直接基类重复检查、C3 线性化计算（冲突报 `TypeError`）、实例布局冲突检查
+3. **收集方法和类属性**：
    - `FunctionStmt` → 创建 `DSLFunction`，存入 `methods`
    - `ExpressionStmt(Assign)`（类级赋值）→ 求值并存入 `class_attrs`
-3. **创建 DSLClass**：`DSLClass.new(name, superclass, methods, self)`
-4. **注册到环境**：`environment.define(name, class_obj)`，使类名在作用域中可见
+4. **创建 DSLClass**：`DSLClass.new(name, 首个基类, methods, self)` 后写入 `bases` 并重算 MRO
+5. **注册到环境**：`environment.define(name, class_obj)`，使类名在作用域中可见
 
 ### `_inject_builtin_methods` 详情
 

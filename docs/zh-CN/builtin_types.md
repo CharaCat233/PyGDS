@@ -775,6 +775,132 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "{x}".format_map({"x": 42})         # "42"
 ```
 
+#### `str.index(sub, start=0, end=...) -> int`
+
+同 `find`，子串不存在时抛 `ValueError`
+
+```python
+# Python: str.index(sub, start, end)
+"abcabc".index("b", 2)              # 4
+```
+
+#### `str.rfind(sub, start=0, end=...) -> int`
+
+从右侧开始查找子串，返回最高下标，找不到返回 -1
+
+```python
+# Python: str.rfind(sub, start, end)
+"abcabc".rfind("b")                 # 4
+```
+
+#### `str.rindex(sub, start=0, end=...) -> int`
+
+同 `rfind`，子串不存在时抛 `ValueError`
+
+```python
+# Python: str.rindex(sub, start, end)
+"abcabc".rindex("b", 0, 4)          # 1
+```
+
+#### `str.partition(sep) -> tuple`
+
+按首个分隔符切分为 `(头, 分隔符, 尾)` 三元组，找不到时尾两项为空串
+
+```python
+# Python: str.partition(sep)
+"a1b2".partition("1")               # ("a", "1", "b2")
+```
+
+#### `str.rpartition(sep) -> tuple`
+
+按最后一个分隔符切分为三元组，找不到时头两项为空串
+
+```python
+# Python: str.rpartition(sep)
+"a1b2".rpartition("1")              # ("a1b", "1", "2")
+```
+
+#### `str.removeprefix(prefix) -> str`
+
+去除指定前缀，无该前缀时原样返回
+
+```python
+# Python: str.removeprefix(prefix)
+"abc".removeprefix("ab")            # "c"
+```
+
+#### `str.removesuffix(suffix) -> str`
+
+去除指定后缀，无该后缀时原样返回
+
+```python
+# Python: str.removesuffix(suffix)
+"abc".removesuffix("c")             # "ab"
+```
+
+#### `str.splitlines() -> list[str]`
+
+按行边界（`\n` / `\r\n` 等）切分为行列表
+
+```python
+# Python: str.splitlines()
+"tab\tnl\n".splitlines()           # ["tab\t"]
+```
+
+#### `str.expandtabs(tabsize=8) -> str`
+
+把制表符展开为空格
+
+```python
+# Python: str.expandtabs(tabsize)
+"a\tb".expandtabs(4)                # "a   b"
+```
+
+#### `str.isascii() -> bool`
+
+所有字符均为 ASCII 时为真
+
+```python
+# Python: str.isascii()
+"abc".isascii()                     # True
+```
+
+#### `str.isdecimal() -> bool`
+
+所有字符均为十进制数字时为真
+
+```python
+# Python: str.isdecimal()
+"123".isdecimal()                   # True
+```
+
+#### `str.isidentifier() -> bool`
+
+为合法标识符时为真
+
+```python
+# Python: str.isidentifier()
+"_x".isidentifier()                 # True
+```
+
+#### `str.isnumeric() -> bool`
+
+所有字符均为数字字符（含 Unicode 数字）时为真
+
+```python
+# Python: str.isnumeric()
+"12".isnumeric()                    # True
+```
+
+#### `str.isprintable() -> bool`
+
+所有字符均可打印时为真
+
+```python
+# Python: str.isprintable()
+"ab".isprintable()                  # True
+```
+
 ---
 
 ### bytes 方法

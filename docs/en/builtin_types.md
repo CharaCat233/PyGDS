@@ -769,6 +769,132 @@ Same as `str.format`, but takes the values for named placeholders from a mapping
 "{x}".format_map({"x": 42})         # "42"
 ```
 
+#### `str.index(sub, start=0, end=...) -> int`
+
+Like `find`, but raises `ValueError` when the substring is missing
+
+```python
+# Python: str.index(sub, start, end)
+"abcabc".index("b", 2)              # 4
+```
+
+#### `str.rfind(sub, start=0, end=...) -> int`
+
+Search from the right; returns the highest index or -1 when missing
+
+```python
+# Python: str.rfind(sub, start, end)
+"abcabc".rfind("b")                 # 4
+```
+
+#### `str.rindex(sub, start=0, end=...) -> int`
+
+Like `rfind`, but raises `ValueError` when the substring is missing
+
+```python
+# Python: str.rindex(sub, start, end)
+"abcabc".rindex("b", 0, 4)          # 1
+```
+
+#### `str.partition(sep) -> tuple`
+
+Split at the first separator into a `(head, sep, tail)` tuple; when missing, the last two items are empty strings
+
+```python
+# Python: str.partition(sep)
+"a1b2".partition("1")               # ("a", "1", "b2")
+```
+
+#### `str.rpartition(sep) -> tuple`
+
+Split at the last separator into the three-tuple; when missing, the first two items are empty strings
+
+```python
+# Python: str.rpartition(sep)
+"a1b2".rpartition("1")              # ("a1b", "1", "2")
+```
+
+#### `str.removeprefix(prefix) -> str`
+
+Remove the given prefix; returned unchanged when absent
+
+```python
+# Python: str.removeprefix(prefix)
+"abc".removeprefix("ab")            # "c"
+```
+
+#### `str.removesuffix(suffix) -> str`
+
+Remove the given suffix; returned unchanged when absent
+
+```python
+# Python: str.removesuffix(suffix)
+"abc".removesuffix("c")             # "ab"
+```
+
+#### `str.splitlines() -> list[str]`
+
+Split into lines at line boundaries (`\n` / `\r\n` etc.)
+
+```python
+# Python: str.splitlines()
+"tab\tnl\n".splitlines()           # ["tab\t"]
+```
+
+#### `str.expandtabs(tabsize=8) -> str`
+
+Expand tabs into spaces
+
+```python
+# Python: str.expandtabs(tabsize)
+"a\tb".expandtabs(4)                # "a   b"
+```
+
+#### `str.isascii() -> bool`
+
+True when all characters are ASCII
+
+```python
+# Python: str.isascii()
+"abc".isascii()                     # True
+```
+
+#### `str.isdecimal() -> bool`
+
+True when all characters are decimal digits
+
+```python
+# Python: str.isdecimal()
+"123".isdecimal()                   # True
+```
+
+#### `str.isidentifier() -> bool`
+
+True for a valid identifier
+
+```python
+# Python: str.isidentifier()
+"_x".isidentifier()                 # True
+```
+
+#### `str.isnumeric() -> bool`
+
+True when all characters are numeric (including Unicode digits)
+
+```python
+# Python: str.isnumeric()
+"12".isnumeric()                    # True
+```
+
+#### `str.isprintable() -> bool`
+
+True when all characters are printable
+
+```python
+# Python: str.isprintable()
+"ab".isprintable()                  # True
+```
+
 ---
 
 ### bytes Methods

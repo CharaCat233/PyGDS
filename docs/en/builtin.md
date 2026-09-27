@@ -263,22 +263,26 @@ abs(-42)                 # 42
 abs(-3.14)               # 3.14
 ```
 
-### `min(iterable)` / `min(a, b, ...)`
+### `min(iterable, key=None, default=...)` / `min(a, b, ...)`
 
-Corresponds to Python `min()`, returning the minimum value.
+Equivalent to Python `min()`; returns the smallest value. `key` extracts the comparison key, `default` is returned when the iterable is empty
 
 ```python
 min([3, 1, 4, 1, 5])     # 1
 min(3, 1, 4)             # 1
+min(["bb", "a"], key=len)  # "a"
+min([], default="empty")   # empty
 ```
 
-### `max(iterable)` / `max(a, b, ...)`
+### `max(iterable, key=None, default=...)` / `max(a, b, ...)`
 
-Corresponds to Python `max()`, returning the maximum value.
+Equivalent to Python `max()`; returns the largest value. `key` extracts the comparison key, `default` is returned when the iterable is empty
 
 ```python
 max([3, 1, 4, 1, 5])     # 5
 max(3, 1, 4)             # 4
+max(["bb", "a"], key=len)  # "bb"
+max([], default=0)         # 0
 ```
 
 ### `sum(iterable, start=0)`
@@ -307,13 +311,14 @@ Corresponds to Python `divmod()`, returning a tuple of quotient and remainder.
 divmod(10, 3)            # (3, 1)
 ```
 
-### `sorted(iterable, reverse=False)`
+### `sorted(iterable, key=None, reverse=False)`
 
-Corresponds to Python `sorted()`, returning a new sorted list.
+Corresponds to Python `sorted()`, returning a new sorted list. `key` extracts the sort key, `reverse` switches to descending order
 
 ```python
 sorted([3, 1, 2])        # [1, 2, 3]
 sorted([3, 1, 2], reverse=True)  # [3, 2, 1]
+sorted(["bb", "a"], key=len)     # ["a", "bb"]
 ```
 
 ### `reversed(seq)`
@@ -735,6 +740,7 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 | `Counter(iterable)` | Element counting; missing keys return 0 (backed by defaultdict(int)) |
 | `Counter.most_common(n=None)` | Returns `[(element, count)]` sorted by count descending (ties by insertion order) |
 | `defaultdict(default_factory[, init_dict])` | Missing keys automatically call the factory to create a default value |
+| `namedtuple(typename, field_names)` | Generates an immutable tuple subclass with named fields; `field_names` is a whitespace/comma-separated string or an iterable of strings; instances support indexing, iteration, unpacking and field-name access, and the class provides `_fields` / `_make(iterable)` / `_replace(**kw)` plus the instance method `_asdict()` |
 
 ```python
 from collections import Counter, defaultdict
@@ -743,6 +749,16 @@ c = Counter("abc"); c["z"]   # 0
 c.most_common()              # [('a', 1), ('b', 1), ('c', 1)]
 c.most_common(1)             # [('a', 1)]
 dd = defaultdict(list); dd["a"].append(1)   # dd["a"] → [1]
+
+Point = namedtuple("Point", "x y")
+p = Point(1, 2)
+print(p.x, p.y, p[0], len(p))               # 1 2 1 2
+print(repr(p))                              # Point(x=1, y=2)
+print(list(p), p == (1, 2))                 # [1, 2] True
+print(Point._fields)                        # ('x', 'y')
+q = Point._make([7, 8])._replace(y=9)
+print(q)                                    # Point(x=7, y=9)
+print(p._asdict()["x"])                     # 1
 ```
 
 ### `operator` Module

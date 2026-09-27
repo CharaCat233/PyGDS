@@ -351,6 +351,22 @@ int("0x1f", 0)      # 31 (自动识别十六进制前缀)
 int("-ff", 16)      # -255 (支持符号)
 ```
 
+### `...`（Ellipsis）
+
+`...` 是 `Ellipsis` 单例字面量，可用于表达式位置与函数体占位：
+
+```python
+x = ...
+print(x)                # Ellipsis
+print(type(x))          # <class 'ellipsis'>
+print(... is ...)       # True
+
+def stub():
+    ...                 # 占位函数体
+
+print(stub())           # None (无返回值)
+```
+
 ### 运算符
 
 | 类别 | 运算符 |
@@ -1654,9 +1670,9 @@ print(1.0 / 3.0)  # 浮点精度一致, 但字符串表示可能不同
 
 | 方法 | 与 Python 的差异 |
 | :--- | :--- |
-| `strip()` | 使用 Godot 的 `strip_edges()`，行为与 Python 的 `.strip()` 有细微差异 |
+| `strip()` 家族 | `strip(chars)` / `lstrip(chars)` / `rstrip(chars)` 已支持 `chars` 参数，行为与 Python 一致 |
 | `split()` | 支持 `maxsplit` 参数，与 Python 一致 |
-| `find()` | 仅支持单参数查找，不支持 `start`/`end` 范围参数 |
+| `find()` 家族 | `find` / `rfind` / `index` / `rindex` 均支持 `start` / `end` 范围参数，与 Python 一致 |
 
 ---
 

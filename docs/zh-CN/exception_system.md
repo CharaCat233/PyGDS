@@ -135,12 +135,13 @@ func _exception_init(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSL
     var pos_args: Array[DSLObject] = []
     for i in range(1, exc_args.size()):
         pos_args.append(exc_args[i])        # 收集位置参数
-    var msg = ""
-    if pos_args.size() > 0:
-        msg = pos_args[0]._dsl_str()        # 第一个参数 = 消息
+    var msg = _exception_message(wrapper.klass, pos_args)  # 按 str() 规则计算消息
     var exc = DSLException.new(msg, wrapper.klass.name, pos_args)
     wrapper._wrapped = exc                  # 将 DSLException 存入 _wrapped
     wrapper.fields["args"] = DSLTuple.new(pos_args)  # 将参数存入 args
+    # 因果链默认值: 无 from 时 __cause__ 为 None, __suppress_context__ 为 False
+    wrapper.fields["__cause__"] = _wrap(null)
+    wrapper.fields["__suppress_context__"] = _wrap(false)
     return DSLNone.new()
 ```
 
@@ -161,6 +162,7 @@ TypeError("bad type")
     │  创建 DSLException(msg="bad type", error_type="TypeError", args=[DSLString("bad type")])
     │  存入 wrapper._wrapped
     │  存入 wrapper.fields["args"]
+    │  写入 __cause__ / __suppress_context__ 默认字段
     │
     ▼
 4. 返回 DSLObject (wrapper)
@@ -171,6 +173,7 @@ TypeError("bad type")
 - `e.args` 返回一个 `DSLTuple`，包含传递给异常构造函数的参数
 - `e._wrapped` 存储底层的 `DSLException` 对象
 - `str(e)` 通过 `_exception_str` 回调获取字符串表示
+- `e.__cause__` 与 `e.__suppress_context__` 总是可读（无 `from` 子句时为 `None` / `False`）
 
 ---
 
@@ -208,7 +211,7 @@ print(e.args)     # ("bad type",)
 | 1 个 | 参数的 `str` | `TypeError('bad type')` | `('bad type',)` |
 | 多个 | 参数元组 | `TypeError('a', 'b')` | `('a', 'b')` |
 
-`KeyError` 是特例：`str(e)` 取参数的 **repr**（`KeyError("k")` 显示为 `'k'`，`KeyError(1)` 显示为 `1`，`{}.popitem()` 显示为 `'popitem(): dictionary is empty'`）
+`KeyError` 是特例：`str(e)` 取参数的 **repr**（`KeyError("k")` 显示为 `'k'`，`KeyError(1)` 显示为 `1`，`{}.popitem()` 显示为 `'popitem(): dictionary is empty'`）。该特例沿异常类（或用户异常子类）的 MRO 判定——`class KE(KeyError)` 的实例同样按键 repr 输出
 
 解释器内部站点（字典取值、`pop` / `popitem`、集合 `remove` / `pop` 等）通过 `last_error` 传递错误，其中 `KeyError` 站点会同时记录原始参数对象于 `last_error_args`，经 `raise_exception_from_last_error` 转为异常时保证 `str` / `repr` / `args` 三者一致
 

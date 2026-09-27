@@ -263,22 +263,26 @@ abs(-42)                 # 42
 abs(-3.14)               # 3.14
 ```
 
-### `min(iterable)` / `min(a, b, ...)`
+### `min(iterable, key=None, default=...)` / `min(a, b, ...)`
 
-对应 Python `min()`，返回最小值
+对应 Python `min()`，返回最小值；`key` 为取比较键的函数，`default` 为可迭代对象为空时的返回值
 
 ```python
 min([3, 1, 4, 1, 5])     # 1
 min(3, 1, 4)             # 1
+min(["bb", "a"], key=len)  # "a"
+min([], default="empty")   # empty
 ```
 
-### `max(iterable)` / `max(a, b, ...)`
+### `max(iterable, key=None, default=...)` / `max(a, b, ...)`
 
-对应 Python `max()`，返回最大值
+对应 Python `max()`，返回最大值；`key` 为取比较键的函数，`default` 为可迭代对象为空时的返回值
 
 ```python
 max([3, 1, 4, 1, 5])     # 5
 max(3, 1, 4)             # 4
+max(["bb", "a"], key=len)  # "bb"
+max([], default=0)         # 0
 ```
 
 ### `sum(iterable, start=0)`
@@ -307,13 +311,14 @@ pow(2, 3, 5)             # 3
 divmod(10, 3)            # (3, 1)
 ```
 
-### `sorted(iterable, reverse=False)`
+### `sorted(iterable, key=None, reverse=False)`
 
-对应 Python `sorted()`，返回排序后的新列表
+对应 Python `sorted()`，返回排序后的新列表；`key` 为取排序键的函数，`reverse` 为降序开关
 
 ```python
 sorted([3, 1, 2])        # [1, 2, 3]
 sorted([3, 1, 2], reverse=True)  # [3, 2, 1]
+sorted(["bb", "a"], key=len)     # ["a", "bb"]
 ```
 
 ### `reversed(seq)`
@@ -734,6 +739,7 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 | `Counter(iterable)` | 元素计数，缺失键返回 0（底层为 defaultdict(int)） |
 | `Counter.most_common(n=None)` | 按出现次数降序返回 `[(元素, 次数)]` 列表，同次数按插入顺序 |
 | `defaultdict(default_factory[, init_dict])` | 缺失键自动调用工厂创建默认值 |
+| `namedtuple(typename, field_names)` | 生成带命名字段的不可变元组子类；`field_names` 为空白 / 逗号分隔的字符串或字符串可迭代对象；实例支持下标、迭代、解包与按字段名访问，类上提供 `_fields` / `_make(iterable)` / `_replace(**kw)` / 实例方法 `_asdict()` |
 
 ```python
 from collections import Counter, defaultdict
@@ -742,6 +748,16 @@ c = Counter("abc"); c["z"]   # 0
 c.most_common()              # [('a', 1), ('b', 1), ('c', 1)]
 c.most_common(1)             # [('a', 1)]
 dd = defaultdict(list); dd["a"].append(1)   # dd["a"] → [1]
+
+Point = namedtuple("Point", "x y")
+p = Point(1, 2)
+print(p.x, p.y, p[0], len(p))               # 1 2 1 2
+print(repr(p))                              # Point(x=1, y=2)
+print(list(p), p == (1, 2))                 # [1, 2] True
+print(Point._fields)                        # ('x', 'y')
+q = Point._make([7, 8])._replace(y=9)
+print(q)                                    # Point(x=7, y=9)
+print(p._asdict()["x"])                     # 1
 ```
 
 ### `operator` 模块

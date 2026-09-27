@@ -348,6 +348,22 @@ print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
 - **No rebinding a comprehension iteration variable**: an assignment expression whose target matches a loop target of this or any enclosing comprehension is rejected. It applies to the element, keys/values, conditions and later clauses' iterables of list/set/dict/generator comprehensions. The protection does not cross `lambda` / `def` boundaries (`[lambda: (i := 0) for i in range(3)]` is legal).
 - **No assignment expression in a comprehension iterable expression**: name-independent — any assignment expression in a comprehension's `for ... in <here>` is rejected, including when nested inside a `lambda` or an inner comprehension.
 
+### `...` (Ellipsis)
+
+`...` is the `Ellipsis` singleton literal, usable in expression positions and as a function-body placeholder:
+
+```python
+x = ...
+print(x)                # Ellipsis
+print(type(x))          # <class 'ellipsis'>
+print(... is ...)       # True
+
+def stub():
+    ...                 # placeholder body
+
+print(stub())           # None (no return value)
+```
+
 ### Operators
 
 | Category | Operators |
@@ -1657,9 +1673,9 @@ print(1.0 / 3.0)  # Floating point precision is consistent, but string represent
 
 | Method | Differences from Python |
 | :--- | :--- |
-| `strip()` | Uses Godot's `strip_edges()`, behavior has subtle differences from Python's `.strip()` |
-| `split()` | Supports `maxsplit` parameter, consistent with Python |
-| `find()` | Only supports single-parameter lookup, does not support `start`/`end` range parameters |
+| `strip()` family | `strip(chars)` / `lstrip(chars)` / `rstrip(chars)` support the `chars` parameter, consistent with Python |
+| `split()` | Supports the `maxsplit` parameter, consistent with Python |
+| `find()` family | `find` / `rfind` / `index` / `rindex` all support the `start` / `end` range parameters, consistent with Python |
 
 ---
 

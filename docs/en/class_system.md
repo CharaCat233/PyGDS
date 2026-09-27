@@ -197,7 +197,7 @@ MyClass(args...)
 DSLClass.magic_call(args, kwargs)
     ↓
     1. _lookup_method("__new__")
-       → Look up __new__ along the inheritance chain
+       → Look up __new__ along the MRO
        → Defaults to object.__new__ (api_object_new)
     ↓
     2. _invoke_func(new_func, [class, ...args], kwargs)
@@ -209,7 +209,7 @@ DSLClass.magic_call(args, kwargs)
        → No → return instance directly
     ↓
     4. _lookup_method("__init__")
-       → Look up __init__ along the inheritance chain
+       → Look up __init__ along the MRO
        → Defaults to object.__init__ (pass) or the type's api_*_init
     ↓
     5. _invoke_func(init_func, [instance, ...args], kwargs)
@@ -280,8 +280,8 @@ func api_int_init(args, _kwargs):
 When a user defines a class without specifying a base class, the base class is automatically set to `object` in `PyGDS.Interpreter.execute_class`.
 
 ```gdscript
-if superclass_obj == null and stmt.name != "object":
-    superclass_obj = environment.get_val("object")
+if base_objs.is_empty() and stmt.name != "object":
+    base_objs.append(environment.get_val("object"))
 ```
 
 Thus:
@@ -295,7 +295,7 @@ The `object` class itself has a base class of `null`, marking the end of the inh
 
 ### Initialization of the `object` Class
 
-The `object` class is processed by `execute_class`, at which point `superclass_obj == null` and `stmt.name == "object"`, so it is not given any base class.
+The `object` class is processed by `execute_class`, at which point `base_objs == []` and `stmt.name == "object"`, so it is not given any base class.
 
 ---
 
@@ -309,12 +309,13 @@ Their `__new__` is bound to `api_<type>_new` (returning a raw DSLObject), and `_
 
 `PyGDS.Interpreter.execute_class` handles user-defined classes (including `object` itself).
 
-1. **Evaluate base class**: If `ClassStmt` has a `superclass` expression, evaluate it to get a `DSLClass`; otherwise default to `object`.
-2. **Collect methods and class attributes**:
-   - `FunctionStmt` → Create `DSLFunction`, store in `methods`
-   - `ExpressionStmt(Assign)` (class-level assignment) → Evaluate and store in `class_attrs`
-3. **Create DSLClass**: `DSLClass.new(name, superclass, methods, self)`
-4. **Register in environment**: `environment.define(name, class_obj)`, making the class name visible in the scope.
+1. **Evaluate the base class list**: evaluate each expression in `ClassStmt.bases` and validate it as a `DSLClass`; when the list is empty and the class is not named `object`, default to `object`.
+2. **Consistency checks** (before the class body runs): duplicate direct base check, C3 linearization (raising `TypeError` on conflict), instance layout conflict check.
+3. **Collect methods and class attributes**:
+   - `FunctionStmt` → create a `DSLFunction`, store in `methods`
+   - `ExpressionStmt(Assign)` (class-level assignment) → evaluate and store in `class_attrs`
+4. **Create DSLClass**: `DSLClass.new(name, first_base, methods, self)`, then set `bases` and recompute the MRO.
+5. **Register in the environment**: `environment.define(name, class_obj)` makes the class name visible in scope.
 
 ### `_inject_builtin_methods` Details
 

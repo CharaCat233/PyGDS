@@ -2,6 +2,45 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.6.0-alpha.6] - 2026-09-27
+
+本版修复全量扫描发现的三个 P0 级缺陷（P0-14 短路求值、P0-15 增强赋值静默终止、P0-16 `del` 括号目标）与六项功能缺口（P1-36 `...` 字面量、P1-37 `collections.namedtuple`、P1-44 反射运算符、P1-45 类体作用域、P1-46 property 内 `super()`、P1-47 用户自定义描述符、P1-48 `min` / `max` 的 `default`、P1-49 `__getitem__` 旧式迭代）
+
+### 新增
+
+- **`and` / `or` 短路求值（P0-14）**：二元求值对逻辑运算特判——先求左操作数，按真值决定是否求值右操作数；右操作数的副作用与异常在 CPython 不会发生时不再发生，返回值仍为命中的操作数本身
+- **`...`（Ellipsis）字面量（P1-36）**：`...` 为 `Ellipsis` 单例（`print(...)` 输出 `Ellipsis`，`type(...)` 为 `<class 'ellipsis'>`，`... is ...` 为 `True`），可用于函数体占位、默认值与注解位置；`ellipsis` 类型类仅经 `type()` 可见，不是内建名（与 CPython 一致）
+- **`collections.namedtuple`（P1-37）**：`namedtuple(typename, field_names)` 生成带命名字段的元组子类；实例支持下标（含负数）、`len`、迭代、解包、按字段名访问与 `repr`（`Point(x=1, y=2)`），`==` 与元组及同族实例按值比较；类上提供 `_fields` / `_make(iterable)` / `_replace(**kw)`，实例提供 `_asdict()`；字段名接受空白 / 逗号分隔字符串或字符串可迭代对象；错误文案对齐 CPython 的 `__new__` 形式
+- **反射运算符（P1-44）**：左操作数无法处理时尝试右操作数的 `__radd__` / `__rsub__` / `__rmul__` / `__rtruediv__` / `__rfloordiv__` / `__rpow__` / `__rmod__` / `__ror__`（如 `10 + Money(5)`）；左操作数为内建类型且右操作数定义了 `__eq__` / `__ne__` 时先走右操作数（CPython 的 `NotImplemented` 语义，如 `1 == Money(1)`）；反射方法内抛出的异常照常传播
+- **类体作用域（P1-45）**：方法默认参数与类体内推导式在定义期可读取类体变量（`class E:` 中 `def f(self, k=default)` 与 `squares = [x * x for x in vals]` 可用）；方法体本身仍只沿外层作用域解析（CPython 细则）；默认参数按定义期求值一次缓存
+- **property 内的 `super()`（P1-46）**：getter / setter / deleter 调用时正确设置方法上下文，零参 `super()` 可用于属性访问器；新增 `super().__setattr__` 语义（先 `__get__` 取候选值，仅当其可写时写入，与 CPython 一致）
+- **用户自定义描述符（P1-47）**：用户类实例定义 `__get__` / `__set__` 时按描述符协议分派——类访问以 `(null, 类)` 调用 `__get__`、实例访问以 `(实例, 类)` 调用，`__set__` 优先于实例字段写入
+- **`min` / `max` 的 `default` 参数（P1-48）**：可迭代对象为空时返回 `default`（未提供时仍报 `ValueError`）
+- **`__getitem__` 旧式迭代协议（P1-49）**：仅定义 `__getitem__` 的对象可被 `for` / `list()` / `sum()` / 解包等消费，按下标连续迭代，`IndexError` 结束（用户 `raise` 与内部站点两种通道均支持），其余错误照常传播
+
+### 修复
+
+- **切片增强赋值与用户类原地方法静默终止脚本（P0-15）**：`lst[0:1] *= 2` 与用户类 `__iadd__` 等原地运算（`+=` / `-=` / `*=` / `/=` / `//=` / `**=` / `%=` / `|=`）此前静默终止脚本（无输出无报错），现按 CPython 语义执行：原地方法优先于普通二元方法，结果替换原绑定；增强赋值的失败路径改为明确异常（属性 / 下标缺失报 `AttributeError` / `TypeError`，未定义变量报可捕获的 `NameError`）
+- **`del (b,)` 括号元组目标静默无效（P0-16）**：`del (a, b)` / `del [a, b]` 及嵌套形式现正确删除各目标；对字面量目标明确报 `SyntaxError`
+- **二元运算错误传播**：用户方法内已抛出的真实异常不再被反射重试或错误改写覆盖，原样向上传播并可被 `except` 按类型捕获
+
+### 破坏性变更 (Breaking Changes)
+
+- **`and` / `or` 求值时序变更**：右操作数不再被无条件求值。依赖「右操作数总是执行」副作用的代码（不符合 Python 语义）行为改变
+- **增强赋值失败从静默变为报错**：此前静默终止脚本的写法（切片增强赋值、用户类未定义原地方法）现按 CPython 报 `TypeError`
+
+### 测试
+
+- 新增 8 个测试并入 `expected.json`（共 232 个用例全部通过，既有条目 `expected` 零变更）：行为类 `lang_bool_shortcircuit`（副作用顺序 / 防错惯用法 / 操作数返回）、`lang_assign_aug`（切片增强赋值 / 原地方法 / 错误可捕获 / `del` 括号目标）、`lang_reflect_ops`（`__radd__` 族 / 反射比较 / 左侧优先 / 异常传播）、`lang_class_body_scope`（默认参数与推导式读类体变量 / 方法体不读 / property 内 `super()`）、`lang_user_descriptor`（`__get__` 类与实例访问 / `__set__` 校验拦截）、`lang_getitem_iter`（旧式迭代全消费形态 / 其余错误传播）、`lang_ellipsis`（单例语义 / 占位 / 默认值）、`lang_namedtuple`（字段访问 / 迭代解包 / 比较 / `_fields` / `_make` / `_replace` / `_asdict` / 错误文案）
+- 挂起测试 22 个用例通过；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/builtin.md` 与 `docs/en/builtin.md`：`min` / `max` 补 `default` 说明与示例，`collections` 模块补 `namedtuple` 行与示例（双侧实测）
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md` 新增「`...`（Ellipsis）」小节（双侧实测）
+- README 与 README_EN「已知问题与限制」章节标注上述各项已修复
+- 已知问题清单移除 P0-14 ~ P0-16、P1-36 ~ P1-37、P1-44 ~ P1-49；`CHANGELOG` 新增 `[0.6.0-alpha.6]` 版本节
+
 ## [0.6.0-alpha.5] - 2026-09-27
 
 本版实现：类的多继承。DSLClass 引入直接基类列表与 C3 线性化缓存，全部沿单父链遍历的查找点迁移为 MRO 迭代，`super()` 改为沿实例（或类）MRO 的协作式查找
