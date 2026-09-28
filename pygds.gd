@@ -3044,18 +3044,19 @@ class DSLObject:
 			# 保留负零符号 (CPython: repr(-0.0) == '-0.0'); Godot 的 str() 会丢失负零符号, 用除法检测
 			return "-0.0" if 1.0 / v < 0.0 else "0.0"
 		# 最短往返表示: 从 1 位有效数字起逐步加长, 直到解析回原值
+		# 候选按 d 位有效数字的科学计数串生成, 不经宿主 printf (见 _sig_digits_string_of)
+		var av: float = abs(v)
+		var dec = _decimal_digits_of(av)
 		var shortest := ""
 		for d in range(1, 18):
-			var cand := String.num(v, d)
-			if float(cand) == v:
+			var cand := _sig_digits_string_of(dec[0], dec[1], d)
+			if float(cand) == av:
 				shortest = cand
 				break
 		if shortest == "":
-			shortest = String.num(v, 17)
-		# 符号单独处理, 数字串分析只针对 |v|, 负号不得参与指数与有效数字计算
-		var neg := shortest.begins_with("-")
-		if neg:
-			shortest = shortest.substr(1)
+			shortest = _sig_digits_string_of(dec[0], dec[1], 17)
+		# 数字串分析只针对 |v|, 符号在拼接时补回 (负零已在零值分支处理)
+		var neg := v < 0.0
 		# 取十进制指数以决定是否使用科学计数法
 		var mantissa := shortest
 		var exp10 := 0
@@ -3103,6 +3104,96 @@ class DSLObject:
 		else:
 			body = "0." + "0".repeat(-exp10 - 1) + trimmed
 		return "-" + body if neg else body
+
+	## 分解 |x| = m * 2^e, m 为 [2^52, 2^53) 内整数, 返回 [m, e] (x 为 0 时调用方先行处理)
+	static func _decompose_double(ax: float) -> Array:
+		var v = ax
+		var e = 0
+		while v >= 2.0:
+			v /= 2.0
+			e += 1
+		while v < 1.0:
+			v *= 2.0
+			e -= 1
+		var m = int(v * 4503599627370496.0)
+		return [m, e - 52]
+
+	## |x| 的精确十进制展开 (高位在前数字串 + 小数位数) [br]
+	## x = m * 2^ep: ep >= 0 时数字为 m*2^ep (整数), ep < 0 时数字为 m*5^|ep| 且小数 |ep| 位 [br]
+	## 二进制浮点的十进制展开有限且精确
+	static func _decimal_digits_of(ax: float) -> Array:
+		var dec = _decompose_double(ax)
+		var m = dec[0]
+		var ep = dec[1]
+		var dg: Array = []
+		var mm = m
+		while mm > 0:
+			dg.insert(0, mm % 10)
+			mm = mm / 10
+		var frac_len = 0
+		if ep >= 0:
+			for i in range(ep):
+				_digits_mul(dg, 2)
+		else:
+			for i in range(-ep):
+				_digits_mul(dg, 5)
+			frac_len = -ep
+			while dg.size() <= frac_len:
+				dg.insert(0, 0)
+		return [dg, frac_len]
+
+	## 十进制数字串 (高位在前) 乘 small (2 或 5)
+	static func _digits_mul(dg: Array, m: int) -> void:
+		var carry = 0
+		for i in range(dg.size() - 1, -1, -1):
+			var t = dg[i] * m + carry
+			dg[i] = t % 10
+			carry = t / 10
+		while carry > 0:
+			dg.insert(0, carry % 10)
+			carry = carry / 10
+
+	## 由精确十进制展开构造 d 位有效数字的科学计数串 (半到偶舍入) [br]
+	## 不经宿主 printf: 各 C 运行库对超大值的定点展开位数不同, 定点候选会破坏跨平台一致的最短往返搜索
+	## [param dg] 高位在前数字串 [br]
+	## [param frac_len] 小数位数 [br]
+	## [param d] 有效数字位数
+	static func _sig_digits_string_of(dg: Array, frac_len: int, d: int) -> String:
+		var s = 0
+		while s < dg.size() and dg[s] == 0:
+			s += 1
+		var exp10: int = dg.size() - frac_len - 1 - s
+		var kept: Array = []
+		for i in range(d):
+			var idx = s + i
+			kept.append(dg[idx] if idx < dg.size() else 0)
+		var next_digit = 0
+		var rest_nonzero = false
+		var nd = s + d
+		if nd < dg.size():
+			next_digit = dg[nd]
+			for i in range(nd + 1, dg.size()):
+				if dg[i] != 0:
+					rest_nonzero = true
+					break
+		var round_up = next_digit > 5 or (next_digit == 5 and rest_nonzero) or (next_digit == 5 and not rest_nonzero and kept[d - 1] % 2 == 1)
+		if round_up:
+			var i = d - 1
+			while i >= 0:
+				kept[i] += 1
+				if kept[i] < 10:
+					break
+				kept[i] = 0
+				i -= 1
+			if i < 0:
+				kept.insert(0, 1)
+				exp10 += 1
+		var body := ""
+		for digit in kept:
+			body += str(digit)
+		if body.length() == 1:
+			return body + "e" + str(exp10)
+		return body.substr(0, 1) + "." + body.substr(1) + "e" + str(exp10)
 
 	static func _py_repr(obj: DSLObject) -> String:
 		var o = obj
@@ -23146,18 +23237,6 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		return t.to_float()
 		
-	## round(x, ndigits) - 四舍五入
-	## 十进制数字串 (高位在前) 乘 small (2 或 5)
-	func _digits_mul(dg: Array, m: int) -> void:
-		var carry = 0
-		for i in range(dg.size() - 1, -1, -1):
-			var t = dg[i] * m + carry
-			dg[i] = t % 10
-			carry = t / 10
-		while carry > 0:
-			dg.insert(0, carry % 10)
-			carry = carry / 10
-
 	## 十进制数字串 (高位在前) 除以 2, 移出位按低位在前追加到 bits
 	func _digits_div2(dg: Array, bits: Array) -> void:
 		var carry = 0
@@ -23173,43 +23252,6 @@ order (MRO) for bases %s" % ", ".join(names))
 		for d in dg:
 			v = v * 10 + d
 		return v
-
-	## 分解 |x| = m * 2^e, m 为 [2^52, 2^53) 内整数, 返回 [m, e] (x 为 0 时调用方先行处理)
-	func _decompose_double(ax: float) -> Array:
-		var v = ax
-		var e = 0
-		while v >= 2.0:
-			v /= 2.0
-			e += 1
-		while v < 1.0:
-			v *= 2.0
-			e -= 1
-		var m = int(v * 4503599627370496.0)
-		return [m, e - 52]
-
-	## |x| 的精确十进制展开 (高位在前数字串 + 小数位数) [br]
-	## x = m * 2^ep: ep >= 0 时数字为 m*2^ep (整数), ep < 0 时数字为 m*5^|ep| 且小数 |ep| 位 [br]
-	## 二进制浮点的十进制展开有限且精确
-	func _decimal_digits_of(ax: float) -> Array:
-		var dec = _decompose_double(ax)
-		var m = dec[0]
-		var ep = dec[1]
-		var dg: Array = []
-		var mm = m
-		while mm > 0:
-			dg.insert(0, mm % 10)
-			mm = mm / 10
-		var frac_len = 0
-		if ep >= 0:
-			for i in range(ep):
-				_digits_mul(dg, 2)
-		else:
-			for i in range(-ep):
-				_digits_mul(dg, 5)
-			frac_len = -ep
-			while dg.size() <= frac_len:
-				dg.insert(0, 0)
-		return [dg, frac_len]
 
 	## round(x, n) 的浮点统一实现: 取 |x| 的精确十进制展开, 在小数点后 n 位处半到偶舍入 [br]
 	## n 可为负 (整数部分低位舍入); 基于二进制精确值, 与 CPython 的 Correct Rounding 一致 [br]
@@ -23228,7 +23270,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			return DSLFloat.new(ax)
 		if n < 0 and vx >= 9007199254740992.0 * pow(10.0, float(a)):
 			return DSLFloat.new(ax)
-		var dec = _decimal_digits_of(vx)
+		var dec = DSLObject._decimal_digits_of(vx)
 		var dg: Array = dec[0]
 		var frac_len: int = dec[1]
 		var cut = dg.size() - frac_len + n
