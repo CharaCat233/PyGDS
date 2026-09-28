@@ -344,19 +344,19 @@ PyGDS 的实例系统分为三条路径：
 
 | 类型 | `__new__` 返回类型 | 说明 |
 | :--- | :--- | :--- |
-| 内置类型 (`int(5)`) | `DSLObject` | 直接返回 `DSLInteger`/`DSLFloat`/`DSLString`/`DSLList`/`DSLTuple`/`DSLDict`/`DSLBool`，`klass` 指向对应内置类型 |
+| 内置类型 (`int(5)`) | `DSLObject` | 直接返回 `DSLInteger`/`DSLFloat`/`DSLString`/`DSLList`/`DSLTuple`/`DSLDict`/`DSLBool`；`int` 返回驻留池共享实例且 `klass` 为空（与字面量一致，类型解析走内置类型表），其余类型 `klass` 指向对应内置类型 |
 | 继承内置类型 (`MyInt(5)`) | `DSLObject` | 返回 `DSLInteger`，但 `klass` 指向子类（`MyInt_class`），通过 MRO 正确查找父类方法 |
 | 纯用户自定义类 (`Foo()`) | `DSLObject` | `fields = {}` 存储实例属性（对应 Python `__dict__`），`klass` 指向类定义 |
 | 异常类型 | `DSLObject` | `_wrapped` 存储 `DSLException` 原始对象 |
 
 - 所有 DSLObject 均有 `klass` 字段（对标 CPython `PyObject.ob_type`），实现统一类型查找
-- 内置类型构造函数（如 `int(5)`、`str("hello")`）通过各自的 `api_*_new` 函数直接返回原始 `DSLObject`，`klass` 指向内置类型
+- 内置类型构造函数（如 `int(5)`、`str("hello")`）通过各自的 `api_*_new` 函数直接返回原始 `DSLObject`；`int` 返回驻留池共享实例（`klass` 为空，与字面量一致），其余类型 `klass` 指向内置类型
 - 继承内置类型的用户子类（如 `class MyInt(int)`）实例化后返回原始 DSLObject，`klass` 指向子类
 - `DSLObject` 直接作为纯用户自定义类实例（`fields = {}`）和异常实例（`_wrapped` 存 DSLException）
 
 ```txt
 实例体系：
-  内置类型构造:  int(5) → DSLInteger { klass → int_class }
+  内置类型构造:  int(5) → DSLInteger(驻留池共享) { klass → null, 与字面量一致 }
   子类构造:      MyInt(5) → DSLInteger { klass → MyInt_class }
   纯用户类构造:  Foo() → DSLObject { fields={}, klass → Foo_class }
   异常构造:      Exception() → DSLObject { _wrapped → DSLException, klass → Exception_class }

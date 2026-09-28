@@ -2,6 +2,48 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.6.0-alpha.7] - 2026-09-29
+
+本版实现已知问题清单排期条目 `P0-13` 与 `P2-17` ~ `P2-26` 共 11 项（含此前已单独入库的 `P2-18` 小整数驻留），并对收尾回归中发现的三处连带缺陷一并修复
+
+### 新增
+
+- **内建装饰器组合的包装语义（P2-17）**：`@staticmethod` / `@classmethod` / `@property` 与任意装饰器组合时，内建形式改经真实的包装对象承载——staticmethod 包装原样返回持有对象（实例访问不传 `self`），classmethod 包装绑定所属类，property 包装持有装饰后的 getter，行为与 CPython 的重新包装一致；包装对象实现 `__get__` 描述符协议与调用转发，在类访问、实例访问、`super()`、魔术方法回退等路径正确解包；纯单一内建形式仍走 `method_type` 快速路径，既有用法不受影响
+- **函数类型名（P2-20）**：`type(fn).__name__` 为 `function`，内建函数与绑定方法分别为 `builtin_function_or_method` / `method`；三个类型类仅经 `type()` 可见，不是内建名
+- **内省属性（P2-21）**：实例 `__class__` 返回所属类（含内建值按类型名解析），类 `__dict__` 返回只读 `mappingproxy`（写入报 `TypeError`，`type(C.__dict__).__name__` 为 `mappingproxy`），异常实例补 `__traceback__`（返回 `None`）；`getattr` / `hasattr` / 属性赋值目标等访问路径同步覆盖
+- **`defaultdict` repr（P2-22）**：输出 `defaultdict(<class 'int'>, {...})` 形式，工厂为 `None` 等取值与 CPython 一致；构造器支持无参
+- **`__slots__`（P2-23）**：实例赋值沿 MRO 收集 slots 白名单，链上全部类声明 slots 时白名单外的属性赋值报 `AttributeError`（消息对齐 CPython），slots 实例不带 `__dict__`；继承链取并集，任一类未声明时不限制
+- **`itertools.groupby` 惰性 grouper（P2-24）**：`groupby` 产出 `(key, grouper)` 对，grouper 为与外层共享游标的惰性一次性迭代器——外层推进后旧 grouper 立即耗尽，不再提前快照；`iter(groupby_obj)` 直通本体
+- **`zip(strict=True)`（P2-26）**：接受 `strict` 关键字参数，某可迭代对象先耗尽而其余仍有剩余时报 `ValueError`，文案对齐 CPython 的 `zip() argument N is shorter/longer than argument 1`（多参数时 `arguments 1-j` 形式）
+- **小整数驻留（P2-18）**：`DSLInteger` 引入静态驻留池，`-5..256` 范围内的等值整数共享同一实例，`is` 身份语义与 `CPython` 对齐；字面量、`int()` 转换、算术结果、`len()`、`range` 迭代计数等全部整数创建路径统一经驻留池；`True` / `False` 单例与 `id()` 一致性不受影响
+
+### 修复
+
+- **整数溢出明确报 `OverflowError`（P0-13）**：加 / 减 / 乘 / 幂 / 左移 / 一元负号 / 整除与 `abs()` 在结果超出 int64 时报 `OverflowError`（如 `integer addition exceeds 64-bit range`），超长字面量与 `int()` 的字符串、浮点转换同样报错，不再静默环绕；移位计数为负对齐 CPython 报 `ValueError: negative shift count`；`(-2) ** 63` 恰为最小整数、`9223372036854775807 // -1` 之外范围内运算结果不变；`bool` 算术（`True + True`）不受影响；连带拦截宿主层 `int64min // -1` 组合的挂死
+- **`UnboundLocalError`（P2-19）**：函数局部名静态收集（赋值 / 增强赋值 / for 目标 / 解包 / walrus / 嵌套 def / 类 / import / except as / del / match 捕获，剔除 `global` / `nonlocal`），读取未赋值局部名改抛 `UnboundLocalError: cannot access local variable 'x' where it is not associated with a value`（`NameError` 子类，可被两者捕获）；模块层仍为 `NameError`
+- **`round()` 二进制精确银行家舍入（P2-25）**：`round(2.675, 2)` 为 `2.67`（此前为 `2.68`），`round(0.5)` / `round(2.5)` 半到偶，负 ndigits 与整数入参按 `10**a` 半到偶，超大值窗口内原样返回；实现基于 53 位尾数的精确十进制展开与串上半到偶，连带修复零值入参的规格化死循环与负小浮点 repr 的符号污染（`print(-1e-09)` 此前输出十进制展开）
+- **CRLF 行尾解析（连带发现）**：源码为 CRLF 行尾时，类体 / 函数体内空行会误触缩进处理产出 `DEDENT`/`INDENT`，导致随后解析报 `Unexpected token ''`；现空行（含 CRLF）不再参与缩进处理，Windows 环境常见行尾可正常解析
+
+### 破坏性变更 (Breaking Changes)
+
+- **整数溢出从静默环绕变为报 `OverflowError`**：依赖环绕行为（不符合 Python 语义）的代码行为改变；CPython 为无限精度整数，超出 int64 的运算是既定的明确报错差异
+- **`round()` 中程值舍入结果变化**：`round(2.675, 2)` 等十进制中程值从「远离零」改为与 CPython 一致的二进制精确银行家舍入
+- **函数内未绑定局部名从 `NameError` 变为 `UnboundLocalError`**：两者为父子关系，`except NameError` 仍可捕获
+
+### 测试
+
+- 新增 11 个测试并入 `expected.json`（共 243 个用例全部通过，既有条目 `expected` 零变更）：`lang_int_intern`（驻留身份与转换路径）、`lang_fn_types`（函数类型名）、`lang_introspect`（`__class__` / `__dict__` / `__traceback__`）、`edge_defaultdict_repr`（工厂 repr）、`lang_zip_strict`（strict 双向文案）、`lang_unbound_local`（局部名收集与消息）、`edge_slots`（白名单与继承）、`lang_groupby_lazy`（惰性 grouper 与过期耗尽）、`lang_round_exact`（边界值银行家舍入与零值符号）、`lang_builtin_decorators`（组合包装语义与反序形态）、`lang_int_overflow`（int64 边界与移位语义）
+- 挂起测试 22 个用例通过；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md`：数字字面量小节补整数范围与 `OverflowError` 说明，装饰器组合段更新为语义保留
+- `docs/zh-CN/builtin.md` 与 `docs/en/builtin.md`：`round` 补银行家舍入与边界示例，`zip` 补 `strict`，`groupby` 更新为惰性 grouper 语义
+- `docs/zh-CN/class_system.md` 与 `docs/en/class_system.md`：装饰器一节更新包装对象机制
+- `docs/zh-CN/exception_system.md` 与 `docs/en/exception_system.md`：异常层级补 `UnboundLocalError`
+- `architecture.md` 中英同步驻留池语义、`mappingproxy` 与 grouper 共享游标状态类
+- README 与 README_EN「已知问题与限制」章节移除 `P2-17`；已知问题清单移除 `P0-13` 与 `P2-17` ~ `P2-26`
+
 ## [0.6.0-alpha.6] - 2026-09-27
 
 本版修复全量扫描发现的三个 P0 级缺陷（P0-14 短路求值、P0-15 增强赋值静默终止、P0-16 `del` 括号目标）与六项功能缺口（P1-36 `...` 字面量、P1-37 `collections.namedtuple`、P1-44 反射运算符、P1-45 类体作用域、P1-46 property 内 `super()`、P1-47 用户自定义描述符、P1-48 `min` / `max` 的 `default`、P1-49 `__getitem__` 旧式迭代）

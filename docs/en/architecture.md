@@ -344,19 +344,19 @@ PyGDS's instance system has three paths:
 
 | Type | `__new__` Return Type | Description |
 | :--- | :--- | :--- |
-| Built-in types (`int(5)`) | `DSLObject` | Directly returns `DSLInteger`/`DSLFloat`/`DSLString`/`DSLList`/`DSLTuple`/`DSLDict`/`DSLBool`, `klass` points to the corresponding built-in type |
+| Built-in types (`int(5)`) | `DSLObject` | Directly returns `DSLInteger`/`DSLFloat`/`DSLString`/`DSLList`/`DSLTuple`/`DSLDict`/`DSLBool`; `int` returns a shared interned instance with `klass` left null (consistent with literals, type resolution goes through the built-in type table), other types have `klass` pointing to the corresponding built-in type |
 | Subclassing built-in types (`MyInt(5)`) | `DSLObject` | Returns `DSLInteger`, but `klass` points to the subclass (`MyInt_class`), correctly finds parent methods via MRO |
 | Pure user-defined classes (`Foo()`) | `DSLObject` | `fields = {}` stores instance attributes (corresponding to Python `__dict__`), `klass` points to the class definition |
 | Exception types | `DSLObject` | `_wrapped` stores the raw `DSLException` object |
 
 - All DSLObjects have a `klass` field (modeled after CPython `PyObject.ob_type`), enabling unified type lookup.
-- Built-in type constructors (e.g., `int(5)`, `str("hello")`) directly return the raw `DSLObject` via their respective `api_*_new` functions, with `klass` pointing to the built-in type.
+- Built-in type constructors (e.g., `int(5)`, `str("hello")`) directly return the raw `DSLObject` via their respective `api_*_new` functions; `int` returns a shared interned instance (`klass` left null, consistent with literals), other types have `klass` pointing to the built-in type.
 - User subclasses that inherit from built-in types (e.g., `class MyInt(int)`) return the raw DSLObject after instantiation, with `klass` pointing to the subclass.
 - `DSLObject` directly serves as pure user-defined class instances (`fields = {}`) and exception instances (`_wrapped` stores DSLException).
 
 ```txt
 Instance System:
-  Built-in type construction:  int(5) → DSLInteger { klass → int_class }
+  Built-in type construction:  int(5) → DSLInteger(interned, shared) { klass → null, consistent with literals }
   Subclass construction:       MyInt(5) → DSLInteger { klass → MyInt_class }
   Pure user class construction: Foo() → DSLObject { fields={}, klass → Foo_class }
   Exception construction:      Exception() → DSLObject { _wrapped → DSLException, klass → Exception_class }

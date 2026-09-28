@@ -439,7 +439,7 @@ ro.area = 100       # AttributeError: can't set attribute
 | 类体方法 | `methods[name]` 建立之后（property / setter / deleter 场景下装饰的是 `DSLProperty` 对象） |
 | `class` 定义 | `DSLClass` 创建并绑定到环境之后 |
 
-装饰器表达式经 `evaluate()` 通道求值，内部的 `time.sleep` 挂起向上返回 `SUSPENDED` 交回语句重放；装饰对象为类体方法时传入的是未绑定的 `DSLFunction`。当装饰器返回包装函数替换原对象时，`method_type` 承载的静态方法 / 类方法 / property 包装语义不保留
+装饰器表达式经 `evaluate()` 通道求值，内部的 `time.sleep` 挂起向上返回 `SUSPENDED` 交回语句重放；装饰对象为类体方法时传入的是未绑定的 `DSLFunction`。当装饰器返回包装函数替换原对象时，内建形式改经真实的包装对象承载语义：staticmethod 包装原样返回持有对象，classmethod 包装绑定所属类，property 包装持有装饰后的 getter；包装对象实现 `__get__` 描述符协议与调用转发，`method_type` 快速路径仅在纯单一内建形式时保留
 
 ---
 

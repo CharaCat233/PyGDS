@@ -247,11 +247,15 @@ repr([1, 2, 3])          # "[1, 2, 3]"
 
 ### `round(number, ndigits=0)`
 
-对应 Python `round()`，对数字进行四舍五入
+对应 Python `round()`，基于二进制精确值做银行家舍入（半到偶），中程值的舍入方向与 CPython 一致
 
 ```python
 round(3.14)              # 3
 round(3.14, 1)           # 3.1
+round(2.675, 2)          # 2.67 (二进制精确值低于十进制中程)
+round(2.5)               # 2
+round(0.5)               # 0
+round(1234, -2)          # 1200
 ```
 
 ### `abs(x)`
@@ -354,12 +358,16 @@ it3 = iter(g())
 print(list(it3), list(it3))     # [1] [] (生成器耗尽后不可重复消费)
 ```
 
-### `zip(*iterables)`
+### `zip(*iterables, strict=False)`
 
-对应 Python `zip()`，并行迭代多个可迭代对象
+对应 Python `zip()`，并行迭代多个可迭代对象；`strict=True` 时若某个可迭代对象先耗尽而其余仍有剩余，报 `ValueError`
 
 ```python
 list(zip([1, 2], ["a", "b"]))  # [(1, "a"), (2, "b")]
+try:
+    list(zip([1, 2], [3], strict=True))
+except ValueError as e:
+    print(e)                     # zip() argument 2 is shorter than argument 1
 ```
 
 ### `any(iterable)`
@@ -705,7 +713,7 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `dropwhile(predicate, iterable)` | 丢弃满足谓词的开头元素，其余原样返回 |
 | `accumulate(iterable[, func][, initial])` | 前缀累积（默认加法，可传 `func` 与 `initial`） |
 | `pairwise(iterable)` | 相邻元素配对，返回长度为 n-1 的元组列表 |
-| `groupby(iterable, key=None)` | 相邻分组，返回 `[(key, [元素...]), ...]` |
+| `groupby(iterable, key=None)` | 相邻分组，产出 `(key, grouper)` 对；grouper 为与外层共享游标的惰性一次性迭代器，外层推进后旧 grouper 立即耗尽 |
 | `starmap(func, iterable)` | 用每组参数解包调用 `func`，返回结果列表 |
 
 ```python
@@ -730,7 +738,7 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 ```
 
 > **注意**：这些函数当前返回完整的 `list`（`list(chain(...))` 直接得到结果，不需要再包一层 `list()`）。无限对象（`repeat`/`cycle`/`count`）必须配合 `islice`/`takewhile` 等惰性消费，不能直接 `list()`
-> `groupby` 保持相邻分组语义（相同键不相邻时会分成多组），且组本身已是 `list`，无需再转换
+> `groupby` 保持相邻分组语义（相同键不相邻时会分成多组）；grouper 为惰性迭代器，消费时用 `list(g)` 转换，且只能消费一次
 
 ### `collections` 模块
 

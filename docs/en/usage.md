@@ -264,6 +264,8 @@ int("0x1f", 0)      # 31 (auto-detects the hex prefix)
 int("-ff", 16)      # -255 (signs are supported)
 ```
 
+**Integer range**: PyGDS `int` is a 64-bit signed integer, which differs fundamentally at the representation level from CPython `int` (arbitrary precision, never overflows): literals, arithmetic (add / sub / mul / pow / left shift / unary minus / floor division), and `int()` conversions from strings or floats raise an explicit `OverflowError` when the result falls outside `[-9223372036854775808, 9223372036854775807]`, and a negative shift count raises `ValueError`; CPython computes the same operations exactly at arbitrary precision. This is a documented divergence between the two (silent wrapping was removed in favour of an explicit error); full alignment would require an arbitrary-precision integer implementation, an architectural change. Boundary behavior within range matches CPython (e.g. `(-2) ** 63` is exactly the minimum integer, and odd powers of negative bases are legal)
+
 ### Dictionary Merge and Unpacking (Python 3.9+)
 
 `dict` supports the `|` / `|=` merge operators and `{**a, **b}` literal unpacking; the right side overrides the left on duplicate keys:

@@ -53,6 +53,7 @@ Exception                          # Base class
 │   └── StatisticsError            # Statistics error (raised by the statistics module)
 ├── RuntimeError                   # Runtime error
 ├── NameError                      # Name error
+│   └── UnboundLocalError          # Unbound local variable
 ├── KeyError                       # Key error
 ├── IndexError                     # Index error
 ├── AttributeError                 # Attribute error
@@ -112,6 +113,7 @@ _define_exception("TypeError")                  # Defaults to inheriting from Ex
 _define_exception("ValueError")
 _define_exception("RuntimeError")
 _define_exception("NameError")
+_define_exception("UnboundLocalError", "NameError")        # parent specified
 _define_exception("KeyError")
 _define_exception("IndexError")
 _define_exception("AttributeError")

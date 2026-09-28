@@ -186,7 +186,7 @@ dsl.run()
 
 ### P0 — 静默错值
 
-v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节
+v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节。P0-13（整数超出 int64 范围静默环绕）已在 v0.6.0-alpha.7 修复为明确报 `OverflowError`；仍需注意的既定差异：PyGDS 的 `int` 为 64 位有符号整数，CPython 的 `int` 为任意精度整数（永不溢出），超出 int64 的运算 PyGDS 明确报错而 CPython 给出精确结果，彻底对齐需任意精度整数架构（经评估暂缓），行为详见 `docs/zh-CN/usage.md` 的数字字面量小节
 
 ### P1 — 明确报错或功能缺失
 
@@ -205,7 +205,6 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
 | P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案与「语句尾部冗余 Token」已对齐；括号未闭合的文案已在 **v0.5.0-alpha.6** 对齐（`'(' was never closed`）。其余解析期错误的措辞与行号格式仍可能不同（如缺冒号、未结束字符串） |
 | P2-4 | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致 |
-| P2-17 | 内建装饰器形式与返回包装函数的装饰器组合时包装语义不保留 | `@staticmethod` / `@classmethod` / `@property` 与任意装饰器组合时，若装饰器返回包装函数替换原函数，静态方法 / 类方法 / property 的包装语义丢失（如 `c.f(3)` 会向包装函数传入 `self`）；装饰器返回原函数的注册类场景不受影响 |
 
 ### 平台限制
 

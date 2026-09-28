@@ -247,11 +247,15 @@ Corresponds to Python `hash()`, returning the hash value of an object.
 
 ### `round(number, ndigits=0)`
 
-Corresponds to Python `round()`, rounding a number to a given precision.
+Corresponds to Python `round()`, performing banker's rounding (half to even) on the exact binary value; the direction for mid-point values matches CPython.
 
 ```python
 round(3.14)              # 3
 round(3.14, 1)           # 3.1
+round(2.675, 2)          # 2.67 (exact binary value is below the decimal mid-point)
+round(2.5)               # 2
+round(0.5)               # 0
+round(1234, -2)          # 1200
 ```
 
 ### `abs(x)`
@@ -354,12 +358,16 @@ it3 = iter(g())
 print(list(it3), list(it3))     # [1] [] (a generator cannot be consumed again once exhausted)
 ```
 
-### `zip(*iterables)`
+### `zip(*iterables, strict=False)`
 
-Corresponds to Python `zip()`, iterating over multiple iterables in parallel.
+Corresponds to Python `zip()`, iterating over multiple iterables in parallel; with `strict=True`, if one iterable is exhausted while others still have items left, a `ValueError` is raised.
 
 ```python
 list(zip([1, 2], ["a", "b"]))  # [(1, "a"), (2, "b")]
+try:
+    list(zip([1, 2], [3], strict=True))
+except ValueError as e:
+    print(e)                     # zip() argument 2 is shorter than argument 1
 ```
 
 ### `any(iterable)`
@@ -706,7 +714,7 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `dropwhile(predicate, iterable)` | Drop elements while the predicate holds, then return the rest |
 | `accumulate(iterable[, func][, initial])` | Prefix accumulation (addition by default; `func` and `initial` supported) |
 | `pairwise(iterable)` | Adjacent pairs; returns n-1 tuples |
-| `groupby(iterable, key=None)` | Adjacent grouping; returns `[(key, [elements...]), ...]` |
+| `groupby(iterable, key=None)` | Adjacent grouping; yields `(key, grouper)` pairs where each grouper is a lazy one-shot iterator sharing a cursor with the outer iteration, and a grouper is exhausted as soon as the outer iteration advances |
 | `starmap(func, iterable)` | Calls `func` with each row unpacked as arguments; returns a list of results |
 
 ```python
@@ -731,7 +739,7 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 ```
 
 > **Note**: These functions currently return a full `list` (`list(chain(...))` directly gives the result; no extra `list()` wrap is needed). The infinite objects (`repeat`/`cycle`/`count`) must be consumed lazily via `islice`/`takewhile`; do not call `list()` directly on them.
-> `groupby` keeps adjacent-grouping semantics (the same key split by other keys yields several groups), and each group is already a `list`, so no conversion is needed.
+> `groupby` keeps adjacent-grouping semantics (the same key split by other keys yields several groups); each grouper is a lazy iterator consumed via `list(g)` and can be consumed only once.
 
 ### `collections` Module
 

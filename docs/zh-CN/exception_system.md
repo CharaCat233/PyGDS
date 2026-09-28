@@ -53,6 +53,7 @@ Exception                          # 根基类
 │   └── StatisticsError            # 统计错误 (statistics 模块抛出)
 ├── RuntimeError                   # 运行时错误
 ├── NameError                      # 名称错误
+│   └── UnboundLocalError          # 未绑定局部变量
 ├── KeyError                       # 键错误
 ├── IndexError                     # 索引错误
 ├── AttributeError                 # 属性错误
@@ -112,6 +113,7 @@ _define_exception("TypeError")                  # 默认继承自 Exception
 _define_exception("ValueError")
 _define_exception("RuntimeError")
 _define_exception("NameError")
+_define_exception("UnboundLocalError", "NameError")        # 指定父类
 _define_exception("KeyError")
 _define_exception("IndexError")
 _define_exception("AttributeError")

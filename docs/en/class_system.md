@@ -439,7 +439,7 @@ The interpreter's `_apply_decorators()` runs after the function / class object i
 | Class-body methods | After `methods[name]` is established (for property / setter / deleter the decorated object is the `DSLProperty`) |
 | `class` definitions | After the `DSLClass` is created and bound into the environment |
 
-Decorator expressions are evaluated through the `evaluate()` channel, so a `time.sleep` suspension inside them returns `SUSPENDED` upward for statement replay; class-body methods pass the unbound `DSLFunction` to the decorator. When a decorator returns a wrapper function that replaces the original, the static-method / class-method / property wrapping carried by `method_type` is not preserved
+Decorator expressions are evaluated through the `evaluate()` channel, so a `time.sleep` suspension inside them returns `SUSPENDED` upward for statement replay; class-body methods pass the unbound `DSLFunction` to the decorator. When a decorator returns a wrapper function that replaces the original, the built-in forms carry their semantics through real wrapper objects: the staticmethod wrapper returns the held object as-is, the classmethod wrapper binds the owning class, and the property wrapper holds the decorated getter; wrapper objects implement the `__get__` descriptor protocol and call forwarding, while the `method_type` fast path remains only for a single pure built-in form
 
 ---
 

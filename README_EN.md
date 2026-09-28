@@ -186,7 +186,7 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 ### P0 — Silent Wrong Values
 
-The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`
+The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`. P0-13 (silent wrapping for integers beyond the int64 range) was fixed in v0.6.0-alpha.7 to raise an explicit `OverflowError`; one standing divergence remains: PyGDS `int` is a 64-bit signed integer while CPython `int` has arbitrary precision (it never overflows), so out-of-range operations raise an explicit error in PyGDS where CPython produces the exact result; full alignment would require an arbitrary-precision integer architecture (evaluated and deferred), see the integer-literals section of `docs/en/usage.md` for behavior
 
 ### P1 — Clear Errors or Missing Features
 
@@ -205,7 +205,6 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3
 | P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
 | P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` and for trailing redundant tokens are aligned; the unclosed-bracket message was aligned in **v0.5.0-alpha.6** (`'(' was never closed`). Wording and line-number formatting of other parse-time errors may still differ (e.g. a missing colon, an unterminated string) |
 | P2-4 | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match |
-| P2-17 | Built-in decorator forms lose their wrapping when combined with wrapper-returning decorators | When `@staticmethod` / `@classmethod` / `@property` is combined with an arbitrary decorator that returns a wrapper function, the static-method / class-method / property wrapping is lost (e.g. `c.f(3)` passes `self` into the wrapper); registry-style decorators that return the original function are unaffected |
 
 ### Platform Limitations
 
