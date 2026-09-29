@@ -3360,6 +3360,63 @@ class DSLObject:
 		last_error = "TypeError: %s indices must be integers or slices, not %s" % [_type_name(), idx._type_name()]
 		return null
 		
+	
+	## 序列下标整型转换的失败哨兵 (int64 最小值; 站点侧以下标本身是 DSLInteger 排除该合法值的歧义)
+	const INDEX_ERR: int = -9223372036854775807 - 1
+	
+	
+	## 序列下标转整数 (__index__ 协议): DSLInteger 直接取值, DSLBool 按 0/1, 其余经用户类 __index__ [br]
+	## __index__ 返回非 int 时把 CPython 同文案 TypeError 写入 err_obj.last_error [br]
+	## [param idx] 下标对象 [br]
+	## [param err_obj] 接收错误文案的容器对象 (可为 null) [br]
+	## [returns] 转换后的整数, 失败返回 INDEX_ERR
+	static func _seq_index_int(idx: DSLObject, err_obj: DSLObject = null) -> int:
+		if idx is DSLInteger:
+			return idx.value
+		if idx is DSLBool:
+			return 1 if idx.value else 0
+		if idx.klass != null:
+			var method = idx.klass._lookup_method("__index__")
+			if method != null:
+				var res = idx.klass._invoke_func(method, [idx] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if res is DSLInteger:
+					return res.value
+				if res is DSLBool:
+					return 1 if res.value else 0
+				if res != null and err_obj != null:
+					err_obj.last_error = "TypeError: __index__ returned non-int (type %s)" % res._type_name()
+		return INDEX_ERR
+		
+	
+	## 下标转换失败 (INDEX_ERR) 的收尾: report 有在途异常时不写文案 (用户 __index__ 内 raise 照常传播) [br]
+	## err_obj.last_error 已有内容时保留 (如 __index__ 返回非 int 的文案) [br]
+	## [param idx] 原下标对象 (用于错误文案的类型名) [br]
+	## [param err_obj] 接收错误文案的容器对象 [br]
+	## [param msg] 站点文案模板 (含 %s 时以下标类型名替换, 无 %s 时原样写入)
+	static func _seq_index_fail(idx: DSLObject, err_obj: DSLObject, msg: String):
+		var ip = Interpreter.active
+		if ip != null and ip.report.has_error:
+			return
+		if err_obj.last_error == "":
+			err_obj.last_error = msg % idx._type_name() if msg.contains("%s") else msg
+		
+	
+	## 序列下标规范化: 成功返回整型 DSLInteger, 失败时错误文案就位并返回 null [br]
+	## 供各容器 getitem / setitem / delitem 的整数下标站点使用 [br]
+	## [param idx] 下标对象 [br]
+	## [param err_obj] 接收错误文案的容器对象 [br]
+	## [param msg] 站点文案模板 (规则同 _seq_index_fail) [br]
+	## [returns] 规范化后的 DSLInteger, 失败返回 null
+	static func _norm_seq_index(idx: DSLObject, err_obj: DSLObject, msg: String):
+		var i = _seq_index_int(idx, err_obj)
+		if i == INDEX_ERR and not (idx is DSLInteger):
+			_seq_index_fail(idx, err_obj, msg)
+			return null
+		if i == INDEX_ERR:
+			return idx
+		return DSLInteger.pooled(i)
+		
+	
 	## 生成算术运算类型错误 [br]
 	## 设置 last_error 并返回 null [br]
 	## [param op] 运算符字符串 [br]
@@ -5334,33 +5391,35 @@ class DSLString extends DSLObject:
 	func magic_getitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var index = args[1]
-		if index is DSLInteger:
-			var i = index.value
-			if i < 0:
-				i = i + self_obj.value.length()
-			if i < 0 or i >= self_obj.value.length():
-				self_obj.last_error = "IndexError: string index out of range"
-				return null
-			return DSLString.new(self_obj.value[i])
 		if index is DSLSlice:
 			var s = self_obj.value
+			# 分量换算按 CPython 次序: step -> start -> stop, 转换经 _seq_index_int (bool 与 __index__ 协议)
+			var step_val = 1
+			if index.step != null and not index.step is DSLNone:
+				step_val = DSLObject._seq_index_int(index.step, self_obj)
+				if step_val == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.step, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
 			# 零步长: CPython 报 ValueError (不走此校验会静默返回空串)
-			if index.step != null and not index.step is DSLNone and index.step is DSLInteger and index.step.value == 0:
+			if step_val == 0:
 				self_obj.last_error = "ValueError: slice step cannot be zero"
 				return null
-			var start_idx = s.length() - 1 if (index.step != null and not index.step is DSLNone and index.step.value < 0) else 0
-			var stop_idx = -1 if (index.step != null and not index.step is DSLNone and index.step.value < 0) else s.length()
-			var step_val = 1
+			var start_idx = s.length() - 1 if step_val < 0 else 0
+			var stop_idx = -1 if step_val < 0 else s.length()
 			if index.start != null and not index.start is DSLNone:
-				start_idx = index.start.value
+				start_idx = DSLObject._seq_index_int(index.start, self_obj)
+				if start_idx == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.start, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
 				if start_idx < 0:
 					start_idx = start_idx + s.length()
 			if index.stop != null and not index.stop is DSLNone:
-				stop_idx = index.stop.value
+				stop_idx = DSLObject._seq_index_int(index.stop, self_obj)
+				if stop_idx == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.stop, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
 				if stop_idx < 0:
 					stop_idx = stop_idx + s.length()
-			if index.step != null and not index.step is DSLNone:
-				step_val = index.step.value
 			var result = ""
 			var i = start_idx
 			if step_val > 0:
@@ -5374,7 +5433,16 @@ class DSLString extends DSLObject:
 						result += s[i]
 					i = i + step_val
 			return DSLString.new(result)
-		return self_obj._index_type_error(index)
+		var idx_i = DSLObject._norm_seq_index(index, self_obj, "TypeError: %s indices must be integers or slices, not %%s" % self_obj._type_name())
+		if idx_i == null:
+			return null
+		var i = idx_i.value
+		if i < 0:
+			i = i + self_obj.value.length()
+		if i < 0 or i >= self_obj.value.length():
+			self_obj.last_error = "IndexError: string index out of range"
+			return null
+		return DSLString.new(self_obj.value[i])
 		
 	func magic_str(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
 		return DSLString.new(args[0].value)
@@ -6531,28 +6599,34 @@ class DSLList extends DSLObject:
 	func magic_getitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var index = args[1]
-		if index is DSLInteger:
-			var i = index.value
-			if i < 0:
-				i = i + self_obj.items.size()
-			if i < 0 or i >= self_obj.items.size():
-				self_obj.last_error = "IndexError: list index out of range"
-				return null
-			return self_obj.items[i]
 		if index is DSLSlice:
-			var start_idx = self_obj.items.size() - 1 if (index.step != null and not index.step is DSLNone and index.step.value < 0) else 0
-			var stop_idx = -1 if (index.step != null and not index.step is DSLNone and index.step.value < 0) else self_obj.items.size()
+			# 分量换算按 CPython 次序: step -> start -> stop, 转换经 _seq_index_int (bool 与 __index__ 协议)
 			var step_val = 1
+			if index.step != null and not index.step is DSLNone:
+				step_val = DSLObject._seq_index_int(index.step, self_obj)
+				if step_val == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.step, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
+			# 零步长: CPython 报 ValueError (list/tuple 的切片路径原缺此校验, 静默返回空序列)
+			if step_val == 0:
+				self_obj.last_error = "ValueError: slice step cannot be zero"
+				return null
+			var start_idx = self_obj.items.size() - 1 if step_val < 0 else 0
+			var stop_idx = -1 if step_val < 0 else self_obj.items.size()
 			if index.start != null and not index.start is DSLNone:
-				start_idx = index.start.value
+				start_idx = DSLObject._seq_index_int(index.start, self_obj)
+				if start_idx == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.start, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
 				if start_idx < 0:
 					start_idx = start_idx + self_obj.items.size()
 			if index.stop != null and not index.stop is DSLNone:
-				stop_idx = index.stop.value
+				stop_idx = DSLObject._seq_index_int(index.stop, self_obj)
+				if stop_idx == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.stop, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
 				if stop_idx < 0:
 					stop_idx = stop_idx + self_obj.items.size()
-			if index.step != null and not index.step is DSLNone:
-				step_val = index.step.value
 			var result = DSLList.new([])
 			var i = start_idx
 			if step_val > 0:
@@ -6566,22 +6640,32 @@ class DSLList extends DSLObject:
 						result.items.append(self_obj.items[i])
 					i = i + step_val
 			return result
-		return self_obj._index_type_error(index)
+		var idx_i = DSLObject._norm_seq_index(index, self_obj, "TypeError: %s indices must be integers or slices, not %%s" % self_obj._type_name())
+		if idx_i == null:
+			return null
+		var i = idx_i.value
+		if i < 0:
+			i = i + self_obj.items.size()
+		if i < 0 or i >= self_obj.items.size():
+			self_obj.last_error = "IndexError: list index out of range"
+			return null
+		return self_obj.items[i]
 	
 	func magic_setitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var index = args[1]
 		var value = args[2]
-		if index is DSLInteger:
-			var i = index.value
-			if i < 0:
-				i = i + self_obj.items.size()
-			if i < 0 or i >= self_obj.items.size():
-				self_obj.last_error = "IndexError: list assignment index out of range"
-				return null
-			self_obj.items[i] = value
-			return DSLNone.new()
-		return self_obj._index_type_error(index)
+		var idx_i = DSLObject._norm_seq_index(index, self_obj, "TypeError: %s indices must be integers or slices, not %%s" % self_obj._type_name())
+		if idx_i == null:
+			return null
+		var i = idx_i.value
+		if i < 0:
+			i = i + self_obj.items.size()
+		if i < 0 or i >= self_obj.items.size():
+			self_obj.last_error = "IndexError: list assignment index out of range"
+			return null
+		self_obj.items[i] = value
+		return DSLNone.new()
 	
 	func magic_str(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
 		return DSLString.new(args[0]._dsl_str())
@@ -6619,19 +6703,19 @@ class DSLList extends DSLObject:
 			# range 对象不可变 (CPython: 'range' object does not support item assignment)
 			last_error = "TypeError: 'range' object does not support item assignment"
 			return
-		if index is DSLInteger:
-			var i = index.value
-			if i < 0:
-				i = i + items.size()
-			if i < 0 or i >= items.size():
-				last_error = "IndexError: list assignment index out of range"
-				return
-			items[i] = value
-			return
 		if index is DSLSlice:
 			_slice_assign(index, value)
 			return
-		_index_type_error(index)
+		var idx_i = DSLObject._norm_seq_index(index, self, "TypeError: %s indices must be integers or slices, not %%s" % _type_name())
+		if idx_i == null:
+			return
+		var i = idx_i.value
+		if i < 0:
+			i = i + items.size()
+		if i < 0 or i >= items.size():
+			last_error = "IndexError: list assignment index out of range"
+			return
+		items[i] = value
 
 	## 切片赋值: 把目标区间替换为右侧可迭代的内容 (长度可变) [br]
 	## 步长非 1 时要求长度相等 (CPython: attempt to assign sequence of size N to extended slice of size M)
@@ -6682,8 +6766,12 @@ class DSLList extends DSLObject:
 			# range 对象不可变 (CPython: 'range' object doesn't support item deletion)
 			last_error = "TypeError: 'range' object doesn't support item deletion"
 			return
-		if index is DSLInteger:
-			var i = index.value
+		if not (index is DSLSlice):
+			# bool 与用户 __index__ 协议按整数下标处理 (CPython 语义, 文案与 CPython del 一致)
+			var idx_i = DSLObject._norm_seq_index(index, raw, "TypeError: %s indices must be integers or slices, not %%s" % raw._type_name())
+			if idx_i == null:
+				return
+			var i = idx_i.value
 			if i < 0:
 				i += raw.items.size()
 			if i < 0 or i >= raw.items.size():
@@ -6734,12 +6822,9 @@ class DSLList extends DSLObject:
 	static func _list_slice_indices(sl: DSLSlice, n: int, err_obj: DSLObject):
 		var pstep = 1
 		if sl.step != null and not sl.step is DSLNone:
-			if sl.step is DSLBool:
-				pstep = 1 if sl.step.value else 0
-			elif sl.step is DSLInteger:
-				pstep = sl.step.value
-			else:
-				err_obj.last_error = "TypeError: slice indices must be integers or slices, not %s" % sl.step._type_name()
+			pstep = DSLObject._seq_index_int(sl.step, err_obj)
+			if pstep == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(sl.step, err_obj, "TypeError: slice indices must be integers or slices, not %s")
 				return null
 		if pstep == 0:
 			err_obj.last_error = "ValueError: slice step cannot be zero"
@@ -6747,12 +6832,9 @@ class DSLList extends DSLObject:
 		var pstart = 0 if pstep > 0 else n - 1
 		var pstop = n if pstep > 0 else -1
 		if sl.start != null and not sl.start is DSLNone:
-			if sl.start is DSLBool:
-				pstart = 1 if sl.start.value else 0
-			elif sl.start is DSLInteger:
-				pstart = sl.start.value
-			else:
-				err_obj.last_error = "TypeError: slice indices must be integers or slices, not %s" % sl.start._type_name()
+			pstart = DSLObject._seq_index_int(sl.start, err_obj)
+			if pstart == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(sl.start, err_obj, "TypeError: slice indices must be integers or slices, not %s")
 				return null
 			if pstart < 0:
 				pstart += n
@@ -6761,12 +6843,9 @@ class DSLList extends DSLObject:
 			else:
 				pstart = clampi(pstart, -1, n - 1)
 		if sl.stop != null and not sl.stop is DSLNone:
-			if sl.stop is DSLBool:
-				pstop = 1 if sl.stop.value else 0
-			elif sl.stop is DSLInteger:
-				pstop = sl.stop.value
-			else:
-				err_obj.last_error = "TypeError: slice indices must be integers or slices, not %s" % sl.stop._type_name()
+			pstop = DSLObject._seq_index_int(sl.stop, err_obj)
+			if pstop == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(sl.stop, err_obj, "TypeError: slice indices must be integers or slices, not %s")
 				return null
 			if pstop < 0:
 				pstop += n
@@ -7114,28 +7193,34 @@ class DSLTuple extends DSLObject:
 	func magic_getitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var index = args[1]
-		if index is DSLInteger:
-			var i = index.value
-			if i < 0:
-				i = i + self_obj.items.size()
-			if i < 0 or i >= self_obj.items.size():
-				self_obj.last_error = "IndexError: tuple index out of range"
-				return null
-			return self_obj.items[i]
 		if index is DSLSlice:
-			var start_idx = self_obj.items.size() - 1 if (index.step != null and not index.step is DSLNone and index.step.value < 0) else 0
-			var stop_idx = -1 if (index.step != null and not index.step is DSLNone and index.step.value < 0) else self_obj.items.size()
+			# 分量换算按 CPython 次序: step -> start -> stop, 转换经 _seq_index_int (bool 与 __index__ 协议)
 			var step_val = 1
+			if index.step != null and not index.step is DSLNone:
+				step_val = DSLObject._seq_index_int(index.step, self_obj)
+				if step_val == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.step, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
+			# 零步长: CPython 报 ValueError (list/tuple 的切片路径原缺此校验, 静默返回空序列)
+			if step_val == 0:
+				self_obj.last_error = "ValueError: slice step cannot be zero"
+				return null
+			var start_idx = self_obj.items.size() - 1 if step_val < 0 else 0
+			var stop_idx = -1 if step_val < 0 else self_obj.items.size()
 			if index.start != null and not index.start is DSLNone:
-				start_idx = index.start.value
+				start_idx = DSLObject._seq_index_int(index.start, self_obj)
+				if start_idx == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.start, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
 				if start_idx < 0:
 					start_idx = start_idx + self_obj.items.size()
 			if index.stop != null and not index.stop is DSLNone:
-				stop_idx = index.stop.value
+				stop_idx = DSLObject._seq_index_int(index.stop, self_obj)
+				if stop_idx == DSLObject.INDEX_ERR:
+					DSLObject._seq_index_fail(index.stop, self_obj, "TypeError: slice indices must be integers or slices, not %s")
+					return null
 				if stop_idx < 0:
 					stop_idx = stop_idx + self_obj.items.size()
-			if index.step != null and not index.step is DSLNone:
-				step_val = index.step.value
 			var result = DSLTuple.new([])
 			var i = start_idx
 			if step_val > 0:
@@ -7149,7 +7234,16 @@ class DSLTuple extends DSLObject:
 						result.items.append(self_obj.items[i])
 					i = i + step_val
 			return result
-		return self_obj._index_type_error(index)
+		var idx_i = DSLObject._norm_seq_index(index, self_obj, "TypeError: %s indices must be integers or slices, not %%s" % self_obj._type_name())
+		if idx_i == null:
+			return null
+		var i = idx_i.value
+		if i < 0:
+			i = i + self_obj.items.size()
+		if i < 0 or i >= self_obj.items.size():
+			self_obj.last_error = "IndexError: tuple index out of range"
+			return null
+		return self_obj.items[i]
 	
 	func magic_str(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
 		return DSLString.new(args[0]._dsl_str())
@@ -8088,10 +8182,10 @@ class DSLBytes extends DSLObject:
 					out.append(data[i])
 					i += step
 			return DSLBytes.new(out)
-		if not (index is DSLInteger):
-			last_error = "TypeError: byte indices must be integers or slices, not %s" % index._type_name()
+		var idx_i = DSLObject._norm_seq_index(index, self, "TypeError: byte indices must be integers or slices, not %s")
+		if idx_i == null:
 			return null
-		var idx = index.value
+		var idx = idx_i.value
 		if idx < 0:
 			idx += data.size()
 		if idx < 0 or idx >= data.size():
@@ -8103,28 +8197,28 @@ class DSLBytes extends DSLObject:
 	func _slice_range(slice: DSLSlice, n: int):
 		var pstep = 1
 		if slice.step != null:
-			if not (slice.step is DSLInteger):
-				last_error = "TypeError: slice indices must be integers"
+			pstep = DSLObject._seq_index_int(slice.step, self)
+			if pstep == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(slice.step, self, "TypeError: slice indices must be integers")
 				return null
-			pstep = slice.step.value
 		if pstep == 0:
 			last_error = "ValueError: slice step cannot be zero"
 			return null
 		var pstart = 0 if pstep > 0 else n - 1
 		var pstop = n if pstep > 0 else -1
 		if slice.start != null:
-			if not (slice.start is DSLInteger):
-				last_error = "TypeError: slice indices must be integers"
+			pstart = DSLObject._seq_index_int(slice.start, self)
+			if pstart == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(slice.start, self, "TypeError: slice indices must be integers")
 				return null
-			pstart = slice.start.value
 			if pstart < 0:
 				pstart += n
 			pstart = clampi(pstart, (0 if pstep > 0 else -1), (n if pstep > 0 else n - 1))
 		if slice.stop != null:
-			if not (slice.stop is DSLInteger):
-				last_error = "TypeError: slice indices must be integers"
+			pstop = DSLObject._seq_index_int(slice.stop, self)
+			if pstop == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(slice.stop, self, "TypeError: slice indices must be integers")
 				return null
-			pstop = slice.stop.value
 			if pstop < 0:
 				pstop += n
 			pstop = clampi(pstop, (0 if pstep > 0 else -1), (n if pstep > 0 else n - 1))
@@ -10594,10 +10688,10 @@ class DSLRange extends DSLObject:
 			var new_stop = start + int(res[1]) * step
 			var new_step = step * int(res[2])
 			return DSLRange.new(new_start, new_stop, new_step)
-		if not (index is DSLInteger):
-			last_error = "TypeError: range indices must be integers or slices, not %s" % index._type_name()
+		var idx_i = DSLObject._norm_seq_index(index, self, "TypeError: range indices must be integers or slices, not %s")
+		if idx_i == null:
 			return null
-		var i = index.value
+		var i = idx_i.value
 		if i < 0:
 			i += n
 		if i < 0 or i >= n:
@@ -10611,10 +10705,10 @@ class DSLRange extends DSLObject:
 		var def_step = 1
 		var pstep = def_step
 		if slice.step != null:
-			if not (slice.step is DSLInteger):
-				last_error = "TypeError: slice indices must be integers"
+			pstep = DSLObject._seq_index_int(slice.step, self)
+			if pstep == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(slice.step, self, "TypeError: slice indices must be integers")
 				return null
-			pstep = slice.step.value
 		if pstep == 0:
 			last_error = "ValueError: slice step cannot be zero"
 			return null
@@ -10623,10 +10717,10 @@ class DSLRange extends DSLObject:
 		var pstart = lo if pstep > 0 else hi - 1
 		var pstop = hi if pstep > 0 else -1
 		if slice.start != null:
-			if not (slice.start is DSLInteger):
-				last_error = "TypeError: slice indices must be integers"
+			pstart = DSLObject._seq_index_int(slice.start, self)
+			if pstart == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(slice.start, self, "TypeError: slice indices must be integers")
 				return null
-			pstart = slice.start.value
 			if pstart < 0:
 				pstart += n
 			if pstep > 0:
@@ -10634,10 +10728,10 @@ class DSLRange extends DSLObject:
 			else:
 				pstart = clampi(pstart, lo - 1, hi - 1)
 		if slice.stop != null:
-			if not (slice.stop is DSLInteger):
-				last_error = "TypeError: slice indices must be integers"
+			pstop = DSLObject._seq_index_int(slice.stop, self)
+			if pstop == DSLObject.INDEX_ERR:
+				DSLObject._seq_index_fail(slice.stop, self, "TypeError: slice indices must be integers")
 				return null
-			pstop = slice.stop.value
 			if pstop < 0:
 				pstop += n
 			if pstep > 0:
@@ -12242,6 +12336,10 @@ class DSLFunctionGenerator extends DSLObject:
 			return _yielded_value
 		if res == 3:
 			return null
+		if res == 4:
+			# 步内发起程序挂起 (sleep 等): 原样交上层传播, 不得伪造 StopIteration
+			# (否则在途异常被 LastException 改写, 挂起恢复轮无法匹配原异常)
+			return null
 		interp.raise_stop_iteration_value(_result_value)
 		return null
 
@@ -12264,6 +12362,9 @@ class DSLFunctionGenerator extends DSLObject:
 		if res == 1:
 			return _yielded_value
 		if res == 3:
+			return null
+		if res == 4:
+			# 步内发起程序挂起: 原样交上层传播, 不得伪造 StopIteration (同 send)
 			return null
 		interp.raise_stop_iteration_value(_result_value)
 		return null
@@ -12314,6 +12415,9 @@ class DSLFunctionGenerator extends DSLObject:
 		if res == 1:
 			return _yielded_value
 		if res == 3:
+			return null
+		if res == 4:
+			# 步内发起程序挂起: 原样交上层传播, 不得伪造 StopIteration (同 send)
 			return null
 		interp.raise_stop_iteration_value(_result_value)
 		return null
@@ -15864,6 +15968,8 @@ class Interpreter:
 	var _sleep_waited: int = 0
 	## 重放根语句标识 (该语句正常结束时睡眠计数全部归零)
 	var _sleep_root_key: int = 0
+	## 挂起边界的在途异常暂存 (P0-22): report 错误通道在挂起期间对其隐身
+	var _parked_unwind_error: String = ""
 	## 当前正在执行的语句节点标识 (消费窗口按语句隔离)
 	var _current_stmt_key: int = 0
 	## 消费过程中发生挂起 (语句必须整体重放, 不能视为已完成)
@@ -19083,8 +19189,19 @@ class Interpreter:
 			raise_exception("TypeError", "slice is not supported on namedtuple fields here")
 			return null
 		if not (idx_obj is DSLInteger):
-			raise_exception("TypeError", "tuple indices must be integers")
-			return null
+			# bool 与用户 __index__ 协议按整数下标处理 (CPython 语义)
+			var idx_box = DSLObject.new()
+			var idx_iv = DSLObject._seq_index_int(idx_obj, idx_box)
+			if idx_iv != DSLObject.INDEX_ERR:
+				idx_obj = DSLInteger.pooled(idx_iv)
+			elif idx_box.last_error != "":
+				raise_exception_from_last_error(idx_box.last_error)
+				return null
+			elif Interpreter.active != null and Interpreter.active.report.has_error:
+				return null
+			else:
+				raise_exception("TypeError", "tuple indices must be integers or slices, not %s" % idx_obj._type_name())
+				return null
 		var idx: int = idx_obj.value
 		if idx < 0:
 			idx += fields.size()
@@ -19202,6 +19319,31 @@ class Interpreter:
 	func _make_builtin(name: String, method: Callable) -> DSLBuiltinFunction:
 		return DSLBuiltinFunction.new(name, method)
 		
+	## 在途异常的挂起暂存 (P0-22): finally 体内挂起时把 report 错误通道移入暂存 [br]
+	## interpret 收尾与恢复轮的块顶检查都把 has_error 当致命信号, 在途异常须对它们隐身 [br]
+	## last_exception 不动, 恢复后 except 匹配与异常链仍按它进行
+	func _park_unwind_error() -> void:
+		if last_exception != null and last_exception._type_name() == "GeneratorExit":
+			# close() 注入的 GeneratorExit 由 _dsl_close 的「结束即静默」约定处理:
+			# 不暂存 (其错误通道状态在 close 返回前被整体清除),
+			# 若暂存, 恢复轮的还原会让生成器耗尽式收尾被当作新错误致命化
+			return
+		if report.has_error:
+			_parked_unwind_error = report.last_error
+			report.has_error = false
+			report.last_error = ""
+
+	## 在途异常的还原 (P0-22): finally 恢复后正常完成时把暂存错误写回 report, 恢复正常传播
+	func _restore_unwind_error() -> void:
+		if _parked_unwind_error != "":
+			report.has_error = true
+			report.last_error = _parked_unwind_error
+			_parked_unwind_error = ""
+
+	## 在途异常的丢弃 (P0-22): finally 以 return/break/continue 或自身新异常终结时清空暂存
+	func _discard_unwind_error() -> void:
+		_parked_unwind_error = ""
+
 	## 开始解释执行 AST [br]
 	## [param statements] 顶层语句列表
 	func interpret(statements: Array) -> void:
@@ -19318,10 +19460,30 @@ class Interpreter:
 					_sleep_waited = 0
 				# 保存下次恢复的位置
 				if _expr_evaluated:
-					# 表达式已求值, 跳过当前语句 (如独立语句形式的 sleep)
-					frame.pc = i
 					_expr_evaluated = false
-					frame["replay_head"] = false
+					if _suspend_reason == SuspendReason.SLEEPING and _current_generator == null:
+						# 程序睡眠的语句整句重跑: 睡眠去重按「重放轮遇到次序」计号,
+						# 跳过会使同帧内位于其后的睡眠序号前移而被误去重 (P0-22 修复方向 2);
+						# 重跑时本轮序号小于已等待数, 立即返回, 不重复等待。
+						# 生成器步内除外: 其 sleep 不参与序号去重 (每次遇到都是真等待),
+						# 重跑会翻倍等待, 进度由生成器自身挂起状态保证
+						frame.pc = i - 1
+						frame["replay_head"] = true
+					else:
+						# 其余挂起形态 (如 WAITING) 重执行会重复发起等待, 维持跳过;
+						# 若本语句是睡眠重放根则立即收尾消费窗口
+						# (根键只靠「根语句完成」归零, 不重放的根语句会使根键泄漏,
+						# 同一重放根之后的独立睡眠会被按序号误去重, P0-22 修复方向 2)
+						frame.pc = i
+						frame["replay_head"] = false
+						if _suspend_reason != SuspendReason.YIELD and _stmt_key(stmt) == _sleep_root_key:
+							_clear_stmt_window(stmt)
+							_clear_gen_memo(stmt)
+							_call_retired.clear()
+							_sleep_seq = 0
+							_sleep_skip = 0
+							_sleep_waited = 0
+							_sleep_root_key = 0
 				else:
 					# 表达式未求值, 恢复时整句重头重新执行 (含嵌套调用的语句)
 					frame.pc = i - 1
@@ -19867,6 +20029,11 @@ class Interpreter:
 					_expr_evaluated = (iterable != null) and not _needs_replay
 					return ExecResult.SUSPENDED
 				if iterable == null or iterable is DSLNone:
+					# 可迭代表达式本身失败 (挂起恢复轮重放尤其如此): null 不代表无错,
+					# 在途异常直接向上传播; 此时再抛防御性 RuntimeError 会让 first-wins
+					# 只保留旧文案而改写 last_exception, 使外层 except 匹配失败 (P0-22 修复方向 3)
+					if report.has_error:
+						return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
 					raise_exception("RuntimeError", "iterable is null in for loop")
 					return ExecResult.RAISE
 				iterator = iterable._dsl_iter()
@@ -20190,15 +20357,21 @@ class Interpreter:
 				res = ri.get("try_pending", ExecResult.NORMAL)
 				var fin_res_r = exec_block(stmt.finally_body, environment)
 				if fin_res_r == ExecResult.SUSPENDED:
+					_park_unwind_error()
 					return fin_res_r
 				if fin_res_r == ExecResult.RETURN or fin_res_r == ExecResult.BREAK or fin_res_r == ExecResult.CONTINUE:
 					# finally 的 return/break/continue 丢弃进行中的异常 (CPython 语义)
+					_discard_unwind_error()
 					report.clear_error()
 					last_exception = null
 					return fin_res_r
 				if fin_res_r == ExecResult.RAISE:
+					# finally 自身的新异常取代在途异常 (CPython 语义, __context__ 链已在 raise 时记录)
+					_discard_unwind_error()
 					return fin_res_r
 				# finally 正常结束: 进行中的 res (含待传播异常) 继续生效
+				# 在途异常从暂存写回错误通道, 沿正常传播路径离开 (P0-22)
+				_restore_unwind_error()
 				return res
 			else:
 				# 首次执行或恢复 try 体
@@ -20250,13 +20423,17 @@ class Interpreter:
 				report.has_error = saved_has_error or report.has_error
 				if fin_res == ExecResult.SUSPENDED:
 					# 挂起交回语句重放, 由 stage=="finally" 恢复路径按 try_pending 续做
+					# 异常在途时先暂存错误通道 (P0-22): interpret 收尾与恢复轮不得误判为致命错误
+					_park_unwind_error()
 					return fin_res
 				if fin_res == ExecResult.RETURN or fin_res == ExecResult.BREAK or fin_res == ExecResult.CONTINUE:
 					# finally 的 return/break/continue 丢弃进行中的异常 (CPython 语义)
+					_discard_unwind_error()
 					report.clear_error()
 					last_exception = null
 					return fin_res
 				if fin_res != ExecResult.NORMAL:
+					_discard_unwind_error()
 					return fin_res
 			
 			return res
@@ -22576,6 +22753,8 @@ class Interpreter:
 		# 检查 _call_stack 是否有恢复信息 (嵌套函数调用挂起恢复)
 		var saved_env = null
 		var saved_pc = 0
+		var saved_cs_stmt_ri = {}
+		var saved_cs_stmt_replay = false
 		# 语句重放会重新求值实参表达式, 像 f(C(1)) 里的 C(1) 会产生结构相同但身份不同的新实例。
 		# 此时按身份的实参比对必然失败, 函数体会被完整重跑一遍, 导致副作用重复执行, 
 		# 故仅在重放轮 (_sleep_root_key 已置位) 追加一次「按结构」的宽松比对
@@ -22601,6 +22780,8 @@ class Interpreter:
 				continue
 			saved_env = cand_env
 			saved_pc = cs.get("return_pc", 0)
+			saved_cs_stmt_ri = cs.get("stmt_resume_info", {})
+			saved_cs_stmt_replay = cs.get("stmt_replay_head", false)
 			saved_env_taken[cand_env] = true
 			_call_stack.remove_at(j)
 			break
@@ -22620,11 +22801,14 @@ class Interpreter:
 		var exec_env = saved_env if saved_env != null else local
 		if saved_env != null:
 			# 从挂起中恢复: 推回保存的帧让 exec_block 能找到
+			# (resume_info / replay_head 为挂起时体帧的语句中部状态, 原样转交,
+			# 否则挂起点在复合语句内部时恢复轮从函数体第一条语句重跑)
 			_exec_stack.append({
 				"statements": decl.body,
 				"pc": saved_pc,
 				"env": saved_env,
-				"resume_info": {}
+				"resume_info": saved_cs_stmt_ri,
+				"replay_head": saved_cs_stmt_replay,
 			})
 		# 记录当前方法上下文 (super() 定位), 嵌套调用时保存并恢复
 		var saved_class = _current_class
@@ -22653,12 +22837,19 @@ class Interpreter:
 		if res == ExecResult.SUSPENDED:
 			# 压入函数调用栈帧
 			var return_pc = 0
+			var saved_stmt_ri = {}
+			var saved_stmt_replay = false
 			# 从 _exec_stack 中搜索本次调用的函数体帧: 按 (statements, env) 双重身份匹配,
 			# 递归时同名函数体存在多个帧, 只有 env 相同的那一个才是本次调用的帧
 			for j in range(_exec_stack.size() - 1, -1, -1):
 				var f = _exec_stack[j]
 				if f.statements == decl.body and f.env == exec_env:
 					return_pc = f.pc
+					# 体帧的语句中部恢复状态一并保存: 挂起点在 try/finally/循环等
+					# 复合语句内部时, 丢失会使恢复轮从函数体第一条语句重跑,
+					# 已完成的兄弟语句副作用重复执行
+					saved_stmt_ri = f.get("resume_info", {})
+					saved_stmt_replay = f.get("replay_head", false)
 					break
 			_call_stack.append({
 				"function": function,
@@ -22667,6 +22858,8 @@ class Interpreter:
 				"local_env": exec_env,
 				"args": args.duplicate(),
 				"node": call_node,
+				"stmt_resume_info": saved_stmt_ri,
+				"stmt_replay_head": saved_stmt_replay,
 			})
 			_suspended = true
 			return null

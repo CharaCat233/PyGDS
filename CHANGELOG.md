@@ -2,6 +2,33 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.2] - 2026-09-30
+
+本版完成 alpha.2 排期的两项（原暂缓条目清零）：`__index__` 协议接入全部序列下标站点（P1-48），以及修复「try 体异常在途时 finally 体内挂起致异常丢失且脚本假终止」（P0-22）。P0-22 的根因是挂起边界与恢复轮把错误通道的在途标志当致命信号，修复过程在同一机制下连带发现并修复四处既有缺陷（防御性报错改写 `last_exception`、`yield from` 委托链伪造 `StopIteration`、函数调用帧复用丢失语句中部恢复状态、睡眠重放去重的两类误序号场景）；`iter(callable, sentinel)` 两参形式在 callable 内挂起的场景随之恢复正常
+
+### 新增
+
+- **`__index__` 协议与 bool 下标（原暂缓条目 P1-48）**：`str` / `list` / `tuple` / `bytes` / `range` 的下标读取、切片分量（`start` / `stop` / `step`，按 CPython 次序 step → start → stop 换算）、`list` 的下标赋值 / 切片赋值 / `del` 与 namedtuple 下标，均接受 `bool`（按 `0` / `1`）与定义了 `__index__` 的对象（经协议取值，负数回绕 / 越界判定等与整数下标一致）；`__index__` 返回非 int 报 `TypeError: __index__ returned non-int (type X)`，协议内 `raise` 原样传播，未定义协议仍报各序列原有的 `TypeError` 文案；字典键不做 `__index__` 转换（全部对齐 CPython）
+- **`list` / `tuple` 切片读取的零步长校验**：`[1, 2, 3][::0]` 此前静默返回空列表（元组同），现报 `ValueError: slice step cannot be zero`（与 `str` 切片及切片赋值路径一致，对齐 CPython）
+
+### 修复
+
+- **try 体异常在途时 finally 体内挂起致异常丢失且脚本假终止（原暂缓条目 P0-22）**：挂起返回时在途异常使 `report.has_error` 为真，`interpret` 收尾将其误判为未捕获致命错误直接假终止（`<!ERR>` 后无输出），恢复轮的块顶检查也会被同一在途标志误导；现在途异常在挂起边界暂存（对致命判定隐身，`last_exception` 保持供匹配与异常链使用；`close()` 注入的 `GeneratorExit` 维持其「结束即静默」约定不参与暂存），finally 恢复后正常完成时写回错误通道沿正常路径传播（外层 `except` 可捕获，未捕获时报错行号正确）；`finally` 以 `return` / `break` / `continue` 或自身新异常终结时清空暂存（丢弃 / 取代语义不变）
+- **`for` 可迭代表达式带错返回 null 时误抛防御性错误致外层匹配失败**：可迭代表达式求值失败（挂起恢复轮重放尤其如此）后再抛 `RuntimeError: iterable is null in for loop`，`report` 的 first-wins 保留旧文案但 `last_exception` 被改写为新异常，外层 `except` 无法匹配转为假终止；现在途异常直接向上传播
+- **`yield from` 委托链上子生成器步内发起程序挂起被伪造为 `StopIteration`**：`send` / `throw` / `__next__` 驱动的步进返回「程序挂起」时误落 `StopIteration` 构造，委托层再将其误判为「子生成器正常结束」并清异常，异常被静默吞掉或跨轮状态错乱；现挂起步原样向上传播
+- **函数调用挂起恢复丢失体帧的语句中部恢复状态**：挂起点位于函数体内 `try` / `finally` / 循环等复合语句内部时，调用帧复用新推的体帧不带 `resume_info` 与重放标记，恢复轮从函数体第一条语句重跑，已完成语句的副作用重复执行（如 `try` 体在 `finally` 挂起场景下 `print` 执行两次）；现挂起时一并保存、复用时原样转交
+- **睡眠重放去重的序号错位（两个场景）**：其一，独立 `sleep` 语句挂起后重放根键泄漏——根语句不重放（表达式已求值完即挂起）则根键永不归零，同一根之后的独立睡眠被按序号误去重；其二，函数帧内前一个睡眠已挂起、帧从其后语句续跑时，同帧内位于其后的睡眠序号前移亦被误去重——两者的实际等待次数均少于声明次数；现不重放的根语句在挂起时立即收尾消费窗口，程序睡眠的语句在非生成器帧内整句重跑（重跑轮按序号去重，不重复等待；生成器步内睡眠不参与序号去重，不受影响）
+
+### 测试
+
+- 新增 2 个测试并入 `expected.json`（共 252 个用例全部通过，既有条目零变更）：`lang_index_protocol`（五类序列的下标与切片分量转换、负数回绕、赋值 / 切片赋值 / `del`、`__index__` 返回 bool、字典键不转换、非 int 返回、未定义协议、协议内 `raise`、namedtuple、int 子类）、`lang_suspend_finally_raise`（finally 挂起 x 在途异常的捕获、两次挂起、新异常取代与 `__context__`、`return` 保留、嵌套两层、裸 `raise` 重抛、except 处理器挂起、`break` 丢弃、`yield from` 委托链、生成器体内挂起后 `raise`）
+- 挂起综合测试新增 I1 / I2 两个用例（22 → 24）全部通过；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）；P0-22 修复按「挂起 x 异常组合矩阵」做了 30 余个最小探针的双端比对（finally / except / `yield from` / 生成器体内挂起与在途异常、`close()` / `throw` 注入、多睡眠轮次的排列），「实际等待次数」经 `--cycles` 核查与声明次数一致
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md`：异常处理小节补充与挂起系统交互的语义（在途异常跨挂起边界照常传播、处理器与 `finally` 体内可挂起）
+- `docs/zh-CN/builtin_types.md` 与 `docs/en/builtin_types.md`：切片类型小节补充序列下标与切片分量的接受类型（整数 / `bool` / `__index__` 协议）与字典键不转换的边界
+
 ## [0.7.0-alpha.1] - 2026-09-29
 
 本版实现 v0.7.0 主要任务（异常对象直接创建）：解释器新增异常对象直接构造统一入口 `raise_exception_typed`，既有错误通道内部改调该入口，类型与消息静态已知的站点省去「记字符串、再解析」的回环；错误文案逐字节保持不变（连带修复的两处异常对象形态差异除外），`last_error` 探测通道与挂起机制时序不受影响

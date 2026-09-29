@@ -127,6 +127,15 @@ func _init() -> void:
 		dsl.write_dsl_script("greet('world')\n")
 	, "hello\nworld\n", null])
 
+	# === I. 异常在途 x 挂起 (P0-22 回归) ===
+	_test_queue.append(["I1. finally 内 sleep + 在途异常被外层捕获", func(dsl):
+			dsl.write_dsl_script("import time\ndef h():\n try:\n  raise ValueError('v')\n finally:\n  time.sleep(0.1)\n  print('fin')\ntry:\n h()\nexcept ValueError as e:\n print('caught', e)\nprint('after')\n")
+	, "fin\ncaught v\nafter\n", null])
+
+	_test_queue.append(["I2. finally 抛新异常取代在途异常 (含挂起)", func(dsl):
+			dsl.write_dsl_script("import time\ndef h2():\n try:\n  raise ValueError('old')\n finally:\n  time.sleep(0.1)\n  raise KeyError('new')\ntry:\n h2()\nexcept Exception as e:\n print('repl', type(e).__name__)\nprint('end')\n")
+	, "repl KeyError\nend\n", null])
+
 	create_timer(0.001).timeout.connect(_start_next_test)
 
 

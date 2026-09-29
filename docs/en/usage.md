@@ -1160,6 +1160,8 @@ finally:
     print("cleanup")
 ```
 
+> **Interaction with the suspend system**: `time.sleep` (and the explicit suspend APIs) inside the `try` body, an `except` handler or the `finally` body all suspend and resume normally. When an exception raised by the try body is still in flight and the `finally` body suspends, the pending exception keeps propagating after resumption and the outer `except` catches it normally (an uncaught one terminates as a regular error); `return` / `break` / `continue` in the `finally` still discard the in-flight exception per Python semantics, and a new exception raised by the `finally` replaces the pending one following exception chaining semantics
+
 ### raise ... from Exception Chaining
 
 `raise expression from cause-expression` stores the cause exception in the exception instance's `__cause__` field; with `from None` the `__cause__` is `None`. Whatever the `from` value (including `None`), `__suppress_context__` is set to `True`. An exception raised without a `from` clause has `__cause__` `None` and `__suppress_context__` `False`. The cause expression, like the raise expression itself, runs through the evaluation channel, so `time.sleep` suspensions inside it resume normally. Raising an exception class (without parentheses) instantiates it with no arguments; a class used after `from` is likewise instantiated automatically

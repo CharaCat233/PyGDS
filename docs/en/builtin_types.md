@@ -378,6 +378,8 @@ lst[slice(4, 0, -1)]        # negative step reverses
 
 ```
 
+> **Types accepted for sequence subscripts and slice bounds**: the subscripts and slice components (`start` / `stop` / `step`) of `str` / `list` / `tuple` / `bytes` / `range` accept integers, `bool` (participating as `0` / `1`) and objects defining `__index__` (converted through the protocol; returning a non-integer raises `TypeError`, and a `raise` inside the protocol propagates as is); negative wrapping, out-of-range checks and the zero-step validation apply to the converted values. Dict keys are not converted through `__index__` (same as CPython)
+
 ## Iterator System
 
 PyGDS provides specialized iterator implementations for different collection types.

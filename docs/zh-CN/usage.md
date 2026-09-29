@@ -1157,6 +1157,8 @@ finally:
     print("cleanup")
 ```
 
+> **与挂起系统交互**：`try` 体、`except` 处理器与 `finally` 体内的 `time.sleep`（及主动挂起 API）均可正常挂起推进。try 体已抛出异常、`finally` 体内挂起时，恢复后进行中的异常照常传播，外层 `except` 可正常捕获（未捕获则按普通错误终止）；`finally` 中的 `return` / `break` / `continue` 仍按 Python 语义丢弃在途异常，`finally` 抛出的新异常按异常链语义取代在途异常
+
 ### raise ... from 异常链
 
 `raise 表达式 from 因果表达式` 把因果异常存入异常实例的 `__cause__` 字段，`from None` 时 `__cause__` 为 `None`；无论 `from` 何值（含 `None`），`__suppress_context__` 均置为 `True`。无 `from` 子句的异常 `__cause__` 为 `None`、`__suppress_context__` 为 `False`。因果表达式与 raise 表达式一样经求值通道执行，内部的 `time.sleep` 挂起可正常推进。raise 一个异常类（不带括号）时按无参实例化处理，`from` 一个异常类时同样自动实例化
