@@ -2,6 +2,74 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.1] - 2026-09-29
+
+本版实现 v0.7.0 主要任务（异常对象直接创建）：解释器新增异常对象直接构造统一入口 `raise_exception_typed`，既有错误通道内部改调该入口，类型与消息静态已知的站点省去「记字符串、再解析」的回环；错误文案逐字节保持不变（连带修复的两处异常对象形态差异除外），`last_error` 探测通道与挂起机制时序不受影响
+
+### 新增
+
+- **`raise_exception_typed` 统一构造入口**：按类型名查全局注册表构造异常 wrapper，写入 `args` 与 `__cause__` / `__suppress_context__` 默认字段并设置 `last_exception`，消息为站点给定的最终显示文本（不再经 `__init__` 加工），`original_args` 非空时（如 `KeyError` 的键）直接作为 `e.args`；`raise_exception` 与 `raise_exception_from_last_error` 内部改调该入口，错误文案与异常对象形态对外零变化
+- **静态站点直接构造**：for / `yield from` / 推导式 / 星号解包 / 解包赋值的「不可迭代」回退、`list` / `tuple` / `dict` 构造器的「不可迭代」回退、`operator.getitem` 的「不可下标」回退共 12 个站点的静态回退分支改为直接调用 `raise_exception_typed`；`del` 未定义名与增强赋值读取未定义名的 `NameError`、`sorted` 比较失败的 `TypeError` 共 3 个站点改为静态构造，不再经字符串解析
+- **全量扫描补齐的内建能力**：`iter(callable, sentinel)` 两参形式（callable 内挂起的场景暂缓，见已知问题清单 P0-22 备注）；`str.maketrans` / `str.translate`；`bytes.fromhex`；`int.bit_length` 与 `real` / `imag` / `numerator` / `denominator` 属性，`float.is_integer` 与 `real` / `imag` 属性；`str.encode` / `bytes.decode` 支持 `ascii` / `latin-1` 编码与 `errors` 的 `strict` / `replace` / `ignore`（utf-8 严格解码逐字节校验非法序列），并注册 `UnicodeEncodeError` / `UnicodeDecodeError` 异常类型
+
+### 修复
+
+- **全量扫描发现的缺陷（4 项暂缓 / 暂不投入，见已知问题清单）**：
+  - 递归容器的 `repr` / `str` 无循环保护致脚本挂死，现以 `[...]` / `{...}` / `(...)` 标记截断（CPython 语义）
+  - `"%d" % True` 静默输出 `0`（CPython 为 `1`）；`%x` / `%o` 同
+  - `"{missing}".format(x=1)` 缺失关键字静默返回空串，现报 `KeyError`；`"{} {}".format(1)` 位置不足静默填充，现报 `IndexError`（文案含 `for positional args tuple` 尾缀，对齐 CPython）
+  - 函数内「先读后赋值」的局部名静默回退全局读取，现报 `UnboundLocalError`（增强赋值读取同）；增强赋值不再误用全局值
+  - finally 中 `return` / `break` / `continue` 未丢弃进行中的异常，现按 CPython 语义丢弃并正常返回；挂起恢复路径按进入 finally 前的语句结果续做
+  - `**` 解包非字符串键触发宿主层错误静默终止，现报 `TypeError: keywords must be strings`
+  - `startswith` / `endswith` 传元组参数静默返回 `False`，现按元组逐一匹配
+  - `0 < True` 等 int 与 bool 混合排序比较报 `TypeError`，现按数值比较（`sorted` / `min` / `max` 同）
+  - 深递归穿透宿主 GDScript 栈溢出（无输出不可捕获），现于 256 层报可捕获的 `RecursionError`（CPython 默认 1000 层，宿主栈限制下取安全阈值）
+  - 生成器体内逃逸的 `StopIteration` 直接逃逸，现按 PEP 479 转为可捕获的 `RuntimeError: generator raised StopIteration`
+  - 序列乘负数（`[0] * -1` 等）报 `TypeError`，现返回空序列
+  - property 的 `@x.deleter` 装饰器未接通（`del p.x` 报 `AttributeError`），现正确调用 deleter
+  - 仅定义 `__gt__` 时 `a < b` 报 `TypeError`，现按 CPython 反射语义尝试 `b.__gt__(a)`（`<` / `>` / `<=` / `>=` 四运算）
+  - `3 not in (1, 2)` 等比较链解析期报错（解析器的 `not in` 组合逻辑不可达），现正确解析
+  - 异常实例 `__context__` 缺失，现于抛出时按 CPython 语义记录处理中 / 传播中的异常（实例与 raise 语句两条路径）
+  - `"abc"[::0]` 零步长切片静默返回空串，现报 `ValueError: slice step cannot be zero`（字符串路径）
+  - `"-42".zfill(5)` 输出 `00-42`，现为 `-0042`（符号保留最前）
+  - `{1, 2}.update([3, 4], {5})` 多可迭代参数静默丢弃后者，现全部并入
+  - `__slots__` 以 list / set 字面量声明时实例赋值误报 `AttributeError`，现与元组形态一致
+  - `hash(1.0) != hash(1)`，现整值浮点与对应整数同哈希；元组与 frozenset 改按内容哈希（精确数值仍不与 CPython 对齐，P2-4 同族）
+  - `format(2.25, '.1f')` 与 `%.1f` 为 `2.3`，现走二进制精确银行家舍入输出 `2.2`（与 `round` 一致，不经宿主 printf）
+  - `list.index` / `tuple.index` 文案 `value not in list`，现为 `9 is not in list`（`%R` 形态）
+  - `set.remove` 缺失键的 `KeyError.args` 为字符串 `('99',)`，现为原始值 `(99,)`（根因之一是错误参数数组与局部变量共享引用、清除后传空，已一并修正同类站点）
+  - `setattr(1, 'x', 2)` 抛 `TypeError`（无 `__dict__`），现对齐 CPython 的 `AttributeError`
+  - `f"{x = }"` 带空格的自文档形态丢失前缀，现输出 `x = 42`（`=` 两侧空格进入输出，对齐 CPython）
+  - 内建方法调用失败时错误参数数组与局部变量共享引用被提前清空（悬空引用），`dict.pop` 等站点的 `e.args` 旁路恢复完整
+  - `"a,b".split(",", 0)` 未按 `maxsplit=0` 语义整串返回；默认空白分割的余项不再吞并连续空白（按 CPython 原样保留）
+  - `math.sqrt(-1)` / `math.log(0)` 静默返回 nan，现报 `ValueError: math domain error`
+  - `reversed()` 返回可重复消费的列表而非一次性迭代器，现按 CPython 返回 `*_reverseiterator`（并支持字典反向键迭代，`dict_reversekeyiterator`）
+  - `"{0.real}".format(3)` 等格式字段的属性访问链未支持，现按 CPython 逐级解析
+  - `b"abc" < b"abd"` 等字节串排序比较报 `TypeError`，现按字节字典序比较
+  - `bytes(range(3))` 未支持，现按 CPython 语义转换（越界仍报 `ValueError`）
+  - `except as` 名在块结束后未按 CPython 语义隐式删除，现删除绑定
+  - 重复参数名（`def f(*, a, a)`）静默接受，现报解析错误（文案与 CPython 的 SyntaxError 同句式）
+  - `"ab".center(5)` 填充分配与 CPython 公式不一致，现按 `marg // 2 + (marg & width & 1)` 分配；填充字符非单字符现报 `TypeError`
+  - 第三轮扫描：`collections.Counter` 补 `total()` / `elements()` / 算术运算（`+` / `-` / `&` / `|`，仅保留正计数）/ 映射实参语义与 `Counter({...})` repr；`itertools.chain.from_iterable` 与 `itertools.tee` 补齐；`itertools.product` 补 `repeat` 关键字；类体内嵌套类现挂入外层类属性（`Outer.Inner` 可达）；`"%s" % obj` / `{}` / f-string 对自定义 `__str__` 生效；`"abc".find("")` 按语义返回 `0`
+  - **alpha.2 前置清缴（原暂缓条目 4 项）**：异常类对象暴露 BaseException 的 getset 描述符（`type(e).__cause__` 等返回 `<attribute ...>` 形态）；字符串与整数字面量驻留（`"a" is "a"`、`257 is 257` 为 True，± 号紧贴整数字面量常量折叠）；推导式改用私有驱动环境（lambda 闭包共享推导式作用域，`[lambda: i for i in range(3)]` 调用时取最后绑定值，对齐 CPython）；walrus 在推导式内绑定包含作用域（PEP 572）；内建方法调用前预清理驻留对象残留 last_error（修复 `dict.pop` 失败后同对象方法被旧错误误杀）
+- **`random.choice` / `random.shuffle` 抽样字典时 `KeyError` 的 `str` 与 `args`**：`str(e)` 此前多一层引号（`'0'`）且 `e.args` 为字符串（`('0',)`），现与 CPython 一致输出 `0` 且 `e.args` 为原始键 `(0,)`
+- **`del` 未定义名的 `NameError` 实例 `str(e)`**：报告通道已有错误导致异常构造被跳过 `__init__`，`str(e)` 退化为类型名 `NameError`，现输出完整消息 `name 'x' is not defined`；未捕获时错误行与其他错误一致附 `(line N)` 后缀
+
+### 破坏性变更 (Breaking Changes)
+
+- **异常对象形态与错误文案修正**：依赖 `str(e)` 带引号形态、字符串 `args`、`value not in list` 旧文案、`00-42` 补零形态或 format 静默空串（均不符合 Python 语义）的代码行为改变
+- **递归深度上限**：函数调用深度超过 256 层报 `RecursionError`（此前穿透到宿主栈溢出）；CPython 默认约 1000 层，深度依赖需留意
+
+### 测试
+
+- 新增 7 个测试并入 `expected.json`（共 250 个用例全部通过，既有条目零变更）：`err_typed_raise`（内部错误站点构造的异常对象形态）、`err_scan_fixes`（format 缺失键 / 位置不足、`%d` 对 bool、零步长切片、`0 ** -1`、`setattr` 异常类型、startswith 元组、index 文案、负数序列乘、bool 排序比较）、`lang_flow_scan`（finally 流控丢弃、局部名 UnboundLocalError、隐式 `__context__`、PEP 479、递归上限）、`lang_builtin_scan`（数值方法与属性、`bytes.fromhex`、哈希不变量、编码族错误语义、translate / maketrans、zfill 符号、iter 两参）、`lang_class_scan`（递归容器 repr、property deleter、slots 多形态）、`lang_scan_r2`（split maxsplit 与余项空白、math 域错误、reversed 迭代器与字典反转、format 字段属性链、bytes 比较与 bytes(range)、except as 隐式删除、raise 文案、center 公式与填充校验）、`lang_scan_r3`（Counter 全族、chain.from_iterable 与 tee、嵌套类、product repeat、%s 与 `__str__`、find 空串）
+- 挂起测试 22 个用例通过；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）；文档代码示例均经双端实测
+
+### 文档
+
+- `docs/zh-CN/exception_system.md` 与 `docs/en/exception_system.md`：新增 `raise_exception_typed` 统一构造入口小节，`raise_exception` 与 `raise_exception_from_last_error` 的代码片段与说明同步为委托实现
+- `docs/zh-CN/builtin.md` 与 `docs/en/builtin.md`：`iter` 补两参形式，`encode` / `decode` 补编码与 errors 语义
+
 ## [0.6.0-alpha.7] - 2026-09-29
 
 本版实现已知问题清单排期条目 `P0-13` 与 `P2-17` ~ `P2-26` 共 11 项（含此前已单独入库的 `P2-18` 小整数驻留），并对收尾回归中发现的三处连带缺陷一并修复

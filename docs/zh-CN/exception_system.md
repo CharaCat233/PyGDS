@@ -451,21 +451,46 @@ except NetworkError as e:        # 精确匹配
 
 ---
 
+## `raise_exception_typed` — 异常对象直接构造统一入口
+
+位于 `PyGDS.Interpreter.raise_exception_typed`
+
+解释器内部异常构造的统一入口：按类型名查全局注册表构造异常 wrapper，写入 `args` 与 `__cause__` / `__suppress_context__` 默认字段，设置 `last_exception` 并报告错误。消息为站点给定的最终显示文本，不再经 `__init__` 加工；`original_args` 非空时（如 `KeyError` 的键）直接作为 `e.args`
+
+```gdscript
+func raise_exception_typed(type_name: String, args: Array[DSLObject], original_args: Array[DSLObject] = []):
+    var exc_args: Array[DSLObject] = args
+    if not original_args.is_empty():
+        exc_args = original_args
+    var msg = ""
+    if args.size() > 0:
+        msg = args[0]._dsl_str()
+    elif exc_args.size() > 0:
+        msg = exc_args[0]._dsl_str()
+    var exc_class = globals.get_val(type_name)
+    if exc_class is DSLClass:
+        last_exception = exc_class.magic_call([], {})
+        var raw = last_exception._wrapped
+        if raw is DSLException:
+            raw.message = msg
+            raw.args = exc_args
+        last_exception.fields["args"] = DSLTuple.new(exc_args)
+    else:
+        last_exception = DSLException.new(msg, type_name)
+    report.error(type_name + ": " + msg)
+```
+
+`raise_exception` 与 `raise_exception_from_last_error` 内部均改调此入口构造异常对象；类型与消息静态已知的站点可直接调用它，省去「记字符串、再解析」的回环
+
 ## `raise_exception` — 内置异常抛出工具
 
 位于 `PyGDS.Interpreter.raise_exception`
 
-解释器内部使用 `raise_exception` 方法快速创建并抛出异常：
+解释器内部使用 `raise_exception` 方法快速创建并抛出异常，内部经统一入口 `raise_exception_typed` 构造异常对象：
 
 ```gdscript
 func raise_exception(err_type: String, msg: String):
-    var exc_class = globals.get_val(err_type)
-    if exc_class is DSLClass:
-        var exc_args: Array[DSLObject] = [DSLString.new(msg)]
-        last_exception = exc_class.magic_call(exc_args, {})
-    else:
-        last_exception = DSLException.new(msg, err_type)
-    report.error(err_type + ": " + msg)
+    raise_exception_typed(err_type, [DSLString.new(msg)] as Array[DSLObject])
 ```
 
 ***使用示例（解释器内部）***
@@ -481,15 +506,17 @@ raise_exception("RuntimeError", "maximum step count exceeded")
 位于 `PyGDS.Interpreter.raise_exception_from_last_error`
 
 ```gdscript
-func raise_exception_from_last_error(last_err: String):
+func raise_exception_from_last_error(last_err: String, args: Array[DSLObject] = []):
     var colon_idx = last_err.find(": ")
+    var err_type = "RuntimeError"
+    var msg = last_err
     if colon_idx != -1:
-        raise_exception(last_err.substr(0, colon_idx), last_err.substr(colon_idx + 2))
-    else:
-        raise_exception("RuntimeError", last_err)
+        err_type = last_err.substr(0, colon_idx)
+        msg = last_err.substr(colon_idx + 2)
+    raise_exception_typed(err_type, [DSLString.new(msg)] as Array[DSLObject], args)
 ```
 
-当 `last_error` 字符串包含格式化的错误信息（如 `"TypeError: bad operand"`），此函数解析出异常类型并调用 `raise_exception`
+当 `last_error` 字符串包含格式化的错误信息（如 `"TypeError: bad operand"`），此函数解析出异常类型与消息后经 `raise_exception_typed` 构造异常对象；可选的 `args` 参数携带原始参数对象（如 `KeyError` 的键），非空时直接作为 `e.args`
 
 ---
 

@@ -757,13 +757,14 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 **转换标志**：`!r`（repr）、`!s`（str）、`!a`（ascii）；转义花括号 `{{` / `}}`
 
-#### `str.encode(encoding="utf-8") -> bytes`
+#### `str.encode(encoding="utf-8", errors="strict") -> bytes`
 
-按编码把字符串转为字节串（支持 UTF-8）
+按编码把字符串转为字节串。编码支持 `utf-8`（默认）、`ascii`、`latin-1`（`latin1` / `iso-8859-1` 同义）；`errors` 支持 `strict`（默认，越界字符报 `UnicodeEncodeError`）、`replace`（替换为 `?`）、`ignore`（丢弃）。未知编码报 `LookupError`
 
 ```python
-# Python: str.encode(encoding)
+# Python: str.encode(encoding, errors)
 "hi".encode()                       # b'hi'
+"café".encode("ascii", "replace")   # b'caf?'
 ```
 
 #### `str.format_map(mapping) -> str`
@@ -907,13 +908,14 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 
 操作对象为字节串，涉及「子序列」的参数均接受 bytes；下标与区间语义与 str 对应方法一致
 
-#### `bytes.decode(encoding="utf-8") -> str`
+#### `bytes.decode(encoding="utf-8", errors="strict") -> str`
 
-按编码把字节串转为字符串
+按编码把字节串转为字符串。编码支持 `utf-8`（默认，严格模式逐字节校验非法序列）、`ascii`（越界字节报 `UnicodeDecodeError`）、`latin-1`（与码点一一对应，永不失败）；`errors` 支持 `strict`（默认）、`replace`（替换为 U+FFFD）、`ignore`（丢弃）。未知编码报 `LookupError`
 
 ```python
-# Python: bytes.decode(encoding)
+# Python: bytes.decode(encoding, errors)
 b'hi'.decode()                      # "hi"
+b'\xff'.decode("utf-8", "replace")  # '\ufffd'
 ```
 
 #### `bytes.hex(sep="") -> str`
@@ -1312,17 +1314,17 @@ st = {1, 2}; st.symmetric_difference_update([1, 4])   # {2, 4}
 
 ### frozenset 方法
 
-`frozenset` 只读, 运算方法均返回新的 `frozenset`, 用法与 `set` 对应方法一致 (见上):
+`frozenset` 只读，运算方法均返回新的 `frozenset`，用法与 `set` 对应方法一致（见上）：
 
 | 方法 | 说明 |
 | :--- | :--- |
 | `copy()` | 浅拷贝 |
-| `union(other)` | 并集 (同 `a \| b`) |
-| `intersection(other)` | 交集 (同 `a & b`) |
-| `difference(other)` | 差集 (同 `a - b`) |
-| `symmetric_difference(other)` | 对称差集 (同 `a ^ b`) |
+| `union(other)` | 并集（同 `a \| b`） |
+| `intersection(other)` | 交集（同 `a & b`） |
+| `difference(other)` | 差集（同 `a - b`） |
+| `symmetric_difference(other)` | 对称差集（同 `a ^ b`） |
 | `isdisjoint(other)` | 是否不相交 |
-| `issubset(other)` | 子集 (同 `a <= b`) |
-| `issuperset(other)` | 超集 (同 `a >= b`) |
+| `issubset(other)` | 子集（同 `a <= b`） |
+| `issuperset(other)` | 超集（同 `a >= b`） |
 
 ---

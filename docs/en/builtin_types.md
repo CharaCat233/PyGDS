@@ -751,9 +751,9 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 
 **Conversion flags**: `!r` (repr), `!s` (str), `!a` (ascii); escaped braces `{{` / `}}`
 
-#### `str.encode(encoding="utf-8") -> bytes`
+#### `str.encode(encoding="utf-8", errors="strict") -> bytes`
 
-Encodes the string into bytes (UTF-8 supported)
+Encodes the string into bytes. Encodings: `utf-8` (default), `ascii`, `latin-1` (`latin1` / `iso-8859-1` are aliases); `errors`: `strict` (default, out-of-range characters raise `UnicodeEncodeError`), `replace` (substituted with `?`), `ignore` (dropped). Unknown encodings raise `LookupError`
 
 ```python
 # Python: str.encode(encoding)
@@ -901,9 +901,9 @@ True when all characters are printable
 
 Operate on byte strings; parameters described as "subsequence" accept bytes; index and range semantics match the corresponding `str` methods
 
-#### `bytes.decode(encoding="utf-8") -> str`
+#### `bytes.decode(encoding="utf-8", errors="strict") -> str`
 
-Decodes the byte string into a string
+Decodes the byte string into a string. Encodings: `utf-8` (default, strict mode validates illegal sequences byte by byte), `ascii` (out-of-range bytes raise `UnicodeDecodeError`), `latin-1` (one-to-one with code points, never fails); `errors`: `strict` (default), `replace` (substituted with U+FFFD), `ignore` (dropped). Unknown encodings raise `LookupError`
 
 ```python
 # Python: bytes.decode(encoding)

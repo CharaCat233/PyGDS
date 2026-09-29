@@ -1490,7 +1490,7 @@ PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中�
 | 类型 | 状态 | 触发方式 | 恢复方式 |
 | :--- | :--- | :--- | :--- |
 | SLEEPING | `SUSPENDED_SLEEPING` | `sleep(n)` / `request_suspend_sleeping(n)` | Timer 超时后自动恢复 |
-| WAITING | `SUSPENDED_WAITING` | `request_suspend_waiting()` (GDScript 端) | 外部设置 `state = RUNNING` 后调用 `run()` |
+| WAITING | `SUSPENDED_WAITING` | `request_suspend_waiting()`（GDScript 端） | 外部设置 `state = RUNNING` 后调用 `run()` |
 
 ### 状态机
 

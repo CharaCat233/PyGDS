@@ -341,9 +341,11 @@ list(reversed([1, 2, 3]))  # [3, 2, 1]
 list(enumerate(["a", "b"]))  # [(0, "a"), (1, "b")]
 ```
 
-### `iter(iterable)`
+### `iter(iterable)` / `iter(callable, sentinel)`
 
 对应 Python `iter()`，返回对象的迭代器。对 `list` / `tuple` / `str` / `range` / `dict` / `set` 返回真正的一等迭代器对象（类型名为 `list_iterator` / `tuple_iterator` / `str_ascii_iterator`（纯 ASCII 字符串）/ `str_iterator` / `range_iterator` / `dict_keyiterator` / `dict_valueiterator` / `dict_itemiterator` / `set_iterator`），持有原容器引用（活动视图，迭代期间容器追加的元素可见）、耗尽后再迭代为空、`iter(it)` 返回自身；`iter(生成器)` 返回生成器自身（耗尽后不可重复消费）；`iter(d)` 迭代期间对字典增删键报 `RuntimeError: dictionary changed size during iteration`（既有键的值替换不触发）。这些类型名不是内建名（与 CPython 一致，经 `type(x).__name__` 查看）
+
+两参形式 `iter(callable, sentinel)` 每步以无参方式调用 `callable`，结果与 `sentinel` 相等时结束（类型名为 `callable_iterator`）；callable 为用户函数时其内不得发起程序挂起（如 `time.sleep`）
 
 ```python
 it = iter([1, 2, 3])

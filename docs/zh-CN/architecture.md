@@ -393,8 +393,8 @@ evaluate(Binary: a + b)
 
 | 描述符类型 | `__get__(obj, klass)` 返回 | 用途 | 含义 |
 | :--- | :--- | :--- | :--- |
-| DSLMethodDescriptor | BoundMethod | 用于普通方法 (`upper`、`append` 等)，内部包装为 `Callable` | 将方法绑定到实例，使得调用时 self 指向 obj |
-| DSLWrappedDescriptor | MethodWrapper | 用于魔术方法 (`__add__`、`__str__` 等) | 将 magic 方法包装为可调用对象 |
+| DSLMethodDescriptor | BoundMethod | 用于普通方法（`upper`、`append` 等），内部包装为 `Callable` | 将方法绑定到实例，使得调用时 self 指向 obj |
+| DSLWrappedDescriptor | MethodWrapper | 用于魔术方法（`__add__`、`__str__` 等） | 将 magic 方法包装为可调用对象 |
 
 这一步对标 CPython 中的 `PyMethod_New` + 描述符调用
 

@@ -450,21 +450,46 @@ Since `_is_subclass_of_klass` traverses the entire inheritance chain, `except Ap
 
 ---
 
+## `raise_exception_typed` — Unified Entry for Direct Exception Object Construction
+
+Located in `PyGDS.Interpreter.raise_exception_typed`
+
+The unified entry for internal exception construction: it looks the type name up in the global registry to build the exception wrapper, writes the `args` and `__cause__` / `__suppress_context__` default fields, sets `last_exception` and reports the error. The message is the final display text given by the site and is no longer processed through `__init__`; when `original_args` is non-empty (such as the key of a `KeyError`) it becomes `e.args` directly
+
+```gdscript
+func raise_exception_typed(type_name: String, args: Array[DSLObject], original_args: Array[DSLObject] = []):
+    var exc_args: Array[DSLObject] = args
+    if not original_args.is_empty():
+        exc_args = original_args
+    var msg = ""
+    if args.size() > 0:
+        msg = args[0]._dsl_str()
+    elif exc_args.size() > 0:
+        msg = exc_args[0]._dsl_str()
+    var exc_class = globals.get_val(type_name)
+    if exc_class is DSLClass:
+        last_exception = exc_class.magic_call([], {})
+        var raw = last_exception._wrapped
+        if raw is DSLException:
+            raw.message = msg
+            raw.args = exc_args
+        last_exception.fields["args"] = DSLTuple.new(exc_args)
+    else:
+        last_exception = DSLException.new(msg, type_name)
+    report.error(type_name + ": " + msg)
+```
+
+Both `raise_exception` and `raise_exception_from_last_error` now build exception objects through this entry; sites that statically know the type and message can call it directly, skipping the detour of recording a string and parsing it back
+
 ## `raise_exception` — Built-in Exception Raising Utility
 
 Located in `PyGDS.Interpreter.raise_exception`
 
-The interpreter internally uses the `raise_exception` method to quickly create and raise exceptions:
+The interpreter internally uses the `raise_exception` method to quickly create and raise exceptions; it builds the exception object through the unified entry `raise_exception_typed`:
 
 ```gdscript
 func raise_exception(err_type: String, msg: String):
-    var exc_class = globals.get_val(err_type)
-    if exc_class is DSLClass:
-        var exc_args: Array[DSLObject] = [DSLString.new(msg)]
-        last_exception = exc_class.magic_call(exc_args, {})
-    else:
-        last_exception = DSLException.new(msg, err_type)
-    report.error(err_type + ": " + msg)
+    raise_exception_typed(err_type, [DSLString.new(msg)] as Array[DSLObject])
 ```
 
 ***Usage Example (inside the interpreter)***
@@ -480,15 +505,17 @@ raise_exception("RuntimeError", "maximum step count exceeded")
 Located in `PyGDS.Interpreter.raise_exception_from_last_error`
 
 ```gdscript
-func raise_exception_from_last_error(last_err: String):
+func raise_exception_from_last_error(last_err: String, args: Array[DSLObject] = []):
     var colon_idx = last_err.find(": ")
+    var err_type = "RuntimeError"
+    var msg = last_err
     if colon_idx != -1:
-        raise_exception(last_err.substr(0, colon_idx), last_err.substr(colon_idx + 2))
-    else:
-        raise_exception("RuntimeError", last_err)
+        err_type = last_err.substr(0, colon_idx)
+        msg = last_err.substr(colon_idx + 2)
+    raise_exception_typed(err_type, [DSLString.new(msg)] as Array[DSLObject], args)
 ```
 
-When the `last_error` string contains formatted error information (e.g., `"TypeError: bad operand"`), this function parses the exception type and calls `raise_exception`.
+When the `last_error` string contains formatted error information (e.g., `"TypeError: bad operand"`), this function parses the exception type and message and builds the exception object via `raise_exception_typed`; the optional `args` parameter carries the original argument objects (such as the key of a `KeyError`) and becomes `e.args` directly when non-empty.
 
 ---
 

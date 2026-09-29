@@ -341,9 +341,11 @@ Corresponds to Python `enumerate()`, returning a sequence of `(index, value)` pa
 list(enumerate(["a", "b"]))  # [(0, "a"), (1, "b")]
 ```
 
-### `iter(iterable)`
+### `iter(iterable)` / `iter(callable, sentinel)`
 
 Corresponds to Python `iter()`, returning an iterator for the object. For `list` / `tuple` / `str` / `range` / `dict` / `set` it returns a true first-class iterator object (with type names `list_iterator` / `tuple_iterator` / `str_ascii_iterator` (pure-ASCII strings) / `str_iterator` / `range_iterator` / `dict_keyiterator` / `dict_valueiterator` / `dict_itemiterator` / `set_iterator`), holding a reference to the original container (a live view: elements appended during iteration are visible), empty on re-iteration after exhaustion, and `iter(it)` returns itself; `iter(generator)` returns the generator itself (it cannot be consumed again once exhausted); adding or removing keys on a dictionary while `iter(d)` is iterating raises `RuntimeError: dictionary changed size during iteration` (replacing the value of an existing key does not). These type names are not built-in names (consistent with CPython; inspect them via `type(x).__name__`)
+
+The two-argument form `iter(callable, sentinel)` calls `callable` with no arguments on each step and stops when the result equals `sentinel` (type name `callable_iterator`); the callable must not initiate a program suspension (such as `time.sleep`)
 
 ```python
 it = iter([1, 2, 3])
