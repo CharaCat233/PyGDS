@@ -2,6 +2,37 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.4] - 2026-09-30
+
+本版修复 alpha.3 收尾探针发现的全部 7 条缺陷：类创建钩子（`__init_subclass__` / `__set_name__`）、`global` 多名声明、`issubclass` 元组第二参、相邻字符串字面量连接、运行期泛性别名（PEP 585）与 bytes `%` 格式化（PEP 461），并在修复过程中连带对齐 isinstance 同族语义、补齐 bytes 的 repr 引号规则 / 字典键 / 容器 repr
+
+### 新增
+
+- **`__init_subclass__` 类创建钩子**：子类创建时沿新类 MRO 父链（不含新类自身）取首个定义者并以新类为 cls 调用（新类自定义的钩子仅对其子类生效，与 CPython 一致）；支持 classmethod 形式与 `super().__init_subclass__()` 链式调用（为此补 `object.__init_subclass__` 默认空操作，`hasattr(object, "__init_subclass__")` 为 True）；`type()` 三参形式同样触发；钩子异常阻断类创建且类名不绑定
+- **`__set_name__` 类创建钩子**：类体自有属性中其类型定义了 `__set_name__` 的对象，在类创建时按属性访问协议绑定后以 `(owner, name)` 逐一调用（先于 `__init_subclass__`）；非描述符属性（数值 / None / 函数）不触发，继承链不重复触发；`type()` 三参形式同样触发
+- **`global` 多名声明**：`global a, b` 逗号分隔多名声明（此前解析期拒绝，仅单名可用），解析 / 执行 / 局部名静态收集 / 类体四处同步
+- **`issubclass` 元组第二参**：`issubclass(C, (A, B))` 短路求值（首个匹配即返回，后续非类元素不检查）、嵌套元组递归（CPython 同语义）；连带修正 arg 1 非类从静默 False 改为报 `TypeError: issubclass() arg 1 must be a class`、实参数文案改为 `issubclass expected 2 arguments, got N`、arg 2 文案补 "or a union" 后缀
+- **isinstance 同族对齐**：元组形态递归（嵌套元组支持）、元组内非类元素报 `isinstance() arg 2 must be a type, a tuple of types, or a union`、实参数文案对齐
+- **相邻字符串字面量连接**：字符串 / 字节串 / f-string 字面量在解析器合并紧邻同类字面量（括号内跨行与反斜杠续行自然相邻，语句间换行不相邻），str 与 bytes 混用报 `SyntaxError: cannot mix bytes and nonbytes literals`，含 f-string 时按书写次序合并为单个 f-string
+- **运行期泛性别名（PEP 585）**：`list[int]` / `dict[str, int]` / `tuple[int, ...]` / `set[X]` / `frozenset[X]` / `type[X]` 返回 GenericAlias 对象（repr / 等值 / `__origin__` / `__args__` / 内容哈希 / 经原始类型调用，`list[int]()` 为 `[]`），身份判定对照注册表不受用户类遮蔽影响；用户类 `__class_getitem__` 协议接通；非泛型类下标报 CPython 同文案 `type 'X' is not subscriptable`；isinstance / issubclass 拒绝参数化泛型
+- **bytes `%` 格式化（PEP 461）**：`%b` / `%s`（3.12 中二者等价，实参须为 bytes 或实现 `__bytes__`）、`%a` / `%r`（ASCII 转义形态，非 ASCII 字符转义为 \uXXXX 等）、`%c`（0-255 整数或单字节 bytes）、数值与浮点全族转换、宽度 / 精度 / 旗标、映射形式（bytes 为键）；实现为格式串按 latin-1 解字符后复用 str 格式化机制，结果重编回字节
+
+### 修复
+
+- **bytes repr 引号与转义（连带）**：内容含单引号且不含双引号时改用双引号包裹（此前 `b"'a'"` 显示为 `b''a''`），控制字符按转义文本输出（此前 `\t` 等输出真实字符）
+- **bytes 作字典键（连带）**：`{b"k": v}` 此前报 `unhashable type: bytes`，现按内容编码支持（等值字节串为同一键）
+- **bytes 在容器 repr 中（连带）**：`{b"k": 1}` 等此前显示 `<bytes object>`，现为 `b'k'` 形态
+
+### 测试
+
+- 新增 6 个测试并入 `expected.json`（共 266 个用例全部通过，既有条目零变更）：`lang_class_hooks`（两类钩子的次序 / classmethod / super 链 / 异常阻断 / type 三参 / 非描述符跳过 / 继承不重复）、`lang_global_multi`（函数与类体的多名声明、读改写）、`lang_issubclass_tuple`（元组短路 / 嵌套递归 / 自定义类 / isinstance 同族 / 六种错误文案）、`lang_str_concat`（同行 / 括号跨行 / 续行 / bytes / f-string / 方法链 / 字典键）、`lang_generic_alias`（别名全形态 / origin / args / 等值与哈希 / 调用 / 用户协议）、`lang_bytes_format`（全转换面 / 旗标 / 映射 / `__bytes__` 协议）
+- 挂起综合测试 24 个用例全部通过；93 个用例文件双端输出一致；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md`：字符串字面量小节补相邻字面量连接；PEP 695 段补运行期泛性别名
+- `docs/zh-CN/builtin_types.md` 与 `docs/en/builtin_types.md`：bytes 小节补 `%` 格式化说明
+
 ## [0.7.0-alpha.3] - 2026-09-30
 
 本版完成 alpha.3 排期的全部 9 项：PEP 448 调用侧与类侧泛化（P0-23 / P1-60）、类体 `global`/`nonlocal`（P0-24）、参数表尾随逗号（P1-57）、点省略浮点字面量（P1-58）、`for` 目标星形名（P1-59）、`__future__` 导入 no-op（P1-61）、`BaseException` 注册（P1-62）与运行期字符串身份（P2-39）。修复过程对新代码面做双端探针复核，连带发现并修复 5 处既有缺陷（except 处理器重抛跳过 finally、`throw()` 拒收 BaseException 根实例、异常类 isinstance `type`、单目标元组形态不解包、非类星参基类静默通过）

@@ -2018,12 +2018,12 @@ class ContinueStmt extends Stmt:
 ## global 声明 [br]
 ## 将变量声明为全局作用域变量, 后续对该变量的读写直接在全局作用域进行
 class GlobalStmt extends Stmt:
-	## 声明为全局的变量名
-	var name: String
+	## 声明为全局的变量名列表 (CPython 允许 global a, b 多名声明)
+	var names: Array[String]
 	## 构造 global 声明 [br]
-	## [param n] 变量名
+	## [param n] 变量名列表
 	func _init(n):
-		name = n
+		names = n
 
 ## nonlocal 声明 [br]
 ## 将变量声明为非局部变量, 绑定到外层函数作用域的对应变量
@@ -3361,6 +3361,8 @@ class DSLObject:
 			return str(o.value)
 		if o is DSLFloat:
 			return _py_float_repr(o.value)
+		if o is DSLBytes:
+			return o._dsl_str()
 		if o is DSLList or o is DSLTuple or o is DSLDict or o is DSLSet or o is DSLFrozenSet:
 			return o._dsl_str()
 		return "<" + o._type_name() + " object>"
@@ -7621,7 +7623,7 @@ class DSLDict extends DSLObject:
 			if not first:
 				s += ", "
 			first = false
-			var key_obj = _wrap_key(k)
+			var key_obj = _original_key_obj(k)
 			s += DSLObject._py_str_repr(key_obj.value) if key_obj is DSLString else key_obj._dsl_str()
 			s += ": "
 			s += DSLObject._py_str_repr(dict[k].value) if dict[k] is DSLString else dict[k]._dsl_str()
@@ -7827,6 +7829,11 @@ class DSLDict extends DSLObject:
 			var fs_key = "frozenset:" + "|" + "|".join(parts)
 			_complex_keys[fs_key] = key
 			return fs_key
+		if key is DSLBytes:
+			# bytes 可作键: 内容编码 (等值字节串得到相同的键)
+			var bytes_key = "bytes:" + PackedByteArray(key.data).hex_encode()
+			_complex_keys[bytes_key] = key
+			return bytes_key
 		if key.klass != null:
 			var hash_method = key.klass._lookup_method("__hash__")
 			var eq_method = key.klass._lookup_method("__eq__")
@@ -8362,23 +8369,32 @@ class DSLBytes extends DSLObject:
 
 	## repr 形如 b'xy', str() 与 repr 相同 (CPython 的 bytes 即如此)
 	func _dsl_str() -> String:
-		var s = "b'"
+		# CPython bytes repr: 单引号优先, 内容含单引号且不含双引号时改用双引号包裹
+		var has_sq := false
+		var has_dq := false
 		for b in data:
-			if b == 9:
-				s += "\t"
-			elif b == 10:
-				s += "\n"
-			elif b == 13:
-				s += "\r"
-			elif b == 92:
+			if b == 39:
+				has_sq = true
+			elif b == 34:
+				has_dq = true
+		var qc := 34 if has_sq and not has_dq else 39
+		var s = "b" + char(qc)
+		for b in data:
+			if b == 92:
 				s += "\\\\"
-			elif b == 39:
-				s += "'"
+			elif b == qc:
+				s += String.chr(92) + char(qc)
+			elif b == 10:
+				s += String.chr(92) + "n"
+			elif b == 13:
+				s += String.chr(92) + "r"
+			elif b == 9:
+				s += String.chr(92) + "t"
 			elif b >= 32 and b < 127:
 				s += char(b)
 			else:
 				s += String.chr(92) + "x%02x" % b
-		return s + "'"
+		return s + char(qc)
 
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(args[0]._dsl_str())
@@ -8478,17 +8494,195 @@ class DSLBytes extends DSLObject:
 	func magic_ge(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		return _bytes_cmp(args, ">=")
 
-	## bytes 的 % 格式化: CPython 不支持 b"..." % args 形式 [br]
-	## 此处按 CPython 的两种情形给出对应文案 (有转换说明时才是通用类型错误)
+	## bytes 的 % 格式化 (PEP 461, P1-65) [br]
+	## %b / %s 要求 bytes 类实参或实现 __bytes__ (CPython 3.12 中 %s 即 %b 别名), [br]
+	## %a / %r 为 ASCII 转义形态, %c 收 0-255 整数或单字节 bytes, [br]
+	## 数值 / 浮点转换与宽度精度旗标沿用 str 语义; 映射实参的 bytes 键预转 str 键; [br]
+	## 实现: 格式串按 latin-1 解为字符后复用 str 的 _percent_format, 结果重编回字节
 	func magic_mod(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var other = DSLObject._unwrap_dsl(args[1])
-		# CPython 对「可作映射」的实参 (list / dict / range) 与空元组不报错
-		if other is DSLList or other is DSLDict or other is DSLRange:
-			return DSLBytes.new(args[0].data.duplicate())
-		if other is DSLTuple and other.items.is_empty():
-			return DSLBytes.new(args[0].data.duplicate())
-		last_error = "TypeError: not all arguments converted during bytes formatting"
+		# 格式串字节按 latin-1 解为字符 (字节与字符一一对应, 高位字节原样保留)
+		var fmt_chars = ""
+		for fb in args[0].data:
+			fmt_chars += char(fb)
+		var values: Array[DSLObject] = []
+		var is_mapping = other is DSLDict
+		var is_mapping_ish = other is DSLDict or other is DSLList or other is DSLBytes or other is DSLRange
+		if other is DSLTuple:
+			values = other.items.duplicate()
+		elif not is_mapping:
+			values = [other]
+		var spec_count = DSLObject._percent_spec_count(fmt_chars)
+		if not is_mapping_ish:
+			# 元组 / 单实参参与个数校验 (文案对齐 CPython, bytes formatting 后缀)
+			if values.is_empty() and spec_count > 0:
+				last_error = "TypeError: not enough arguments for format string"
+				return null
+			if values.size() < spec_count:
+				last_error = "TypeError: not enough arguments for format string"
+				return null
+			if values.size() > spec_count:
+				last_error = "TypeError: not all arguments converted during bytes formatting"
+				return null
+		# 预扫描: 改写 %b/%s/%a/%r/%c 为 %s 并预转换对应实参 (字节安全形态)
+		var new_values: Array[DSLObject] = []
+		var mapping_out: DSLDict = null
+		if is_mapping:
+			mapping_out = DSLDict.new()
+			new_values.append(mapping_out)
+		var fmt_out := ""
+		var vi := 0
+		var i := 0
+		while i < fmt_chars.length():
+			var ch = fmt_chars[i]
+			if ch != "%":
+				fmt_out += ch
+				i += 1
+				continue
+			if i + 1 < fmt_chars.length() and fmt_chars[i + 1] == "%":
+				fmt_out += "%%"
+				i += 2
+				continue
+			var j := i + 1
+			var key = ""
+			if j < fmt_chars.length() and fmt_chars[j] == "(":
+				var close = fmt_chars.find(")", j + 1)
+				if close == -1:
+					last_error = "ValueError: incomplete format"
+					return null
+				key = fmt_chars.substr(j + 1, close - j - 1)
+				j = close + 1
+			var spec_start := j
+			while j < fmt_chars.length() and "-+ #0".contains(fmt_chars[j]):
+				j += 1
+			while j < fmt_chars.length() and fmt_chars[j].is_valid_int():
+				j += 1
+			if j < fmt_chars.length() and fmt_chars[j] == ".":
+				j += 1
+				while j < fmt_chars.length() and fmt_chars[j].is_valid_int():
+					j += 1
+			if j >= fmt_chars.length():
+				last_error = "ValueError: incomplete format"
+				return null
+			var conv = fmt_chars[j]
+			var mid := fmt_chars.substr(spec_start, j - spec_start)
+			i = j + 1
+			var new_conv = "s" if conv in "bsarc" else conv
+			var key_part = "(" + key + ")" if key != "" else ""
+			fmt_out += "%" + key_part + mid + new_conv
+			if key != "":
+				# 映射形式: 以 bytes 键查原始字典并按转换符预转换值
+				var key_data: Array[int] = []
+				for kc in key:
+					key_data.append(kc.unicode_at(0))
+				var key_obj = DSLBytes.new(key_data)
+				var kv = other._key_to_variant(key_obj)
+				var found = null
+				if kv != null and other.dict.has(kv):
+					found = other.dict[kv]
+				if found == null:
+					last_error = "KeyError: " + key_obj._dsl_str()
+					return null
+				var converted_key = _bytes_convert_arg(found, conv)
+				if converted_key == null:
+					return null
+				mapping_out._dsl_setitem(DSLString.new(key), converted_key)
+			else:
+				var val = values[vi] if vi < values.size() else null
+				vi += 1
+				var converted = _bytes_convert_arg(val, conv)
+				if converted == null:
+					return null
+				new_values.append(converted)
+		var tmp = DSLString.new("")
+		var formatted = tmp._percent_format(fmt_out, new_values)
+		if tmp.last_error != "":
+			last_error = tmp.last_error
+			return null
+		var out_data: Array[int] = []
+		for oc in formatted:
+			var u = oc.unicode_at(0)
+			if u > 255:
+				last_error = "UnicodeEncodeError: ascii codec cannot encode the formatting result"
+				return null
+			out_data.append(u)
+		return DSLBytes.new(out_data)
+
+	## bytes 格式化的单实参预转换 (b/s/a/r/c 转为字符安全形态) [br]
+	## [param val] 原实参 [br]
+	## [param conv] 转换符 [br]
+	## [returns] 转换后的 DSLObject, 出错返回 null 并置 last_error
+	func _bytes_convert_arg(val: DSLObject, conv: String) -> DSLObject:
+		if val == null:
+			return null
+		if conv == "b" or conv == "s":
+			return _bytes_val_to_str(val)
+		if conv == "a" or conv == "r":
+			return DSLString.new(_bytes_ascii_repr(val))
+		if conv == "c":
+			var raw_c = DSLObject._unwrap_dsl(val)
+			if raw_c is DSLBool:
+				return DSLString.new(char(1 if raw_c.value else 0))
+			if raw_c is DSLInteger:
+				if raw_c.value < 0 or raw_c.value > 255:
+					last_error = "OverflowError: %c arg not in range(256)"
+					return null
+				return DSLString.new(char(raw_c.value))
+			if raw_c is DSLBytes:
+				if raw_c.data.size() != 1:
+					last_error = "TypeError: %c requires an integer in range(256) or a single byte"
+					return null
+				return DSLString.new(char(raw_c.data[0]))
+			last_error = "TypeError: %c requires an integer in range(256) or a single byte"
+			return null
+		# 数值 / 浮点转换原样交给 str 机制 (类型校验文案与 CPython 同族)
+		return val
+
+	## %b / %s 的实参转换: bytes 类实参按 latin-1 转字符, 其余报 CPython 文案 [br]
+	## 支持 __bytes__ 协议 (返回值须为 bytes)
+	func _bytes_val_to_str(val: DSLObject) -> DSLObject:
+		var raw = DSLObject._unwrap_dsl(val)
+		if raw is DSLBytes:
+			var s := ""
+			for b in raw.data:
+				s += char(b)
+			return DSLString.new(s)
+		if raw.klass != null:
+			var m = raw.klass._lookup_method("__bytes__")
+			if m != null:
+				if m.has_method("__get__"):
+					m = m.__get__(raw, raw.klass)
+				var call_args: Array[DSLObject] = []
+				var r = raw.klass._invoke_func(m, call_args, {} as Dictionary[String, DSLObject])
+				if r == null:
+					return null
+				if r is DSLBytes:
+					var s2 := ""
+					for b2 in r.data:
+						s2 += char(b2)
+					return DSLString.new(s2)
+				last_error = "TypeError: __bytes__ returned non-bytes (type %s)" % r._type_name()
+				return null
+		last_error = "TypeError: %b requires a bytes-like object, or an object that implements __bytes__, not '%s'" % raw._type_name()
 		return null
+
+	## ASCII 转义形态 (CPython bytes %a / %r): repr 后将非 ASCII 字符转义
+	func _bytes_ascii_repr(obj: DSLObject) -> String:
+		var r = obj.magic_repr([obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var src = r.value if r is DSLString else obj._dsl_str()
+		var out := ""
+		for ch in src:
+			var u = ch.unicode_at(0)
+			if u < 128:
+				out += ch
+			elif u <= 0xFF:
+				out += String.chr(92) + "x%02x" % u
+			elif u <= 0xFFFF:
+				out += String.chr(92) + "u%04x" % u
+			else:
+				out += String.chr(92) + "U%08x" % u
+		return out
+
 
 	## 把实参转为字节数组 (bytes / int 可迭代)
 	func _bytes_arg_to_data(obj: DSLObject) -> Array[int]:
@@ -10437,6 +10631,36 @@ class DSLClass extends DSLObject:
 				return k.methods[attr_name]
 		return null
 
+	## 判断自身是否为支持泛型下标的内建容器类型 (PEP 585)
+	func _is_generic_container() -> bool:
+		if interp == null:
+			return false
+		for generic_name in ["list", "set", "dict", "tuple", "frozenset", "type"]:
+			if interp._builtin_type_classes.get(generic_name) == self:
+				return true
+		return false
+
+	## 类下标: 泛性别名 / 用户 __class_getitem__ 协议 (P1-64) [br]
+	## 内建泛型容器返回 GenericAlias; 用户类定义 __class_getitem__ 时经协议调用; [br]
+	## 其余报 CPython 同文案 TypeError: type 'X' is not subscriptable [br]
+	## [param key] 下标对象 (多参为 DSLTuple) [br]
+	## [returns] 别名对象或协议结果, 出错返回 null
+	func _dsl_getitem(key: DSLObject) -> DSLObject:
+		if _is_generic_container():
+			var alias_args: Array[DSLObject] = []
+			if key is DSLTuple:
+				alias_args.assign(key.items)
+			else:
+				alias_args.append(key)
+			return DSLGenericAlias.new(self, alias_args)
+		var cgi = _lookup_method("__class_getitem__")
+		if cgi != null:
+			if cgi.has_method("__get__"):
+				cgi = cgi.__get__(null, self)
+			return _invoke_func(cgi, [self, key] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		last_error = "TypeError: type '%s' is not subscriptable" % name
+		return null
+
 	## 原始成员查找 (沿 MRO, 不做描述符绑定) [br]
 	## 实例访问路径经此取得类成员后, 以实例自行调用 __get__ 绑定一次 [br]
 	## [param attr_name] 成员名称 [br]
@@ -10516,6 +10740,73 @@ class DSLClass extends DSLObject:
 	## 设置类属性
 	func _dsl_setattr(attr_name: String, value: DSLObject):
 		class_attrs[attr_name] = value
+
+## PEP 585 泛性别名 (types.GenericAlias): list[int] 等类型下标的结果 [br]
+## 持有 origin 与 args, 支持等值比较 / repr / __origin__ / __args__ / 经 origin 调用
+class DSLGenericAlias extends DSLObject:
+	## 别名的原始类型
+	var origin: DSLClass
+	## 下标参数 (多参按书写次序展开)
+	var args: Array[DSLObject]
+
+	## 构造泛性别名 [br]
+	## [param p_origin] 原始类型 [br]
+	## [param p_args] 下标参数
+	func _init(p_origin: DSLClass, p_args: Array[DSLObject]):
+		super._init()
+		origin = p_origin
+		args = p_args
+
+	func _type_name() -> String:
+		return "GenericAlias"
+
+	## CPython repr 形态: origin 名 + [arg, ...] (类参用类名, 其余用 repr)
+	func _alias_repr() -> String:
+		var parts: Array[String] = []
+		for a in args:
+			if a is DSLEllipsis:
+				# CPython 的别名 repr 将 Ellipsis 参数显示为 ...
+				parts.append("...")
+			elif a is DSLClass:
+				parts.append(a.name)
+			else:
+				var r = a.magic_repr([a] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				parts.append(r.value if r is DSLString else a._dsl_str())
+		return "%s[%s]" % [origin.name, ", ".join(parts)]
+
+	func _dsl_str() -> String:
+		return _alias_repr()
+
+	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_alias_repr())
+
+	func magic_eq(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		if _args.size() != 2:
+			return null
+		var other = DSLObject._unwrap_dsl(_args[1])
+		if other is DSLGenericAlias and other.origin == origin and other.args.size() == args.size():
+			for i in range(args.size()):
+				var eq = args[i].magic_eq([args[i], other.args[i]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if not (eq is DSLBool and eq.value):
+					return DSLBool.new(false)
+			return DSLBool.new(true)
+		return DSLBool.new(false)
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var eq = magic_eq(args, _kwargs)
+		if eq == null:
+			return null
+		return DSLBool.new(not eq.value)
+
+	## 属性访问: __origin__ / __args__ (其余沿对象模型)
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "__origin__":
+			return origin
+		if name == "__args__":
+			var out: Array[DSLObject] = []
+			out.assign(args)
+			return DSLTuple.new(out)
+		return super._dsl_getattribute(name)
 
 ## DSL super() 代理对象, 用于调用父类方法 [br]
 ## 持有父类引用与绑定实例, 属性查找沿父类 MRO 并绑定到实例
@@ -13221,11 +13512,18 @@ class Parser:
 	## 解析 global 声明语句 [br]
 	## [returns] 解析出的 GlobalStmt 节点, 出错时返回 null
 	func global_statement():
+		var names: Array[String] = []
 		var name_tok = consume(TokenType.IDENTIFIER, "Expected variable name")
 		if name_tok == null:
 			return null
+		names.append(name_tok.lexeme)
+		while match_types([TokenType.COMMA]):
+			name_tok = consume(TokenType.IDENTIFIER, "Expected variable name")
+			if name_tok == null:
+				return null
+			names.append(name_tok.lexeme)
 		skip_newlines()
-		return GlobalStmt.new(name_tok.lexeme)
+		return GlobalStmt.new(names)
 		
 	## 解析 nonlocal 声明语句 [br]
 	## [returns] 解析出的 NonlocalStmt 节点, 出错时返回 null
@@ -14460,10 +14758,18 @@ class Parser:
 	## lambda 例外: 其函数体自行吸收后缀, 直接返回 LambdaExpr [br]
 	## [returns] 解析出的 Expr 节点
 	func primary():
-		if match_types([TokenType.INTEGER, TokenType.FLOAT, TokenType.STRING, TokenType.TRUE, TokenType.FALSE, TokenType.NULL]):
+		if match_types([TokenType.INTEGER, TokenType.FLOAT, TokenType.TRUE, TokenType.FALSE, TokenType.NULL]):
 			var lit = Literal.new(previous().literal)
 			lit.overflow = previous().literal_overflow
 			return finish_call_or_index(lit)
+		if match_types([TokenType.STRING, TokenType.FSTRING]):
+			# 相邻字符串 / 字节串 / f-string 字面量合并 (CPython 词法层隐式连接, P1-63)
+			var merged = _merge_string_literals()
+			if merged == null or report.has_error:
+				return null
+			if merged is FStringExpr:
+				return finish_call_or_index(merged)
+			return finish_call_or_index(Literal.new(merged))
 		if match_types([TokenType.ELLIPSIS]):
 			return finish_call_or_index(Literal.new(DSLEllipsis.get_singleton()))
 		if match_types([TokenType.FSTRING]):
@@ -14924,6 +15230,59 @@ class Parser:
 	## 解析 f-string 的 parts, 将替换字段的源码片段解析为 Expr [br]
 	## [param parts_raw] Lexer 产出的原始 parts (expr 为源码字符串) [br]
 	## [returns] FStringExpr 节点, 出错时返回 null
+	## 合并相邻字符串 / 字节串 / f-string 字面量 (CPython 词法层隐式连接, P1-63) [br]
+	## str+str 合并为单字面量, bytes+bytes 合并为驻留字面量, 含 f-string 时合并为单个 f-string; [br]
+	## str 与 bytes 混用报 CPython 同文案 SyntaxError; [br]
+	## 括号内跨行与反斜杠续行因词法层不产出 NEWLINE 而自然相邻, 语句间换行不相邻 [br]
+	## [returns] String / DSLBytes / FStringExpr, 出错返回 null
+	func _merge_string_literals():
+		var first = previous()
+		var is_fstring = first.type == TokenType.FSTRING
+		var fstring_parts: Array = []
+		var str_acc := ""
+		var bytes_acc: Array[int] = []
+		var saw_str := false
+		var saw_bytes := false
+		if is_fstring:
+			fstring_parts = first.literal.duplicate()
+		elif first.literal is DSLBytes:
+			saw_bytes = true
+			bytes_acc.assign(first.literal.data)
+		else:
+			saw_str = true
+			str_acc = first.literal
+		while check(TokenType.STRING) or check(TokenType.FSTRING):
+			var tok = advance()
+			var lit = tok.literal
+			var tok_is_fstring = tok.type == TokenType.FSTRING
+			var tok_is_bytes = (not tok_is_fstring) and lit is DSLBytes
+			if tok_is_bytes and (is_fstring or saw_str):
+				report.error("SyntaxError: cannot mix bytes and nonbytes literals")
+				return null
+			if (tok_is_fstring or not tok_is_bytes) and saw_bytes:
+				report.error("SyntaxError: cannot mix bytes and nonbytes literals")
+				return null
+			if tok_is_fstring:
+				is_fstring = true
+				fstring_parts.append_array(tok.literal)
+			elif tok_is_bytes:
+				saw_bytes = true
+				bytes_acc.append_array(tok.literal.data)
+			elif is_fstring:
+				# f-string 之后的字符串按书写次序就位追加为字面量 part
+				fstring_parts.append({"is_literal": true, "text": lit, "expr": "", "conv": "", "fmt": ""})
+			else:
+				saw_str = true
+				str_acc += lit
+		if is_fstring:
+			if saw_str:
+				# 首个 f-string 之前的字符串前缀
+				fstring_parts.push_front({"is_literal": true, "text": str_acc, "expr": "", "conv": "", "fmt": ""})
+			return parse_fstring_expr(fstring_parts)
+		if saw_bytes:
+			return DSLBytes.pooled_literal(bytes_acc)
+		return str_acc
+
 	func parse_fstring_expr(parts_raw: Array) -> Expr:
 		var parts: Array = []
 		for part in parts_raw:
@@ -16855,6 +17214,13 @@ class Interpreter:
 		raise_exception("AttributeError", name)
 		return null
 	
+	## 内置 object.__init_subclass__ 回调: 默认空操作 [br]
+	## [param _args] 实参 (未使用) [br]
+	## [param _kwargs] 关键字实参 (未使用) [br]
+	## [returns] None
+	func _object_init_subclass(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLNone.new()
+
 	## 内置异常 __str__ 回调 [br]
 	## [param exc_args] 异常参数, 首个为 wrapper 实例 [br]
 	## [param _kwargs] 关键字参数 (未使用) [br]
@@ -16902,6 +17268,9 @@ class Interpreter:
 		obj_methods["__setattr__"] = obj_setattr_desc
 		var obj_delattr_desc = DSLMethodDescriptor.new("__delattr__", Callable(self, "_object_delattr"))
 		obj_methods["__delattr__"] = obj_delattr_desc
+		# object.__init_subclass__ 默认空操作 (CPython 隐式 classmethod): 使 super().__init_subclass__()
+		# 链式调用可达, 类创建钩子查找总有终点; PyGDS 类头不支持关键字实参 (P1-38), 无 kwargs 拒收路径
+		obj_methods["__init_subclass__"] = _make_builtin("__init_subclass__", Callable(self, "_object_init_subclass"))
 		var obj_class = DSLClass.new("object", null, obj_methods, self)
 		globals.define("object", obj_class)
 		
@@ -16943,6 +17312,7 @@ class Interpreter:
 		var list_methods = {}
 		list_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_list_new"))
 		var list_class = DSLClass.new("list", obj_class, list_methods, self)
+		_builtin_type_classes["list"] = list_class
 		list_class.klass = type_class
 		_inject_builtin_methods(list_class, "list")
 		globals.define("list", list_class)
@@ -16951,6 +17321,7 @@ class Interpreter:
 		var tuple_methods = {}
 		tuple_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_tuple_new"))
 		var tuple_class = DSLClass.new("tuple", obj_class, tuple_methods, self)
+		_builtin_type_classes["tuple"] = tuple_class
 		tuple_class.klass = type_class
 		_inject_builtin_methods(tuple_class, "tuple")
 		globals.define("tuple", tuple_class)
@@ -16959,6 +17330,7 @@ class Interpreter:
 		var dict_methods = {}
 		dict_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_dict_new"))
 		var dict_class = DSLClass.new("dict", obj_class, dict_methods, self)
+		_builtin_type_classes["dict"] = dict_class
 		dict_class.klass = type_class
 		_inject_builtin_methods(dict_class, "dict")
 		globals.define("dict", dict_class)
@@ -17006,6 +17378,7 @@ class Interpreter:
 		var set_methods = {}
 		set_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_set_new"))
 		var set_class = DSLClass.new("set", obj_class, set_methods, self)
+		_builtin_type_classes["set"] = set_class
 		set_class.klass = type_class
 		_inject_builtin_methods(set_class, "set")
 		globals.define("set", set_class)
@@ -17021,6 +17394,7 @@ class Interpreter:
 		var frozenset_methods = {}
 		frozenset_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_frozenset_new"))
 		var frozenset_class = DSLClass.new("frozenset", obj_class, frozenset_methods, self)
+		_builtin_type_classes["frozenset"] = frozenset_class
 		frozenset_class.klass = type_class
 		_inject_builtin_methods(frozenset_class, "frozenset")
 		globals.define("frozenset", frozenset_class)
@@ -20434,9 +20808,10 @@ class Interpreter:
 			var env = environment
 			while env.enclosing:
 				env = env.enclosing
-			if not env.values.has(stmt.name):
-				env.define(stmt.name, DSLNone.new())
-			environment.mark_global(stmt.name)
+			for gname in stmt.names:
+				if not env.values.has(gname):
+					env.define(gname, DSLNone.new())
+				environment.mark_global(gname)
 			return ExecResult.NORMAL
 			
 		if stmt is NonlocalStmt:
@@ -22554,6 +22929,9 @@ class Interpreter:
 		return "<unknown>"
 
 	func _dispatch_call(callee, pos_args: Array[DSLObject], kw_dict: Dictionary[String, DSLObject]) -> DSLObject:
+		if callee is DSLGenericAlias:
+			# GenericAlias 调用委托 origin (CPython: list[int]() 为 [])
+			return _dispatch_call(callee.origin, pos_args, kw_dict)
 		if callee is DSLMethod:
 			var result = callee.magic_call(pos_args, kw_dict)
 			if _suspended:
@@ -22713,7 +23091,8 @@ class Interpreter:
 				var alias = entry["alias"]
 				names[alias if alias != "" else entry["name"]] = true
 		elif st is GlobalStmt:
-			globals_decl[st.name] = true
+			for nm in st.names:
+				globals_decl[nm] = true
 		elif st is NonlocalStmt:
 			for nm in st.names:
 				globals_decl[nm] = true
@@ -23200,6 +23579,49 @@ class Interpreter:
 			return null
 		return DSLNone.new()
 	
+	## 类创建固定钩子 (CPython type_new 尾部): __set_name__ 先于 __init_subclass__ [br]
+	## __set_name__: 类体自有属性中, 其类型沿 MRO 定义了 __set_name__ 的对象逐一以 [br]
+	## `attr.__set_name__(owner, name)` 调用; [br]
+	## __init_subclass__: 沿新类 MRO 的父链 (不含新类自身) 取首个 __init_subclass__ 定义者, [br]
+	## 以新类为 cls 调用 (新类自定义的钩子仅对其子类生效, classmethod 包装解包后直调); [br]
+	## 钩子异常使类创建失败, 调用方不得绑定类名 (CPython 同语义) [br]
+	## [param new_cls] 新建类 (MRO 已就绪) [br]
+	## [param own_attrs] 类体自有属性字典 (insertion 顺序) [br]
+	## [returns] NORMAL / SUSPENDED / RAISE / ERROR
+	func _run_class_fixup_hooks(new_cls: DSLClass, own_attrs: Dictionary) -> ExecResult:
+		for attr_name in own_attrs:
+			var attr_val = own_attrs[attr_name]
+			if attr_val == null or attr_val.klass == null:
+				continue
+			var sn_method = attr_val.klass._lookup_method("__set_name__")
+			if sn_method == null:
+				continue
+			# 按属性访问协议绑定 (普通函数绑定实例, classmethod 绑定类, staticmethod 不绑定),
+			# 调用实参为 (owner, name), 与 CPython 的 attr.__set_name__(owner, name) 一致
+			if sn_method.has_method("__get__"):
+				sn_method = sn_method.__get__(attr_val, attr_val.klass)
+			var sn_args: Array[DSLObject] = [new_cls, DSLString.cached(attr_name)]
+			var sn_res = _dispatch_call(sn_method, sn_args, {} as Dictionary[String, DSLObject])
+			if _suspended:
+				return ExecResult.SUSPENDED
+			if sn_res == null and (report.has_error or last_exception != null):
+				return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+		var hook = null
+		for k in range(1, new_cls.mro.size()):
+			if new_cls.mro[k].methods.has("__init_subclass__"):
+				hook = new_cls.mro[k].methods["__init_subclass__"]
+				break
+		if hook != null:
+			# classmethod 包装取被包函数, 以新类为 cls 直接调用 (CPython 同语义)
+			while hook is DSLClassMethodWrapper:
+				hook = hook.wrapped
+			var is_res = _dispatch_call(hook, [new_cls] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if _suspended:
+				return ExecResult.SUSPENDED
+			if is_res == null and (report.has_error or last_exception != null):
+				return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+		return ExecResult.NORMAL
+
 	## 执行类定义语句 [br]
 	## 解析超类, 方法体与类属性, 构造 DSLClass 并注册到当前环境 [br]
 	## [param stmt] ClassStmt AST 节点 [br]
@@ -23360,7 +23782,8 @@ order (MRO) for bases %s" % ", ".join(names))
 					class_attrs[body_stmt.name] = inner_cls
 			elif body_stmt is GlobalStmt:
 				# 类体内的 global 声明 (P0-24): 后续赋值经 set_val 写模块全局, 不落类属性
-				class_env.mark_global(body_stmt.name)
+				for gname in body_stmt.names:
+					class_env.mark_global(gname)
 			elif body_stmt is NonlocalStmt:
 				# 类体内的 nonlocal 声明 (CPython 3.12 合法): 沿外层链找函数作用域绑定,
 				# 跳过嵌套链上的类作用域; 找不到时报 CPython 文案的 SyntaxError
@@ -23395,6 +23818,10 @@ order (MRO) for bases %s" % ", ".join(names))
 		class_obj.methods = methods
 		class_obj.class_attrs = class_attrs
 		class_obj.klass = globals.get_val_safe("type")
+		# 类创建固定钩子: __set_name__ → __init_subclass__ (先于名字绑定与装饰器, CPython 同语义)
+		var hook_res = _run_class_fixup_hooks(class_obj, class_attrs)
+		if hook_res != ExecResult.NORMAL:
+			return hook_res
 		environment.define(stmt.name, class_obj)
 		if not stmt.decorators.is_empty():
 			var dec_val = _apply_decorators(stmt.decorators, class_obj)
@@ -23988,6 +24415,9 @@ order (MRO) for bases %s" % ", ".join(names))
 			for k in obj.items:
 				acc = acc ^ builtin_hash([obj.items[k]] as Array[DSLObject], {} as Dictionary[String, DSLObject]).value
 			return DSLInteger.pooled(acc)
+		# 泛性别名按内容哈希 (CPython 不变量: 等值别名哈希相等)
+		if obj is DSLGenericAlias:
+			return DSLInteger.pooled(obj._alias_repr().hash())
 		return DSLInteger.pooled(obj.get_instance_id())
 
 	## 元组内容哈希: CPython 同族算法 (乘子折叠), 精确数值不与 CPython 对齐 (P2-4 同族)
@@ -24610,57 +25040,95 @@ order (MRO) for bases %s" % ", ".join(names))
 	## isinstance(obj, cls) - 检查类型
 	func builtin_isinstance(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		if args.size() != 2:
-			raise_exception("TypeError", "isinstance() takes 2 arguments")
+			raise_exception("TypeError", "isinstance expected 2 arguments, got %d" % args.size())
 			return null
-		var obj = args[0]
-		var cls = args[1]
+		var res = _isinstance_check(args[0], args[1])
+		if res == null:
+			return null
+		return DSLBool.new(res)
+
+	## isinstance 的递归检查 (CPython: 元组形态短路求值, 支持嵌套元组) [br]
+	## [param obj] 待检查对象 [br]
+	## [param cls] 类 / 类元组 (可嵌套) [br]
+	## [returns] true/false, 元素含非类时报 TypeError 并返回 null
+	func _isinstance_check(obj: DSLObject, cls) -> Variant:
+		if cls is DSLGenericAlias:
+			raise_exception("TypeError", "isinstance() argument 2 cannot be a parameterized generic")
+			return null
 		if cls is DSLClass:
 			# Every object is an instance of object
 			if cls.name == "object":
-				return DSLBool.new(true)
+				return true
 			if obj.klass != null:
-				if obj.klass.mro.has(cls):
-					return DSLBool.new(true)
-				return DSLBool.new(false)
+				return obj.klass.mro.has(cls)
 			# bool is a subclass of int in Python
 			if obj is DSLBool and cls.name == "int":
-				return DSLBool.new(true)
+				return true
 			if obj._type_name() == cls.name:
-				return DSLBool.new(true)
-			return DSLBool.new(false)
+				return true
+			return false
 		if cls is DSLTuple:
 			for item in cls.items:
-				if item is DSLClass:
-					if item.name == "object":
-						return DSLBool.new(true)
-					if obj.klass != null:
-						if obj.klass.mro.has(item):
-							return DSLBool.new(true)
-					elif obj._type_name() == item.name:
-						return DSLBool.new(true)
-					elif obj is DSLBool and item.name == "int":
-						return DSLBool.new(true)
-			return DSLBool.new(false)
+				if item is DSLClass or item is DSLTuple:
+					var r = _isinstance_check(obj, item)
+					if r == null:
+						return null
+					if r:
+						return true
+				else:
+					raise_exception("TypeError", "isinstance() arg 2 must be a type, a tuple of types, or a union")
+					return null
+			return false
 		# Handle case where cls is a DSLString (e.g., type(None) returns "<class 'NoneType'>")
 		if cls is DSLString:
 			var cls_name = cls.value
 			if cls_name == "<class '" + obj._type_name() + "'>":
-				return DSLBool.new(true)
-		return DSLBool.new(false)
+				return true
+		raise_exception("TypeError", "isinstance() arg 2 must be a type, a tuple of types, or a union")
+		return null
 	
 	## issubclass(cls, cls_or_tuple) - 检查继承关系
 	func builtin_issubclass(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		if args.size() != 2:
-			raise_exception("TypeError", "issubclass() takes 2 arguments")
+			raise_exception("TypeError", "issubclass expected 2 arguments, got %d" % args.size())
 			return null
 		var sub = args[0]
 		var sup = args[1]
 		if not (sub is DSLClass):
-			return DSLBool.new(false)
-		if not (sup is DSLClass):
-			raise_exception("TypeError", "issubclass() arg 2 must be a class")
+			raise_exception("TypeError", "issubclass() arg 1 must be a class")
 			return null
-		return DSLBool.new(sub.mro.has(sup))
+		var res = _issubclass_check(sub, sup)
+		if res == null:
+			return null
+		return DSLBool.new(res)
+
+	## issubclass 的递归检查 (CPython: 元组形态短路求值, 支持嵌套元组) [br]
+	## [param sub] 待检查的类 [br]
+	## [param sup] 类 / 类元组 (可嵌套) [br]
+	## [returns] true/false, 元素含非类时报 TypeError 并返回 null
+	func _issubclass_check(sub: DSLClass, sup) -> Variant:
+		if sup is DSLGenericAlias:
+			raise_exception("TypeError", "issubclass() argument 2 cannot be a parameterized generic")
+			return null
+		if sup is DSLClass:
+			return sub.mro.has(sup)
+		if sup is DSLTuple:
+			for item in sup.items:
+				if item is DSLClass:
+					if sub.mro.has(item):
+						return true
+				elif item is DSLTuple:
+					var r = _issubclass_check(sub, item)
+					if r == null:
+						return null
+					if r:
+						return true
+				else:
+					raise_exception("TypeError", "issubclass() arg 2 must be a class, a tuple of classes, or a union")
+					return null
+			return false
+		raise_exception("TypeError", "issubclass() arg 2 must be a class, a tuple of classes, or a union")
+		return null
 
 	## getattr(obj, name, default) - 获取对象属性 [br]
 	## 属性不存在时返回 default (若提供), 否则抛 AttributeError
@@ -25388,6 +25856,10 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		if _has_layout_conflict(base_objs):
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
+			return null
+		# 类创建固定钩子: __set_name__ → __init_subclass__ (type() 三参与 class 语句同语义)
+		var hook_res = _run_class_fixup_hooks(new_cls, class_attrs_dict)
+		if hook_res != ExecResult.NORMAL:
 			return null
 		globals.define(name_obj.value, new_cls)
 		return new_cls

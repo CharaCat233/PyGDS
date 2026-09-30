@@ -308,6 +308,16 @@ print(len(b\x00))            # 1 (bytes 支持 NUL 字节)
 
 非法转义（如 `\xZZ`、`\u12`）报 `SyntaxError`；未识别转义（如 `\8`）按 CPython 原样保留。str 字面量不支持 NUL 字符（`\x00` 报 `SyntaxError`，Godot String 的平台限制），bytes 不受限
 
+相邻字符串 / 字节串 / f-string 字面量在词法层隐式连接为单个字面量（括号内跨行与反斜杠续行均可）；str 与 bytes 混用报 `SyntaxError: cannot mix bytes and nonbytes literals`：
+
+```python
+s = "ab" "cd"            # "abcd"
+t = ("长字符串"
+     "续行")             # 括号内跨行连接
+b = b"pre" b"post"       # b'prepost'
+f = f"v={1}" " (尾注)"   # f-string 与字符串连接
+```
+
 ### 行连接
 
 括号（`()` / `[]` / `{}`）内的换行是隐式续行，反斜杠 `\` 行尾亦可显式续行；调用实参、函数/lambda 参数表与类基列表均允许尾随逗号：
@@ -781,6 +791,8 @@ print(Service().run(), Service.ping())    # run ping
 
 类与函数名后的 `[T, U]` 类型参数列表（PEP 695）按语法接受并忽略，不做类型语义；每个类型参数可带绑定注解（`: 表达式`）与默认值（`= 表达式`，Python 3.13+），均只解析不求值。`type` 别名语句同样仅接受语法：别名名不绑定到任何值（后续访问该名字会报 `NameError`），右侧表达式只解析不求值——由于类型注解在 PyGDS 中一律忽略，注解位置使用别名不受影响
 
+运行期对内建泛型容器做类型下标返回泛性别名（PEP 585）：`list[int]` / `dict[str, int]` / `tuple[int, ...]` / `set[X]` / `frozenset[X]` / `type[X]`，支持 `__origin__` / `__args__`、等值比较、内容哈希与经原始类型的调用（`list[int]()` 为 `[]`）；用户类定义 `__class_getitem__` 时下标经协议调用。`isinstance` / `issubclass` 的第二实参不接受参数化泛型（与 CPython 一致）
+
 ```python
 class Box[T]:
     def __init__(self, v):
@@ -884,7 +896,7 @@ import operator
 sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
 
-`from __future__ import ...` 为编译器指令，PyGDS 按语法空操作处理：位于文件头部的合法特性名（`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`）被接受并忽略，不绑定名字（PyGDS 注解为立即求值，无延迟求值语义）；未知特性名报 `SyntaxError: future feature x is not defined`
+`from __future__ import ...` 为编译器指令，PyGDS 按语法空操作处理：位于文件头部的合法特性名（`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`）被接受并忽略，不绑定名字（PyGDS 注解一律不求值，无延迟求值语义）；未知特性名报 `SyntaxError: future feature x is not defined`
 
 > **注意**：目前仅支持内置模块，不支持导入用户编写的 `.py` 文件，模块详情见 [内置模块文档](./builtin.md)
 

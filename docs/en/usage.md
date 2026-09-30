@@ -225,6 +225,16 @@ print(len(b\x00))            # 1 (bytes support NUL)
 
 Invalid escapes (e.g. `\xZZ`, `\u12`) raise `SyntaxError`; unrecognized escapes (e.g. `\8`) are kept verbatim as in CPython. str literals cannot contain NUL (`\x00` raises `SyntaxError`, a Godot String platform limitation); bytes are unaffected
 
+Adjacent string / bytes / f-string literals concatenate implicitly at the lexer level (across lines inside brackets and with backslash continuation); mixing str and bytes raises `SyntaxError: cannot mix bytes and nonbytes literals`:
+
+```python
+s = "ab" "cd"            # "abcd"
+t = ("long string"
+     "continuation")     # cross-line inside brackets
+b = b"pre" b"post"       # b'prepost'
+f = f"v={1}" " (tail)"   # f-string + string
+```
+
 ### Line Continuation
 
 A newline inside brackets (`()` / `[]` / `{}`) is an implicit continuation; a trailing backslash `\` also joins lines, and trailing commas are allowed in call arguments, function/lambda parameter lists and class base lists:
@@ -783,6 +793,8 @@ Decorator expressions run through the evaluation channel, so `time.sleep` suspen
 
 The `[T, U]` type parameter list after a class or function name (PEP 695) is accepted as syntax and ignored; no type semantics are applied. Each type parameter may carry a bound annotation (`: expression`) and a default (`= expression`, Python 3.13+), both parsed but never evaluated. The `type` alias statement is likewise syntax-only: the alias name is not bound to any value (referencing it later raises `NameError`), and the right-hand expression is parsed but not evaluated — since type annotations are always ignored in PyGDS, using an alias in annotation position is unaffected
 
+Runtime type subscripting on the built-in generic containers returns a generic alias (PEP 585): `list[int]` / `dict[str, int]` / `tuple[int, ...]` / `set[X]` / `frozenset[X]` / `type[X]`, with `__origin__` / `__args__`, equality, content hashing, and calls through the origin type (`list[int]()` is `[]`); a user class defining `__class_getitem__` receives subscripting through the protocol. `isinstance` / `issubclass` reject parameterized generics as their second argument (matching CPython)
+
 ```python
 class Box[T]:
     def __init__(self, v):
@@ -885,7 +897,7 @@ import operator
 sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
 
-`from __future__ import ...` is a compiler directive; PyGDS treats it as a syntactic no-op: valid feature names at the top of the file (`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`) are accepted and ignored without binding any name (annotations in PyGDS evaluate eagerly, with no lazy semantics); unknown names raise `SyntaxError: future feature x is not defined`
+`from __future__ import ...` is a compiler directive; PyGDS treats it as a syntactic no-op: valid feature names at the top of the file (`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`) are accepted and ignored without binding any name (annotations in PyGDS are never evaluated, with no lazy semantics); unknown names raise `SyntaxError: future feature x is not defined`
 
 > **Note**: only built-in modules are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
 

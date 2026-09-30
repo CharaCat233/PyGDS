@@ -117,6 +117,10 @@ class DSLBytes extends DSLObject:
 
 Indexing and iteration yield integers (`b"xy"[0] == 120`); `len` is the byte count; slicing, `b"a" * 3` repetition and `in` are supported. `repr` looks like `b'xy'`, with non-printable bytes escaped as `\xNN`. Strictly distinct from `str` (`b"a" == "a"` is `False`).
 
+#### bytes %-formatting (PEP 461)
+
+`b"..." % args` supports `%b` / `%s` (equivalent in 3.12, argument must be bytes or implement `__bytes__`), `%a` / `%r` (ASCII-escaped form), `%c` (an integer 0-255 or a single byte), the full numeric/float conversion family with width/precision/flags, and the mapping form keyed by bytes; error messages match CPython
+
 ### DSLRange — Lazy Integer Sequence Type
 
 Corresponds to Python `range`, storing only `start` / `stop` / `step` and evaluating on demand (large ranges are not materialised)

@@ -117,6 +117,10 @@ class DSLBytes extends DSLObject:
 
 索引与迭代产出整数（`b"xy"[0] == 120`），`len` 为字节数，支持切片、`b"a" * 3` 重复与 `in` 判定；`repr` 形如 `b'xy'`，不可打印字节转义为 `\xNN` 形式；与 `str` 严格区分（`b"a" == "a"` 为 `False`）
 
+#### bytes 的 % 格式化（PEP 461）
+
+`b"..." % args` 支持 `%b` / `%s`（3.12 中二者等价，实参须为 bytes 或实现 `__bytes__`）、`%a` / `%r`（ASCII 转义形态）、`%c`（0-255 整数或单字节 bytes）、数值与浮点全族转换及宽度 / 精度 / 旗标，映射形式以 bytes 为键；错误文案与 CPython 一致
+
 ### DSLRange — 惰性整数序列类型
 
 对应 Python `range`，只保存 `start` / `stop` / `step`，按需求值（大范围不展开内存）
