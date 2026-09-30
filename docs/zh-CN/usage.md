@@ -793,6 +793,22 @@ print(Service().run(), Service.ping())    # run ping
 
 运行期对内建泛型容器做类型下标返回泛性别名（PEP 585）：`list[int]` / `dict[str, int]` / `tuple[int, ...]` / `set[X]` / `frozenset[X]` / `type[X]`，支持 `__origin__` / `__args__`、等值比较、内容哈希与经原始类型的调用（`list[int]()` 为 `[]`）；用户类定义 `__class_getitem__` 时下标经协议调用。`isinstance` / `issubclass` 的第二实参不接受参数化泛型（与 CPython 一致）
 
+### 变量注解与类型别名
+
+变量注解按 CPython 语义求值：模块与类体的注解表达式在声明处求值并入 `__annotations__`（插入序，模块为全局名、类为类属性），类体带值注解同时创建类属性、裸注解不创建；函数体内的注解不求值；函数参数与返回注解在 def 时求值并存入 `f.__annotations__`（返回注解键为 `"return"`）；`from __future__ import annotations` 生效时全部跳过求值：
+
+```python
+x: int = 5
+print(__annotations__)        # {'x': <class 'int'>}
+
+def f(a: int) -> str: ...
+print(f.__annotations__)      # {'a': <class 'int'>, 'return': <class 'str'>}
+```
+
+类型对象的 `|` 运算产生联合类型（PEP 604）：`int | str` 的 repr 为 `int | str`，`isinstance(x, int | str)` 与 `issubclass(bool, int | str)` 按成员判定
+
+`type X = expr`（PEP 695）将 X 绑定为 TypeAliasType 对象：repr 为别名名本身，`__value__` 惰性求值（首次访问求值一次并缓存），别名可用于注解位置
+
 ```python
 class Box[T]:
     def __init__(self, v):
@@ -896,7 +912,7 @@ import operator
 sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
 
-`from __future__ import ...` 为编译器指令，PyGDS 按语法空操作处理：位于文件头部的合法特性名（`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`）被接受并忽略，不绑定名字（PyGDS 注解一律不求值，无延迟求值语义）；未知特性名报 `SyntaxError: future feature x is not defined`
+`from __future__ import ...` 为编译器指令，PyGDS 按语法空操作处理：位于文件头部的合法特性名（`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`）被接受并忽略，不绑定名字（注解语义见下）；未知特性名报 `SyntaxError: future feature x is not defined`
 
 > **注意**：目前仅支持内置模块，不支持导入用户编写的 `.py` 文件，模块详情见 [内置模块文档](./builtin.md)
 

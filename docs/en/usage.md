@@ -795,6 +795,22 @@ The `[T, U]` type parameter list after a class or function name (PEP 695) is acc
 
 Runtime type subscripting on the built-in generic containers returns a generic alias (PEP 585): `list[int]` / `dict[str, int]` / `tuple[int, ...]` / `set[X]` / `frozenset[X]` / `type[X]`, with `__origin__` / `__args__`, equality, content hashing, and calls through the origin type (`list[int]()` is `[]`); a user class defining `__class_getitem__` receives subscripting through the protocol. `isinstance` / `issubclass` reject parameterized generics as their second argument (matching CPython)
 
+### Variable annotations and type aliases
+
+Variable annotations are evaluated with CPython semantics: module and class-body annotation expressions are evaluated at the declaration site and stored into `__annotations__` (insertion order; a module global / class attribute respectively); class-body annotations with a value also create the class attribute while bare ones do not; annotations inside function bodies are not evaluated; function parameter and return annotations are evaluated at def time into `f.__annotations__` (the return key is `"return"`); `from __future__ import annotations` skips all evaluation:
+
+```python
+x: int = 5
+print(__annotations__)        # {'x': <class 'int'>}
+
+def f(a: int) -> str: ...
+print(f.__annotations__)      # {'a': <class 'int'>, 'return': <class 'str'>}
+```
+
+The `|` operator on type objects produces a union type (PEP 604): `int | str` reprs as `int | str`, and `isinstance(x, int | str)` / `issubclass(bool, int | str)` check the members
+
+`type X = expr` (PEP 695) binds X to a TypeAliasType object: its repr is the alias name itself, `__value__` is evaluated lazily (once, cached), and the alias is usable in annotation positions
+
 ```python
 class Box[T]:
     def __init__(self, v):
@@ -897,7 +913,7 @@ import operator
 sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
 
-`from __future__ import ...` is a compiler directive; PyGDS treats it as a syntactic no-op: valid feature names at the top of the file (`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`) are accepted and ignored without binding any name (annotations in PyGDS are never evaluated, with no lazy semantics); unknown names raise `SyntaxError: future feature x is not defined`
+`from __future__ import ...` is a compiler directive; PyGDS treats it as a syntactic no-op: valid feature names at the top of the file (`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`) are accepted and ignored without binding any name (annotation semantics below); unknown names raise `SyntaxError: future feature x is not defined`
 
 > **Note**: only built-in modules are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
 

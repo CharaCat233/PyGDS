@@ -2,6 +2,32 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.5] - 2026-09-30
+
+本版修复 alpha.4 收尾扫描发现的全部 5 条缺陷：`.format()` 嵌套格式规格、行内复合语句体的 else / elif 接续与分号归属、内建容器 dunder 协议方法、`__iter__` 严格性文案与变量注解求值（PEP 526），并连带补齐 PEP 604 联合类型与 PEP 695 别名绑定
+
+### 新增
+
+- **`.format()` 嵌套格式规格（P0-26）**：规格内 `{...}` 以同一实参池按 CPython 顺序（外层字段名先于嵌套规格）递归格式化——`"{:{w}}".format(5, w=6)` 输出 `'     5'`（repr 形态，宽度 6 右对齐）、`"{:{}}"` / `{0:{1}}` 自动与显式编号、`{:{w}.{p}f}` 组合均正确；f-string 嵌套此前已正常
+- **行内复合语句体（P1-66）**：`if x: ...` 换行后的 `elif` / `else` 正常接续（`while` / `for` 同）；连带修复分号归属——`if False: a = 1; b = 2` 的 `b = 2` 此前逃出 if 体（词法层分号产出普通换行），现分号分隔的后续语句与首句同属行内体（`try:` 行内体同）
+- **内建容器 dunder 协议方法（P1-67）**：`__len__`（list / tuple / dict / str / bytes / range）、`__iter__`（八类容器，返回与 `iter()` 同型的 `*_iterator` 对象）、`__delitem__`（list / dict）在实例上可调用（`[1, 2].__len__()` 为 2）；klass 为 null 的字面量实例经注册类型类回退查找
+- **变量注解求值（P2-44，PEP 526）**：模块与类体的注解表达式按 CPython 语义在声明处求值（`x: undefined_name = 1` 报 `NameError`），存入 `__annotations__`（模块全局 / 类属性，插入序）；类体带值注解创建类属性、裸注解不创建；函数体内的注解不求值（CPython 同）；函数参数与返回注解在 def 时求值并存入 `f.__annotations__`（含 `"return"` 键，lambda 恒为空）；`from __future__ import annotations` 生效时全部跳过（PEP 563 语义）
+- **PEP 604 联合类型（连带）**：`int | str` 产生 UnionType（repr 为 `int | str`、等值比较、成员扁平化），`isinstance` / `issubclass` 按成员判定
+- **PEP 695 别名绑定（连带）**：`type X = expr` 将 X 绑定为 TypeAliasType 对象（repr 为别名名，`__value__` 惰性求值一次并缓存，定义环境捕获），别名可用于注解位置
+
+### 修复
+
+- **`__iter__` 返回非迭代对象的文案（P2-43）**：用户 `__iter__` 返回非迭代对象（int / list 等）时报 CPython 同文案 `iter() returned non-iterator of type 'int'`（此前按宽松回退当作可迭代处理并报 `'X' object is not iterable`）；返回带 `__next__` 的对象与生成器仍按迭代器接受
+
+### 测试
+
+- 新增 6 个测试并入 `expected.json`（共 272 个用例全部通过，既有条目零变更）：`lang_inline_compound`（分号归属 / else 接续 / elif 链 / while 与 for 的 else / try 行内体）、`lang_format_nested`（嵌套规格全形态）、`lang_dunder_protocols`（八类容器 len / iter / delitem 及不可变拒绝）、`lang_iter_strict`（int / list 拒绝文案与合法自返）、`lang_annotations`（注解求值 / `__annotations__` / 类体 / 函数 / 函数内跳过 / PEP 604 联合）、`lang_type_alias`（别名绑定 / `__value__` / 注解位置使用）
+- 挂起综合测试 24 个用例全部通过；93 个用例文件双端输出一致；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md`：注解语义说明更新（注解一律求值并入 `__annotations__`，future annotations 生效时跳过）；PEP 695 段更新（别名绑定为 TypeAliasType）
+
 ## [0.7.0-alpha.4] - 2026-09-30
 
 本版修复 alpha.3 收尾探针发现的全部 7 条缺陷：类创建钩子（`__init_subclass__` / `__set_name__`）、`global` 多名声明、`issubclass` 元组第二参、相邻字符串字面量连接、运行期泛性别名（PEP 585）与 bytes `%` 格式化（PEP 461），并在修复过程中连带对齐 isinstance 同族语义、补齐 bytes 的 repr 引号规则 / 字典键 / 容器 repr

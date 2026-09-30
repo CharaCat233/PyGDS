@@ -36,6 +36,8 @@ class Token:
 	var column: int
 	## 字面量转换是否溢出 int64 (求值处据此报 OverflowError)
 	var literal_overflow: bool = false
+	## 本 NEWLINE 是否由分号产生 (行内复合体的语句分隔符, block 据此判定同块归属)
+	var semi: bool = false
 	
 	## 构造 Token [br]
 	## [param p_type] Token 类型 [br]
@@ -326,7 +328,9 @@ class Lexer:
 					advance()
 			# 分号是简单语句分隔符, 等价于换行 (CPython 允许同一行写多条简单语句)
 			# 报作 NEWLINE 使解析器的「语句末尾」检查与多语句行自然成立
-			';': add_token(TokenType.NEWLINE)
+			';':
+				add_token(TokenType.NEWLINE)
+				tokens[tokens.size() - 1].semi = true
 			'\\':
 				# 反斜杠续行: 吞掉反斜杠与紧随的换行, 继续同一逻辑行
 				if peek() == '\r':
@@ -1965,6 +1969,8 @@ class FunctionStmt extends Stmt:
 	var local_names: Dictionary = {}
 	## 局部名集合是否已收集
 	var local_names_ready: bool = false
+	## 返回值注解表达式 (不求值则为 null)
+	var return_annotation: Expr = null
 	## 构造函数定义 [br]
 	## [param n] 函数名 [br]
 	## [param p] 参数列表 [br]
@@ -2017,6 +2023,150 @@ class ContinueStmt extends Stmt:
 
 ## global 声明 [br]
 ## 将变量声明为全局作用域变量, 后续对该变量的读写直接在全局作用域进行
+## 带注解的变量声明 (x: ann [= value]) [br]
+## 注解求值语义 (CPython): 模块与类体求值并入 __annotations__, 函数体内不求值
+## PEP 695 type 别名 (TypeAliasType): type X = expr [br]
+## CPython 的别名在 def 处绑定, __value__ 惰性求值
+## PEP 604 联合类型 (types.UnionType): int | str 等类型对象的 | 运算结果
+class DSLUnionType extends DSLObject:
+	## 成员类型列表 (扁平, 不含嵌套联合)
+	var members: Array[DSLObject]
+
+	## 构造联合类型 [br]
+	## [param p_members] 成员类型数组
+	func _init(p_members: Array[DSLObject]):
+		super._init()
+		members = p_members
+
+	func _type_name() -> String:
+		return "UnionType"
+
+	## CPython repr: 成员 repr 以 " | " 连接 (类成员用类名)
+	func _dsl_str() -> String:
+		var parts: Array[String] = []
+		for m in members:
+			if m is DSLClass:
+				parts.append(m.name)
+			else:
+				parts.append(DSLObject._py_repr(m))
+		return " | ".join(parts)
+
+	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
+
+	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		if args.size() != 2:
+			return DSLBool.new(false)
+		var other = DSLObject._unwrap_dsl(args[1])
+		if other is DSLUnionType and other.members.size() == members.size():
+			for i in range(members.size()):
+				var eq = members[i].magic_eq([members[i], other.members[i]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if not (eq is DSLBool and eq.value):
+					return DSLBool.new(false)
+			return DSLBool.new(true)
+		return DSLBool.new(false)
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var eq = magic_eq(args, _kwargs)
+		if eq == null:
+			return null
+		return DSLBool.new(not eq.value)
+
+	## 判断对象是否匹配任一成员 (isinstance / issubclass 共用) [br]
+	## [param target] 待检查的类 (issubclass) 或对象类型 (isinstance) [br]
+	## [returns] 匹配任一成员时返回 true
+	func _matches(target: DSLObject) -> bool:
+		for m in members:
+			if m is DSLClass and target is DSLClass:
+				if target.mro.has(m):
+					return true
+			elif m is DSLClass:
+				if target.klass != null and target.klass.mro.has(m):
+					return true
+				if target._type_name() == m.name:
+					return true
+				if target is DSLBool and m.name == "int":
+					return true
+		return false
+
+class DSLTypeAlias extends DSLObject:
+	## 别名名
+	var alias_name: String
+	## 右侧表达式 (惰性求值)
+	var value_expr: Expr
+	## 定义时的环境 (惰性求值用)
+	var def_env = null
+	## 已缓存的求值结果
+	var _cached = null
+	## 是否已求值
+	var _evaluated: bool = false
+
+	## 构造类型别名 [br]
+	## [param p_name] 别名名 [br]
+	## [param p_expr] 右侧表达式 [br]
+	## [param p_env] 定义环境
+	func _init(p_name: String, p_expr: Expr, p_env):
+		super._init()
+		alias_name = p_name
+		value_expr = p_expr
+		def_env = p_env
+
+	func _type_name() -> String:
+		return "TypeAliasType"
+
+	## CPython repr: 别名名本身
+	func _dsl_str() -> String:
+		return alias_name
+
+	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(alias_name)
+
+	## __value__ 惰性求值 (一次, 缓存)
+	func _lazy_value(interp: Interpreter) -> DSLObject:
+		if _evaluated:
+			return _cached
+		var prev = interp.environment
+		interp.environment = def_env
+		var v = interp.evaluate(value_expr)
+		interp.environment = prev
+		_evaluated = true
+		_cached = v
+		return v
+
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "__value__" and interp != null:
+			return _lazy_value(interp)
+		return super._dsl_getattribute(name)
+
+## PEP 695 type 别名语句 (type X = expr)
+class TypeAliasStmt extends Stmt:
+	## 别名名
+	var name: String
+	## 右侧表达式
+	var value: Expr
+	## 构造类型别名语句 [br]
+	## [param n] 别名名 [br]
+	## [param v] 右侧表达式
+	func _init(n, v):
+		name = n
+		value = v
+
+class AnnotatedAssign extends Stmt:
+	## 变量名
+	var name: String
+	## 注解表达式
+	var annotation: Expr
+	## 可选的初始化值表达式
+	var value: Expr
+	## 构造带注解声明 [br]
+	## [param n] 变量名 [br]
+	## [param a] 注解表达式 [br]
+	## [param v] 初始化值表达式 (裸注解为 null)
+	func _init(n, a, v):
+		name = n
+		annotation = a
+		value = v
+
 class GlobalStmt extends Stmt:
 	## 声明为全局的变量名列表 (CPython 允许 global a, b 多名声明)
 	var names: Array[String]
@@ -2434,6 +2584,8 @@ class Param:
 	var is_positional_only: bool = false
 	## 该参数是否为仅限关键字传参 (位于 * 之后)
 	var is_keyword_only: bool = false
+	## 参数注解表达式 (不求值则为 null)
+	var annotation: Expr = null
 	
 	## 构造函数参数 [br]
 	## [param p_name] 参数名称 [br]
@@ -2442,13 +2594,14 @@ class Param:
 	## [param p_kwargs] 是否为 **kwargs 可变关键字参数 [br]
 	## [param p_positional_only] 是否为仅限位置传参 [br]
 	## [param p_keyword_only] 是否为仅限关键字传参
-	func _init(p_name: String, p_default = null, p_args = false, p_kwargs = false, p_positional_only = false, p_keyword_only = false):
+	func _init(p_name: String, p_default = null, p_args = false, p_kwargs = false, p_positional_only = false, p_keyword_only = false, p_annotation = null):
 		name = p_name
 		default_value = p_default
 		is_args = p_args
 		is_kwargs = p_kwargs
 		is_positional_only = p_positional_only
 		is_keyword_only = p_keyword_only
+		annotation = p_annotation
 
 ## 关键字参数封装 [br]
 ## 用于函数调用时的 key=value 形式参数
@@ -2755,7 +2908,7 @@ class DSLObject:
 		last_error = "TypeError: '%s' object is not callable" % [_type_name()]
 		return null
 		
-	func magic_iter(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLIterator:
+	func magic_iter(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> Variant:
 		if klass != null:
 			var method = klass._lookup_method("__iter__")
 			if method != null:
@@ -2863,21 +3016,15 @@ class DSLObject:
 			var method = klass._lookup_method("__iter__")
 			if method != null:
 				var result = klass._invoke_func(method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if result == null:
+					return null
 				if result is DSLIterator:
 					return result
 				if result is DSLSeqIterator:
 					return result._ensure_driver()
-				if result is DSLList:
-					return DSLListIterator.new(result.items)
-				if result is DSLTuple:
-					return DSLListIterator.new(result.items)
-				if result is DSLRange:
-					return result._dsl_iter()
 				# __iter__ 返回另一个用户实例 (通常是 self): 按其 __next__ 驱动
-				if result != null and result._wrapped == null:
-					var next_method = null
-					if result.klass != null:
-						next_method = result.klass._lookup_method("__next__")
+				if result._wrapped == null and result.klass != null:
+					var next_method = result.klass._lookup_method("__next__")
 					if next_method != null:
 						return DSLUserIterator.new(result)
 				# __iter__ 返回生成器函数调用结果 (生成器): 直接作为迭代器
@@ -2885,6 +3032,9 @@ class DSLObject:
 					return result._dsl_iter()
 				if result is DSLGenerator:
 					return result._dsl_iter()
+				# CPython 严格性: __iter__ 必须返回迭代器 (P2-43 文案)
+				last_error = "TypeError: iter() returned non-iterator of type '%s'" % result._type_name()
+				return null
 		# 旧式迭代协议: 仅定义 __getitem__ 的对象按连续下标迭代, 以 IndexError 结束
 		if klass != null and klass._lookup_method("__getitem__") != null:
 			return DSLGetItemIterator.new(self)
@@ -2954,6 +3104,16 @@ class DSLObject:
 			var bt = _builtin_class_by_name.get(_type_name())
 			if bt != null:
 				return bt
+		# klass 为 null 的内建实例 (字面量等): 回退到注册类型类的方法查找
+		# 使 __len__ / __iter__ 等协议方法与 CPython 一样可在实例上调用 (P1-67)
+		if klass == null:
+			var bt2 = _builtin_class_by_name.get(_type_name())
+			if bt2 != null and not (bt2.name == "int" or bt2.name == "float" or bt2.name == "bool" or bt2.name == "NoneType"):
+				var bmethod = bt2._lookup_member_raw(name)
+				if bmethod != null and not (bmethod is DSLNone):
+					if bmethod.has_method("__get__"):
+						return bmethod.__get__(self, bt2)
+					return bmethod
 		last_error = "AttributeError: '%s' object has no attribute '%s'" % [_type_name(), name]
 		return DSLNone.new()
 	
@@ -5139,6 +5299,31 @@ class DSLString extends DSLObject:
 	## [param spec] 格式说明符 [br]
 	## [param pre] 预转换字符串 (用于 !r/!s 转换后再应用对齐宽度) [br]
 	## [returns] 格式化字符串
+	## 解析格式规格中的嵌套替换字段 (CPython: 规格可含 {...}, 参数池与外层共享) [br]
+	## [param spec] 原始规格串 [br]
+	## [param fmt_args] 位置实参 [br]
+	## [param kwargs] 关键字实参 [br]
+	## [param idx_box] 自动编号游标 (与外层共享) [br]
+	## [returns] 嵌套字段替换后的具体规格串
+	func _resolve_nested_spec(spec: String, fmt_args: Array, kwargs: Dictionary, idx_box: Array) -> String:
+		var out := ""
+		var i := 0
+		while i < spec.length():
+			var ch = spec[i]
+			if ch != "{":
+				out += ch
+				i += 1
+				continue
+			var close = spec.find("}", i + 1)
+			if close == -1:
+				out += ch
+				i += 1
+				continue
+			var inner = spec.substr(i + 1, close - i - 1)
+			out += _format_field(inner, fmt_args, kwargs, idx_box)
+			i = close + 1
+		return out
+
 	func _format_spec_value(value: DSLObject, spec: String, pre: String = "") -> String:
 		var is_numeric = (value is DSLInteger) or (value is DSLFloat)
 		if spec == "":
@@ -5396,6 +5581,9 @@ class DSLString extends DSLObject:
 				last_error = "KeyError: '" + idx_str + "'"
 				last_error_args = [DSLString.new(idx_str)] as Array[DSLObject]
 			return ""
+		# 嵌套格式规格: 字段名解析之后、规格应用之前解析 (CPython 顺序, P0-26)
+		if spec.contains("{"):
+			spec = _resolve_nested_spec(spec, fmt_args, kwargs, idx_box)
 		# 应用转换标志
 		if conv == "r" or conv == "a":
 			var r = val.magic_repr([val] as Array[DSLObject], {} as Dictionary[String, DSLObject])
@@ -5547,6 +5735,13 @@ class DSLString extends DSLObject:
 			return value == other.value
 		return false
 	
+	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(args[0].value.length())
+
+	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
+		return DSLSeqIterator.new(args[0], "str_iterator")
+
+
 	func _dsl_iter() -> DSLIterator:
 		return DSLStringIterator.new(value)
 	
@@ -6954,6 +7149,23 @@ class DSLList extends DSLObject:
 	func _dsl_bool() -> bool:
 		return items.size() > 0
 		
+	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(args[0].items.size())
+
+	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
+		var inst: DSLList = DSLObject._unwrap_dsl(args[0])
+		return DSLSeqIterator.new(inst, "range_iterator" if inst.is_range else "list_iterator")
+
+
+	func magic_delitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> Variant:
+		var inst = args[0]
+		inst._dsl_delitem(args[1])
+		if inst.last_error != "":
+			last_error = inst.last_error
+			inst.last_error = ""
+			return null
+		return DSLNone.new()
+
 	func _dsl_iter() -> DSLIterator:
 		return DSLListIterator.new(items)
 	
@@ -7418,6 +7630,13 @@ class DSLTuple extends DSLObject:
 	func _dsl_bool() -> bool:
 		return items.size() > 0
 		
+	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(args[0].items.size())
+
+	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
+		return DSLSeqIterator.new(args[0], "tuple_iterator")
+
+
 	func _dsl_iter() -> DSLIterator:
 		return DSLListIterator.new(items)
 	
@@ -7606,6 +7825,22 @@ class DSLDict extends DSLObject:
 					return false
 			return true
 		return false
+
+	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(args[0].dict.size())
+
+	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
+		return DSLSeqIterator.new(args[0], "dict_keyiterator")
+
+
+	func magic_delitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> Variant:
+		var inst = args[0]
+		inst._dsl_delitem(args[1])
+		if inst.last_error != "":
+			last_error = inst.last_error
+			inst.last_error = ""
+			return null
+		return DSLNone.new()
 
 	func _dsl_iter() -> DSLIterator:
 		return DSLDictKeyIterator.new(dict, self)
@@ -8264,6 +8499,13 @@ class DSLBytes extends DSLObject:
 		return data.size()
 
 	## 迭代产出整数
+	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(args[0].data.size())
+
+	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
+		return DSLSeqIterator.new(args[0], "bytes_iterator")
+
+
 	func _dsl_iter() -> DSLIterator:
 		return DSLBytesIterator.new(self)
 
@@ -9268,6 +9510,10 @@ class DSLSet extends DSLObject:
 			return true
 		return false
 
+	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
+		return DSLSeqIterator.new(args[0], "set_iterator")
+
+
 	func _dsl_iter() -> DSLIterator:
 		return DSLSetIterator.new(self)
 
@@ -10011,6 +10257,8 @@ class DSLFunction extends DSLObject:
 	var _cls_interp: Interpreter = null
 	## 默认参数值数组
 	var default_values: Array[Variant] = []
+	## __annotations__ 字典 (CPython: def 时求值参数与返回注解, 始终存在可为空)
+	var annotations: DSLDict
 	
 	## 构造函数对象 [br]
 	## [param decl] 函数声明 AST 节点 [br]
@@ -10019,16 +10267,19 @@ class DSLFunction extends DSLObject:
 		super._init()
 		declaration = decl
 		closure = clos
+		annotations = DSLDict.new()
 		method_type = decl.method_type
 	
 	func _type_name() -> String:
 		return "function"
 	
-	func _dsl_getattribute(name: String) -> DSLObject:
-		if name == "__name__":
+	func _dsl_getattribute(attr_name: String) -> DSLObject:
+		if attr_name == "__name__":
 			return DSLString.new(declaration.name)
-		return super._dsl_getattribute(name)
-	
+		if attr_name == "__annotations__":
+			return annotations
+		return super._dsl_getattribute(attr_name)
+
 	func _dsl_str() -> String:
 		return "<function " + declaration.name + ">"
 	
@@ -10103,6 +10354,8 @@ class DSLBuiltinFunction extends DSLObject:
 	## [returns] 对应的 DSLObject, int/float/string/bool/null/Array/Dictionary 分别映射
 	static func _wrap_static(v: Variant) -> DSLObject:
 		if v is DSLObject:
+			return v
+		if v is DSLIterator:
 			return v
 		if typeof(v) == TYPE_INT:
 			return DSLInteger.pooled(v)
@@ -10645,6 +10898,21 @@ class DSLClass extends DSLObject:
 	## 其余报 CPython 同文案 TypeError: type 'X' is not subscriptable [br]
 	## [param key] 下标对象 (多参为 DSLTuple) [br]
 	## [returns] 别名对象或协议结果, 出错返回 null
+	## PEP 604 联合类型: 类型对象间的 | 运算 (扁平化已有联合成员)
+	func magic_or(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var other = DSLObject._unwrap_dsl(args[1])
+		var union_members: Array[DSLObject] = []
+		union_members.append(self)
+		if other is DSLUnionType:
+			for m in other.members:
+				union_members.append(m)
+		elif other is DSLClass:
+			union_members.append(other)
+		else:
+			last_error = "TypeError: unsupported operand type(s) for |: 'type' and '%s'" % other._type_name()
+			return null
+		return DSLUnionType.new(union_members)
+
 	func _dsl_getitem(key: DSLObject) -> DSLObject:
 		if _is_generic_container():
 			var alias_args: Array[DSLObject] = []
@@ -11184,6 +11452,13 @@ class DSLRange extends DSLObject:
 		return DSLString.new(args[0]._dsl_str())
 
 	## 迭代器 (惰性按需产出)
+	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(args[0]._length())
+
+	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
+		return DSLSeqIterator.new(args[0], "range_iterator")
+
+
 	func _dsl_iter() -> DSLIterator:
 		return DSLRangeIterator.new(self)
 
@@ -13347,9 +13622,10 @@ class Parser:
 						var tok = consume(TokenType.IDENTIFIER, "Expected parameter name")
 						if tok == null:
 							return null
+						var star_ann = null
 						if match_types([TokenType.COLON]):
-							skip_type_annotation()
-						params.append(Param.new(tok.lexeme, null, true, false, false, false))
+							star_ann = simple_expression()
+						params.append(Param.new(tok.lexeme, null, true, false, false, false, star_ann))
 						saw_star = true
 						if not match_types([TokenType.COMMA]):
 							break
@@ -13365,7 +13641,10 @@ class Parser:
 					var tok = consume(TokenType.IDENTIFIER, "Expected parameter name")
 					if tok == null:
 						return null
-					params.append(Param.new(tok.lexeme, null, false, true))
+					var kw_ann = null
+					if match_types([TokenType.COLON]):
+						kw_ann = simple_expression()
+					params.append(Param.new(tok.lexeme, null, false, true, false, false, kw_ann))
 					saw_kwargs = true
 					# **kwargs 后不能再有参数, 仅允许尾随逗号 (CPython: def f(**kw,))
 					if match_types([TokenType.COMMA]):
@@ -13381,8 +13660,11 @@ class Parser:
 						return null
 					var param_name = tok.lexeme
 					
+					var param_ann = null
 					if match_types([TokenType.COLON]):
-						skip_type_annotation()
+						param_ann = simple_expression()
+						if report.has_error:
+							return null
 						
 					var default_expr = null
 					if match_types([TokenType.EQUAL]):
@@ -13391,7 +13673,7 @@ class Parser:
 							return null
 						
 					# keyword-only 条件: 处于 * 之后且不为 *args
-					params.append(Param.new(param_name, default_expr, false, false, false, saw_star))
+					params.append(Param.new(param_name, default_expr, false, false, false, saw_star, param_ann))
 					
 				if not match_types([TokenType.COMMA]):
 					break
@@ -13401,9 +13683,12 @@ class Parser:
 			return null
 		
 		# 可选的返回值类型注解
+		var return_ann = null
 		if match_types([TokenType.MINUS]):
 			if match_types([TokenType.GREATER]):
-				skip_type_annotation()
+				return_ann = simple_expression()
+				if report.has_error:
+					return null
 			else:
 				report.error("Expected '>' for return type annotation")
 				
@@ -13419,7 +13704,9 @@ class Parser:
 				return null
 			seen[prm.name] = true
 		var body = block()
-		return FunctionStmt.new(name, params, body)
+		var func_stmt = FunctionStmt.new(name, params, body)
+		func_stmt.return_annotation = return_ann
+		return func_stmt
 	
 	## 解析类定义语句 [br]
 	## 支持可选基类 (括号语法) 和类体块 [br]
@@ -13681,6 +13968,8 @@ class Parser:
 		var then_branch = block()
 		if report.has_error:
 			return null
+		# 行内体 (或缩进块) 之后跳过换行, 使同缩进的 elif / else 能接续 (P1-66)
+		skip_newlines()
 		
 		var elif_branches = []
 		while match_types([TokenType.ELIF]):
@@ -13693,6 +13982,7 @@ class Parser:
 			elif_branches.append([elif_cond, block()])
 			if report.has_error:
 				return null
+			skip_newlines()
 				
 		var else_branch = []
 		if match_types([TokenType.ELSE]):
@@ -13776,7 +14066,7 @@ class Parser:
 			return null
 		_expect_statement_end()
 		skip_newlines()
-		return PassStmt.new()
+		return TypeAliasStmt.new(name_tok.lexeme, value)
 
 	## 解析 match 语句 [br]
 	## 主题表达式支持元组形式 (match 1, 2:), 头部之后必须换行缩进并至少有一个 case 子句 [br]
@@ -14333,6 +14623,7 @@ class Parser:
 			return null
 			
 		var while_stmt = WhileStmt.new(condition, body)
+		skip_newlines()
 		if match_types([TokenType.ELSE]):
 			consume(TokenType.COLON, "Expected ':'")
 			while_stmt.set_meta("_else_body", block())
@@ -14370,6 +14661,7 @@ class Parser:
 			
 		var for_stmt = ForStmt.new(targets, iterable, body)
 		for_stmt.tuple_target = tuple_form
+		skip_newlines()
 		if match_types([TokenType.ELSE]):
 			consume(TokenType.COLON, "Expected ':'")
 			for_stmt.set_meta("_else_body", block())
@@ -14455,6 +14747,15 @@ class Parser:
 			var stmt = declaration()
 			if stmt != null:
 				stmts.append(stmt)
+			# 行内体: 分号分隔的后续语句同属本块 (CPython 语义; 分号在词法层产出带 semi 标记的 NEWLINE)
+			while check(TokenType.NEWLINE) and peek().semi:
+				advance()
+				skip_newlines()
+				if check(TokenType.NEWLINE) or check(TokenType.DEDENT) or check(TokenType.EOF) or is_at_end():
+					break
+				var more = declaration()
+				if more != null:
+					stmts.append(more)
 		return stmts
 	
 	## 解析 raise 语句 [br]
@@ -14508,6 +14809,15 @@ class Parser:
 			var stmt = declaration()
 			if stmt != null:
 				stmts.append(stmt)
+			# 行内体: 分号分隔的后续语句同属本块 (CPython 语义; 分号在词法层产出带 semi 标记的 NEWLINE)
+			while check(TokenType.NEWLINE) and peek().semi:
+				advance()
+				skip_newlines()
+				if check(TokenType.NEWLINE) or check(TokenType.DEDENT) or check(TokenType.EOF) or is_at_end():
+					break
+				var more = declaration()
+				if more != null:
+					stmts.append(more)
 		return stmts
 		
 	## 解析三目条件表达式 (x if cond else y) [br]
@@ -16218,7 +16528,7 @@ class Parser:
 	## 同时处理带类型注解的变量声明 (var: type [= value]) [br]
 	## [returns] 解析出的 ExpressionStmt 节点, 出错时返回 null
 	func expression_statement():
-		# 处理带类型注释的变量声明 var : type [= value]
+		# 处理带注解的变量声明 x: ann [= value] (P2-44: 注解按 CPython 语义求值)
 		if check(TokenType.IDENTIFIER):
 			var lookahead = current + 1
 			if lookahead < tokens.size() and tokens[lookahead].type == TokenType.COLON:
@@ -16228,14 +16538,17 @@ class Parser:
 				var colon = consume(TokenType.COLON, "Expected ':'")
 				if colon == null:
 					return null
-				skip_type_annotation()
+				var ann = simple_expression()
+				if report.has_error or ann == null:
+					return null
 				if match_types([TokenType.EQUAL]):
 					var value = tuple_expression()
-					return ExpressionStmt.new(Assign.new(name_tok.lexeme, value))
-				else:
-					# 仅类型注解, 不产生任何语句
-					skip_newlines()
-					return null
+					if report.has_error or value == null:
+						return null
+					return AnnotatedAssign.new(name_tok.lexeme, ann, value)
+				_expect_statement_end()
+				skip_newlines()
+				return AnnotatedAssign.new(name_tok.lexeme, ann, null)
 		
 		# 优先判断是否为解包赋
 		if is_unpack_assignment():
@@ -16538,6 +16851,8 @@ class Interpreter:
 	var return_value: DSLObject = null
 	## 最近抛出的异常
 	var last_exception = null
+	## from __future__ import annotations 生效标志: 生效时注解不求值 (P2-44)
+	var _future_annotations: bool = false
 	## 异常继承层级: type_name -> base_name, 用于 isinstance 检查
 	var exception_hierarchy: Dictionary[String, String] = {}
 	## 执行栈 (exec_block 递归层级追踪)
@@ -17411,6 +17726,8 @@ class Interpreter:
 		_builtin_protos["range"] = rng_proto
 		rng_cls.methods["count"] = DSLMethodDescriptor.new("count", Callable(rng_proto, "builtin_count"))
 		rng_cls.methods["index"] = DSLMethodDescriptor.new("index", Callable(rng_proto, "builtin_index"))
+		rng_cls.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(rng_proto, "magic_len"))
+		rng_cls.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(rng_proto, "magic_iter"))
 		# bytes 同理: 字面量直接产出 DSLBytes, 类对象供 type() / isinstance 使用,
 		# 类可调用 (bytes(3) / bytes([1, 2]) / bytes("ab", "utf-8"))
 		var bytes_methods = {}
@@ -20758,6 +21075,40 @@ class Interpreter:
 					return else_res
 			return ExecResult.NORMAL
 			
+		if stmt is TypeAliasStmt:
+			# PEP 695: 别名绑定为 TypeAliasType 对象 (__value__ 惰性求值)
+			var alias_obj = DSLTypeAlias.new(stmt.name, stmt.value, environment)
+			alias_obj.klass = globals.get_val_safe("type")
+			alias_obj.interp = self
+			environment.define(stmt.name, alias_obj)
+			return ExecResult.NORMAL
+
+		if stmt is AnnotatedAssign:
+			# 注解求值语义 (CPython PEP 526): 模块与类体求值并入 __annotations__, 函数体内不求值
+			if not _future_annotations and not environment.is_class_scope and environment.function_locals.is_empty():
+				var ann_val = evaluate(stmt.annotation)
+				if _suspended:
+					_expr_evaluated = false
+					return ExecResult.SUSPENDED
+				if ann_val == null:
+					return ExecResult.ERROR
+				var module_ann = globals.get_val_safe("__annotations__")
+				if not (module_ann is DSLDict):
+					module_ann = DSLDict.new()
+					globals.define("__annotations__", module_ann)
+				module_ann._dsl_setitem(DSLString.new(stmt.name), ann_val)
+			if stmt.value != null:
+				var ann_v = evaluate(stmt.value)
+				if _suspended:
+					_expr_evaluated = (ann_v != null) and not _needs_replay
+					return ExecResult.SUSPENDED
+				if ann_v == null:
+					return ExecResult.ERROR
+				environment.set_val(stmt.name, ann_v)
+				if report.has_error:
+					return ExecResult.ERROR
+			return ExecResult.NORMAL
+
 		if stmt is FunctionStmt:
 			var func_obj = DSLFunction.new(stmt, environment)
 			func_obj._cls_interp = self
@@ -20775,6 +21126,7 @@ class Interpreter:
 						func_obj.default_values.append(val)
 					else:
 						func_obj.default_values.append(null)
+				_eval_function_annotations(func_obj)
 			if not stmt.decorators.is_empty():
 				var dec_val = _apply_decorators(stmt.decorators, func_obj)
 				if _suspended:
@@ -21106,6 +21458,10 @@ class Interpreter:
 		if stmt is FromImportStmt:
 			# __future__ 是编译器指令 (CPython), PyGDS 按语法空操作处理, 不绑定名字 (P1-61)
 			if stmt.module == "__future__":
+				# annotations 特性生效时注解不求值 (PEP 563 语义)
+				for fe in stmt.names:
+					if fe["name"] == "annotations":
+						_future_annotations = true
 				return ExecResult.NORMAL
 			var mod = _get_module(stmt.module)
 			if mod == null:
@@ -23090,6 +23446,11 @@ class Interpreter:
 			for entry in st.names:
 				var alias = entry["alias"]
 				names[alias if alias != "" else entry["name"]] = true
+		elif st is AnnotatedAssign:
+			names[st.name] = true
+			_collect_locals_expr(st.annotation, names, globals_decl)
+			if st.value != null:
+				_collect_locals_expr(st.value, names, globals_decl)
 		elif st is GlobalStmt:
 			for nm in st.names:
 				globals_decl[nm] = true
@@ -23259,6 +23620,29 @@ class Interpreter:
 	func _collect_locals_target_list(targets: Array, names: Dictionary) -> void:
 		for t in targets:
 			_collect_locals_target(t, names)
+
+	## 求值函数定义的参数与返回注解, 存入 __annotations__ (CPython 在 def 时求值) [br]
+	## from __future__ import annotations 生效时跳过求值 (P2-44) [br]
+	## [param func_obj] 函数对象 (closure 为定义环境)
+	func _eval_function_annotations(func_obj: DSLFunction) -> void:
+		if _future_annotations:
+			return
+		var prev_env = environment
+		environment = func_obj.closure
+		for p in func_obj.declaration.params:
+			if p.annotation != null:
+				var v = evaluate(p.annotation)
+				if _suspended or v == null:
+					environment = prev_env
+					return
+				func_obj.annotations._dsl_setitem(DSLString.new(p.name), v)
+		if func_obj.declaration.return_annotation != null:
+			var rv = evaluate(func_obj.declaration.return_annotation)
+			if _suspended or rv == null:
+				environment = prev_env
+				return
+			func_obj.annotations._dsl_setitem(DSLString.new("return"), rv)
+		environment = prev_env
 
 	func call_user_function(function: DSLFunction, args: Array[DSLObject], kw_args: Dictionary[String, DSLObject] = {}) -> DSLObject:
 		# 递归深度保护: DSL 层不限深时, 深递归会穿透到宿主 GDScript 栈溢出 (不可捕获、无输出)
@@ -23780,6 +24164,34 @@ order (MRO) for bases %s" % ", ".join(names))
 				var inner_cls = class_env.get_val_safe(body_stmt.name)
 				if inner_cls != null:
 					class_attrs[body_stmt.name] = inner_cls
+			elif body_stmt is AnnotatedAssign:
+				# 类体注解 (CPython): 注解求值并入类 __annotations__; 带值时同 Assign 语义
+				if not _future_annotations:
+					var cls_ann_val = evaluate(body_stmt.annotation)
+					if _suspended:
+						return ExecResult.SUSPENDED
+					if cls_ann_val == null:
+						return ExecResult.ERROR
+					var cls_ann = class_attrs.get("__annotations__")
+					if not (cls_ann is DSLDict):
+						cls_ann = DSLDict.new()
+						class_attrs["__annotations__"] = cls_ann
+						class_env.define("__annotations__", cls_ann)
+					(cls_ann as DSLDict)._dsl_setitem(DSLString.new(body_stmt.name), cls_ann_val)
+				if body_stmt.value != null:
+					var cls_prev = environment
+					environment = class_env
+					var cls_v = evaluate(body_stmt.value)
+					environment = cls_prev
+					if _suspended:
+						return ExecResult.SUSPENDED
+					if cls_v == null:
+						return ExecResult.ERROR
+					if class_env.global_vars.has(body_stmt.name) or class_env.nonlocal_bindings.has(body_stmt.name):
+						class_env.set_val(body_stmt.name, cls_v)
+					else:
+						class_attrs[body_stmt.name] = cls_v
+						class_env.define(body_stmt.name, cls_v)
 			elif body_stmt is GlobalStmt:
 				# 类体内的 global 声明 (P0-24): 后续赋值经 set_val 写模块全局, 不落类属性
 				for gname in body_stmt.names:
@@ -23815,6 +24227,21 @@ order (MRO) for bases %s" % ", ".join(names))
 				else:
 					class_attrs[assign.name] = val
 					class_env.define(assign.name, val)
+		# 类体方法的参数 / 返回注解在类体命名空间求值 (CPython 语义)
+		if not _future_annotations:
+			var prev_env_ann = environment
+			environment = class_env
+			for mname in methods:
+				var mfn = methods[mname]
+				if mfn is DSLFunction:
+					_eval_function_annotations(mfn)
+					if _suspended:
+						environment = prev_env_ann
+						return ExecResult.SUSPENDED
+					if report.has_error:
+						environment = prev_env_ann
+						return ExecResult.ERROR
+			environment = prev_env_ann
 		class_obj.methods = methods
 		class_obj.class_attrs = class_attrs
 		class_obj.klass = globals.get_val_safe("type")
@@ -23911,6 +24338,8 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["isascii"] = DSLMethodDescriptor.new("isascii", Callable(proto, "builtin_isascii"))
 				class_obj.methods["isidentifier"] = DSLMethodDescriptor.new("isidentifier", Callable(proto, "builtin_isidentifier"))
 				class_obj.methods["expandtabs"] = DSLMethodDescriptor.new("expandtabs", Callable(proto, "builtin_expandtabs"))
+				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
+				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
 			"list":
 				var proto = DSLList.new([])
 				_builtin_protos["list"] = proto
@@ -23925,11 +24354,16 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["reverse"] = DSLMethodDescriptor.new("reverse", Callable(proto, "builtin_reverse"))
 				class_obj.methods["clear"] = DSLMethodDescriptor.new("clear", Callable(proto, "builtin_clear"))
 				class_obj.methods["copy"] = DSLMethodDescriptor.new("copy", Callable(proto, "builtin_copy"))
+				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
+				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
+				class_obj.methods["__delitem__"] = DSLWrappedDescriptor.new("__delitem__", Callable(proto, "magic_delitem"))
 			"tuple":
 				var proto = DSLTuple.new([])
 				_builtin_protos["tuple"] = proto
 				class_obj.methods["count"] = DSLMethodDescriptor.new("count", Callable(proto, "builtin_count"))
 				class_obj.methods["index"] = DSLMethodDescriptor.new("index", Callable(proto, "builtin_index"))
+				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
+				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
 			"dict":
 				var proto = DSLDict.new({})
 				_builtin_protos["dict"] = proto
@@ -23943,6 +24377,9 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["copy"] = DSLMethodDescriptor.new("copy", Callable(proto, "builtin_copy"))
 				class_obj.methods["setdefault"] = DSLMethodDescriptor.new("setdefault", Callable(proto, "builtin_setdefault"))
 				class_obj.methods["popitem"] = DSLMethodDescriptor.new("popitem", Callable(proto, "builtin_popitem"))
+				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
+				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
+				class_obj.methods["__delitem__"] = DSLWrappedDescriptor.new("__delitem__", Callable(proto, "magic_delitem"))
 				class_obj.class_attrs["fromkeys"] = _make_builtin("fromkeys", Callable(self, "builtin_fromkeys"))
 			"int":
 				var proto = DSLInteger.pooled(0)
@@ -24022,6 +24459,8 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["center"] = DSLMethodDescriptor.new("center", Callable(bytes_proto, "builtin_center"))
 				class_obj.methods["ljust"] = DSLMethodDescriptor.new("ljust", Callable(bytes_proto, "builtin_ljust"))
 				class_obj.methods["rjust"] = DSLMethodDescriptor.new("rjust", Callable(bytes_proto, "builtin_rjust"))
+				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(bytes_proto, "magic_len"))
+				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(bytes_proto, "magic_iter"))
 			"set":
 				var proto = DSLSet.new()
 				_builtin_protos["set"] = proto
@@ -24037,6 +24476,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["__ge__"] = DSLWrappedDescriptor.new("__ge__", Callable(proto, "magic_ge"))
 				class_obj.methods["__contains__"] = DSLWrappedDescriptor.new("__contains__", Callable(proto, "magic_contains"))
 				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
+				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
 				class_obj.methods["add"] = DSLMethodDescriptor.new("add", Callable(proto, "builtin_add"))
 				class_obj.methods["remove"] = DSLMethodDescriptor.new("remove", Callable(proto, "builtin_remove"))
 				class_obj.methods["discard"] = DSLMethodDescriptor.new("discard", Callable(proto, "builtin_discard"))
@@ -24069,6 +24509,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["__ge__"] = DSLWrappedDescriptor.new("__ge__", Callable(proto, "magic_ge"))
 				class_obj.methods["__contains__"] = DSLWrappedDescriptor.new("__contains__", Callable(proto, "magic_contains"))
 				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
+				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
 				class_obj.methods["copy"] = DSLMethodDescriptor.new("copy", Callable(proto, "builtin_copy"))
 				class_obj.methods["union"] = DSLMethodDescriptor.new("union", Callable(proto, "builtin_union"))
 				class_obj.methods["intersection"] = DSLMethodDescriptor.new("intersection", Callable(proto, "builtin_intersection"))
@@ -24287,6 +24728,8 @@ order (MRO) for bases %s" % ", ".join(names))
 		if obj is DSLBytes:
 			return DSLInteger.pooled(obj.data.size())
 		raise_exception("TypeError", "object of type '%s' has no len()" % obj._type_name())
+		return null
+
 		return null
 		
 	## range(start, stop, step) - 生成整数序列
@@ -25052,6 +25495,14 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param cls] 类 / 类元组 (可嵌套) [br]
 	## [returns] true/false, 元素含非类时报 TypeError 并返回 null
 	func _isinstance_check(obj: DSLObject, cls) -> Variant:
+		if cls is DSLUnionType:
+			for m in cls.members:
+				var r = _isinstance_check(obj, m)
+				if r == null:
+					return null
+				if r:
+					return true
+			return false
 		if cls is DSLGenericAlias:
 			raise_exception("TypeError", "isinstance() argument 2 cannot be a parameterized generic")
 			return null
@@ -25107,6 +25558,14 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param sup] 类 / 类元组 (可嵌套) [br]
 	## [returns] true/false, 元素含非类时报 TypeError 并返回 null
 	func _issubclass_check(sub: DSLClass, sup) -> Variant:
+		if sup is DSLUnionType:
+			for m in sup.members:
+				var r = _issubclass_check(sub, m)
+				if r == null:
+					return null
+				if r:
+					return true
+			return false
 		if sup is DSLGenericAlias:
 			raise_exception("TypeError", "issubclass() argument 2 cannot be a parameterized generic")
 			return null
