@@ -47,7 +47,9 @@ PyGDS defines exception types as **`DSLClass` instances**, not as separate const
 ### Built-in Exception Hierarchy
 
 ```python
-Exception                          # Base class
+BaseException                      # Root class (registered as a referenceable name: catchable / inheritable)
+├── Exception                      # Base class for regular exceptions
+├── GeneratorExit                  # Generator closing (injected by close(), does not inherit Exception)
 ├── TypeError                      # Type error
 ├── ValueError                     # Value error
 │   └── StatisticsError            # Statistics error (raised by the statistics module)
@@ -103,12 +105,16 @@ func _define_exception(type_name: String, base_name: String = "Exception"):
 | Parameter | Description |
 | :--- | :--- |
 | `type_name` | The name of the exception type (e.g., `"TypeError"`) |
-| `base_name` | The name of the parent exception type, defaults to `"Exception"`. Pass `""` to indicate no parent class (only used for the root Exception) |
+| `base_name` | The name of the parent exception type, defaults to `"Exception"`. Pass `""` to indicate no parent class (only used for the root BaseException) |
+
+`BaseException` is registered as a globally referenceable name: `issubclass(ValueError, BaseException)` works, `except BaseException` catches every exception including `GeneratorExit` (while `except Exception` does not catch a bare `BaseException` instance, matching CPython); calls such as `it.throw(GeneratorExit())` whose argument is a BaseException-rooted instance are equally valid
 
 **Built-in Exception Registration Order** (in `register_builtins`)
 
 ```gdscript
-_define_exception("Exception", "")              # Root class, no parent
+_define_exception("BaseException", "")          # Root class, no parent
+_define_exception("Exception", "BaseException") # Base class for regular exceptions
+_define_exception("GeneratorExit", "BaseException")        # does not inherit Exception
 _define_exception("TypeError")                  # Defaults to inheriting from Exception
 _define_exception("ValueError")
 _define_exception("RuntimeError")

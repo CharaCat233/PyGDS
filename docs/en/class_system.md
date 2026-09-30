@@ -309,11 +309,12 @@ Their `__new__` is bound to `api_<type>_new` (returning a raw DSLObject), and `_
 
 `PyGDS.Interpreter.execute_class` handles user-defined classes (including `object` itself).
 
-1. **Evaluate the base class list**: evaluate each expression in `ClassStmt.bases` and validate it as a `DSLClass`; when the list is empty and the class is not named `object`, default to `object`.
+1. **Evaluate the base class list**: evaluate each expression in `ClassStmt.bases` and validate it as a `DSLClass`; `*iterable` star bases (PEP 448 class-side generalization) expand each element of the iterable as one base (`Value after * must be an iterable, not X` / `all bases must be classes`); when the list is empty and the class is not named `object`, default to `object`.
 2. **Consistency checks** (before the class body runs): duplicate direct base check, C3 linearization (raising `TypeError` on conflict), instance layout conflict check.
-3. **Collect methods and class attributes**:
+3. **Collect methods and class attributes** (the class-body scope `class_env` hangs below the module environment):
    - `FunctionStmt` → create a `DSLFunction`, store in `methods`
-   - `ExpressionStmt(Assign)` (class-level assignment) → evaluate and store in `class_attrs`
+   - `ExpressionStmt(Assign)` (class-level assignment) → evaluate and store in `class_attrs` and `class_env`
+   - `GlobalStmt` (a `global` declaration in the class body) → mark on `class_env`; subsequent assignments to the name go through `set_val` into the module globals instead of the class attributes (`nonlocal` declarations likewise bind the enclosing function scope, raising `no binding for nonlocal 'x' found` when no binding exists)
 4. **Create DSLClass**: `DSLClass.new(name, first_base, methods, self)`, then set `bases` and recompute the MRO.
 5. **Register in the environment**: `environment.define(name, class_obj)` makes the class name visible in scope.
 

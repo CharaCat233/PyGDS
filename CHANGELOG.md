@@ -2,6 +2,42 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.3] - 2026-09-30
+
+本版完成 alpha.3 排期的全部 9 项：PEP 448 调用侧与类侧泛化（P0-23 / P1-60）、类体 `global`/`nonlocal`（P0-24）、参数表尾随逗号（P1-57）、点省略浮点字面量（P1-58）、`for` 目标星形名（P1-59）、`__future__` 导入 no-op（P1-61）、`BaseException` 注册（P1-62）与运行期字符串身份（P2-39）。修复过程对新代码面做双端探针复核，连带发现并修复 5 处既有缺陷（except 处理器重抛跳过 finally、`throw()` 拒收 BaseException 根实例、异常类 isinstance `type`、单目标元组形态不解包、非类星参基类静默通过）
+
+### 新增
+
+- **PEP 448 调用侧泛化（P0-23）**：调用实参按书写顺序求值与拼装，`f(1, *[2, 3], 4)` 实参为 `[1, 2, 3, 4]`（此前 `4` 被前插为 `[1, 4, 2, 3]`）；多组 `*` / `**` 可交错（`f(*[1], 2, *[3]`、`f(**d, k=9, **d2)`）；`*a` 允许跟在普通关键字参数之后（CPython 3.12 语义，此前误拒）；实参求值次序与 CPython 一致（源码顺序）；解析期对齐：重复关键字实参报 `SyntaxError: keyword argument repeated: a`，定位实参跟在 `**` 之后报 `positional argument follows keyword argument unpacking`，`*` 跟在 `**` 之后报 `iterable argument unpacking follows keyword argument unpacking`（均与 CPython 同句式）
+- **关键字实参合并冲突检测**：关键字实参与 `**` 解包之间重复键报 `TypeError: g() got multiple values for keyword argument 'a'`（此前静默后者覆盖前者）；星参解包迭代中途挂起时丢弃部分实参交回语句重放，不再以部分实参调用被调对象
+- **PEP 448 类侧泛化（P1-60）**：`class C(*bases)` 星参基类，展开可迭代对象元素逐个作为基类，支持与普通基类混排和尾随逗号；非可迭代报 `Value after * must be an iterable, not X`，非类元素报 `all bases must be classes`（后者文案与 CPython 元类路径不同，双方均为 TypeError）；星参基类可接生成器（含体内 sleep 挂起重放）；展开后的直接基类重复检查照常生效
+- **类体 `global` / `nonlocal`（P0-24）**：类体内 `global g` 声明后，`g = 7` 写模块全局、读取沿外层链解析、不产生类属性；`nonlocal x` 绑定外层函数作用域（搜索跳过嵌套类作用域），无绑定时报 CPython 同文案 `SyntaxError: no binding for nonlocal 'x' found`
+- **参数表尾随逗号（P1-57）**：`def f(a,)` / `def g(a, b=2,)` / `lambda x,` / `def f(**kw,)` / `def f(a, /, *, b,)` 等全部位置接受尾随逗号；对齐 CPython 的两处拒绝文案：裸 `*` 后无命名参数报 `named arguments must follow bare *`，`**kwargs` 后跟参数报 `arguments cannot follow var-keyword argument`
+- **点省略浮点字面量（P1-58）**：`.5` 与 `1.` 为合法浮点字面量，支持科学计数法与下划线分隔（`.5e2` / `1.e5` / `.5_5`）；`1..foo` 等衍生形态与 CPython 同为语法错误
+- **`for` 目标完整形态（P1-59）**：`for` 目标与解包赋值共用同一目标语法——星形名（`for *h, t in ...`）、括号/方括号嵌套（`for x, (y, z) in ...`）、下标与属性目标（`for a[i] in ...` / `for o.x in ...`）、单目标元组形态（`for a, in ...` 仍解包一层）；单个裸星形名（`for *a in`）报 CPython 同文案 `starred assignment target must be in a list or tuple`；连带将解包错误文案对齐 CPython：`cannot unpack non-iterable int object` / `too many values to unpack (expected 2)` / `not enough values to unpack (expected 2, got 1)`（字符串元素按字符解包随之生效）
+- **`from __future__` 导入 no-op（P1-61）**：`__future__` 特性导入为编译器指令，按语法空操作处理（不绑定名字）；合法特性名（CPython 3.12 全表含 `barry_as_FLUFL` / `all_feature_names`）解析期校验，未知特性名报 `SyntaxError: future feature x is not defined`，`braces` 报彩蛋文案 `not a chance`，星号导入报 `future feature * is not defined`（三处均与 CPython 逐字一致）；文件中部导入与名字绑定的残留差异见已知问题清单 P2-41
+- **`BaseException` 注册为可引用名（P1-62）**：异常体系以 `BaseException` 为根注册（`Exception` 与 `GeneratorExit` 改挂其下），`issubclass(ValueError, BaseException)` 可用、`except BaseException` 可捕获全部异常（含 `GeneratorExit`，`except Exception` 不捕获裸 `BaseException` 实例，与 CPython 一致）、`raise BaseException("x")` 与 `class E(GeneratorExit)` 的实例 `args` 记录正常
+- **运行期字符串身份（P2-39）**：解析期常量折叠——字符串字面量 `+`（`"a" + "b" is "ab"` 为 True）与字符串/字节串字面量 `*` 整数字面量（`"ab" * 2 is "abab"`）、字节串 `+`（`b"a" + b"b" is b"ab"`，配套 bytes 字面量驻留池），折叠结果超过 CPython 的 4096 字符上限时不折叠；latin-1 单字符缓存——下标/切片/分割/迭代/`chr` 等运行期单字符结果与字面量共享实例（`"a b".split()[0] is "a"`、`chr(97) is "a"`、`"abc"[1] is "b"` 均为 True）；空串为全局单例（`"".join([]) is ""`）；大小写变换、replace、join、translate 结果不缓存（与 CPython 一致），center/ljust/rjust/zfill 宽度足够与 expandtabs 无 tab 时返回原对象自身，`"%s" % x` / `"{}".format(x)` 单 str 实参走快速路径返回原对象
+
+### 修复
+
+- **except 处理器体内异常沿 try 传播时 finally 体被跳过（连带发现）**：except 处理器内 `raise`（裸重抛或新异常）时直接向上返回，跳过本 try 的 finally 体（CPython 中 finally 照常执行）；普通语句与生成器 `throw` / `close` 路径同样受影响（如 `except BaseException: raise` + finally 的生成器在 `close()` 时 finally 不执行）；现处理器异常改为直达 finally（不再匹配后续 except 子句），finally 以 return/break/continue 或新异常终结的丢弃/取代语义不变；`except as` 名的隐式删除在异常退出时同步生效
+- **`it.throw()` 拒收 BaseException 根异常实例（连带发现）**：`it.throw(GeneratorExit())` 误报 `TypeError: thrown value is not an exception`（校验仅认 Exception 子类）；现按 BaseException 根校验
+- **异常类对 `type` 的 isinstance 为 False（连带发现）**：`isinstance(TypeError, type)` 为 False（异常 DSLClass 未挂 type 类指针，与 `isinstance(int, type)` 不一致）；现于异常类注册时挂接
+- **单目标元组形态赋值不解包（连带发现）**：`a, = (1, 2)` 将整个元组赋给 `a`（CPython 解包后报元素数错误）；现与 for 目标一致按元组形态解包一层
+- **for 循环解包错误文案（随 P1-59）**：`for a, b in [5]` 的 `Cannot unpack non-sequence` 与元素数错误的 `Unpacking mismatch` 改为 CPython 文案（见新增条目）
+
+### 测试
+
+- 新增 8 个测试并入 `expected.json`（共 260 个用例全部通过，既有条目零变更）：`lang_pep448_call`（星参次序、多组 `*`/`**` 混排、关键字求值次序、重复键 TypeError）、`lang_trailing_comma`（def/lambda/方法/嵌套函数参数表尾逗号）、`lang_float_literals`（`.5` / `1.` 全形态与运算）、`lang_for_targets`（星形/嵌套/字符串解包/下标与属性目标、CPython 解包错误文案、函数局部静态收集）、`lang_class_star_bases`（星参基类、重复检查、非类元素）、`lang_future_import`（文件头多形态导入、无名字绑定）、`lang_baseexception`（根类引用、except/raise/throw、GeneratorExit 子类）、`lang_str_identity`（常量折叠、单字符缓存、空串单例、自返回语义）
+- 挂起综合测试 24 个用例全部通过；93 个用例文件双端输出一致；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md`：数字字面量补点省略/尾点形态；调用处 `*`/`**` 解包补 PEP 448 次序与冲突语义；import 小节补 `__future__` no-op 行为；循环小节补 `for` 目标解包形态；行连接小节尾随逗号范围扩至参数表与类基
+- `docs/zh-CN/exception_system.md` 与 `docs/en/exception_system.md`：异常层次结构补 `BaseException` 根与 `GeneratorExit` 挂接，注册顺序同步，补充可引用性说明
+- `docs/zh-CN/class_system.md` 与 `docs/en/class_system.md`：`execute_class` 流程补星参基类与类体 `global`/`nonlocal` 声明处理
+
 ## [0.7.0-alpha.2] - 2026-09-30
 
 本版完成 alpha.2 排期的两项（原暂缓条目清零）：`__index__` 协议接入全部序列下标站点（P1-48），以及修复「try 体异常在途时 finally 体内挂起致异常丢失且脚本假终止」（P0-22）。P0-22 的根因是挂起边界与恢复轮把错误通道的在途标志当致命信号，修复过程在同一机制下连带发现并修复四处既有缺陷（防御性报错改写 `last_exception`、`yield from` 委托链伪造 `StopIteration`、函数调用帧复用丢失语句中部恢复状态、睡眠重放去重的两类误序号场景）；`iter(callable, sentinel)` 两参形式在 callable 内挂起的场景随之恢复正常

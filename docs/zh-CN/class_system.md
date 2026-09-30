@@ -309,11 +309,12 @@ class Foo:       # 等价于 class Foo(object):
 
 `PyGDS.Interpreter.execute_class` 处理用户定义的类（包括 `object` 自身）
 
-1. **求值基类列表**：逐个求值 `ClassStmt.bases` 中的表达式并校验为 `DSLClass`；列表为空且类名非 `object` 时默认补 `object`
+1. **求值基类列表**：逐个求值 `ClassStmt.bases` 中的表达式并校验为 `DSLClass`；`*iterable` 星参基类（PEP 448 类侧泛化）展开可迭代对象的每个元素各为一个基类（`Value after * must be an iterable, not X` / `all bases must be classes`）；列表为空且类名非 `object` 时默认补 `object`
 2. **一致性检查**（先于类体执行）：直接基类重复检查、C3 线性化计算（冲突报 `TypeError`）、实例布局冲突检查
-3. **收集方法和类属性**：
+3. **收集方法和类属性**（类体作用域 `class_env` 挂在模块环境之下）：
    - `FunctionStmt` → 创建 `DSLFunction`，存入 `methods`
-   - `ExpressionStmt(Assign)`（类级赋值）→ 求值并存入 `class_attrs`
+   - `ExpressionStmt(Assign)`（类级赋值）→ 求值并存入 `class_attrs` 与 `class_env`
+   - `GlobalStmt`（类体内 `global` 声明）→ 在 `class_env` 上标记；其后同名赋值经 `set_val` 写入模块全局，不落类属性（`nonlocal` 声明同法绑定外层函数作用域，找不到绑定时报 `no binding for nonlocal 'x' found`）
 4. **创建 DSLClass**：`DSLClass.new(name, 首个基类, methods, self)` 后写入 `bases` 并重算 MRO
 5. **注册到环境**：`environment.define(name, class_obj)`，使类名在作用域中可见
 

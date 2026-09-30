@@ -310,7 +310,7 @@ print(len(b\x00))            # 1 (bytes 支持 NUL 字节)
 
 ### 行连接
 
-括号（`()` / `[]` / `{}`）内的换行是隐式续行，反斜杠 `\` 行尾亦可显式续行；调用实参允许尾随逗号：
+括号（`()` / `[]` / `{}`）内的换行是隐式续行，反斜杠 `\` 行尾亦可显式续行；调用实参、函数/lambda 参数表与类基列表均允许尾随逗号：
 
 ```python
 x = (1 +
@@ -340,6 +340,10 @@ s = 1 + \
 1_000.5       # 1000.5
 1e3           # 1000.0
 2.5e-2        # 0.025
+.5            # 0.5 (点省略浮点)
+1.            # 1.0 (尾点浮点)
+1.e5          # 100000.0
+.5_5          # 0.55 (下划线分隔)
 ```
 
 **进制转换**：`int(str, base)` 支持按进制解析字符串，`base=0` 时按 `0x`/`0o`/`0b` 前缀自动识别：
@@ -524,6 +528,16 @@ for key in {"a": 1, "b": 2}:
 # for 循环 (字符串字符)
 for ch in "ABC":
     print(ch)
+
+# for 目标解包: 多变量 / 括号嵌套 / 星形名 (与解包赋值同一目标语法)
+for k, v in [("a", 1)]:
+    print(k, v)
+for *head, tail in ([1, 2, 3],):
+    print(head, tail)       # [1, 2] 3
+for x, (y, z) in [(1, (2, 3))]:
+    print(x, y, z)
+for a, in [(9,)]:
+    print(a)                # 9 (单目标元组形态仍解包一层)
 
 # range 循环
 for i in range(5):
@@ -837,7 +851,17 @@ add(1, *[2])                # 3        (混合位置与 *)
 add(1, **{"b": 2, "c": 3})  # 6        (**dict 解包)
 add(*[1], **{"b": 2})       # 3        (* 与 ** 同时)
 print(*[1, 2, 3], sep="-")  # 1-2-3    (与内置函数配合)
+
+# PEP 448: * 之后的定位实参按书写次序拼装, 多组 * / ** 可交错
+def f(*args, **kw):
+    print(args, kw)
+
+f(1, *[2, 3], 4)            # (1, 2, 3, 4) {}
+f(*[1], 2, *[3])            # (1, 2, 3) {}
+f(**{"a": 1}, b=2, **{"c": 3})   # {} {'a': 1, 'b': 2, 'c': 3}
 ```
+
+实参按书写顺序求值；重复关键字（含与 `**` 解包之间）报 `TypeError: ... got multiple values for keyword argument 'a'`；定位实参跟在关键字实参或 `**` 之后、`*` 跟在 `**` 之后为 `SyntaxError`
 
 ### import 与内置模块
 
@@ -859,6 +883,8 @@ gcd(12, 18)                   # 6
 import operator
 sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
+
+`from __future__ import ...` 为编译器指令，PyGDS 按语法空操作处理：位于文件头部的合法特性名（`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`）被接受并忽略，不绑定名字（PyGDS 注解为立即求值，无延迟求值语义）；未知特性名报 `SyntaxError: future feature x is not defined`
 
 > **注意**：目前仅支持内置模块，不支持导入用户编写的 `.py` 文件，模块详情见 [内置模块文档](./builtin.md)
 

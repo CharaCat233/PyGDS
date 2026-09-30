@@ -227,7 +227,7 @@ Invalid escapes (e.g. `\xZZ`, `\u12`) raise `SyntaxError`; unrecognized escapes 
 
 ### Line Continuation
 
-A newline inside brackets (`()` / `[]` / `{}`) is an implicit continuation; a trailing backslash `\` also joins lines, and trailing commas in call arguments are allowed:
+A newline inside brackets (`()` / `[]` / `{}`) is an implicit continuation; a trailing backslash `\` also joins lines, and trailing commas are allowed in call arguments, function/lambda parameter lists and class base lists:
 
 ```python
 x = (1 +
@@ -253,6 +253,10 @@ Hexadecimal, octal, binary, underscore-separated and scientific notation are sup
 1_000.5       # 1000.5
 1e3           # 1000.0
 2.5e-2        # 0.025
+.5            # 0.5 (point-omitted float)
+1.            # 1.0 (trailing-dot float)
+1.e5          # 100000.0
+.5_5          # 0.55 (underscore separator)
 ```
 
 **Base conversion**: `int(str, base)` parses a string in the given base; `base=0` auto-detects the `0x`/`0o`/`0b` prefix:
@@ -522,6 +526,16 @@ for key in {"a": 1, "b": 2}:
 # for loop (string characters)
 for ch in "ABC":
     print(ch)
+
+# for-target unpacking: multiple names / nesting / starred names (same target grammar as unpacking assignment)
+for k, v in [("a", 1)]:
+    print(k, v)
+for *head, tail in ([1, 2, 3],):
+    print(head, tail)       # [1, 2] 3
+for x, (y, z) in [(1, (2, 3))]:
+    print(x, y, z)
+for a, in [(9,)]:
+    print(a)                # 9 (a single tuple-form target still unpacks one level)
 
 # range loop
 for i in range(5):
@@ -839,7 +853,16 @@ add(1, *[2])                # 3        (mixed positional and *)
 add(1, **{"b": 2, "c": 3})  # 6        (**dict unpacking)
 add(*[1], **{"b": 2})       # 3        (* and ** together)
 print(*[1, 2, 3], sep="-")  # 1-2-3    (with built-ins)
+# PEP 448: positional arguments after * are assembled in source order, multiple * / ** may interleave
+def f(*args, **kw):
+    print(args, kw)
+
+f(1, *[2, 3], 4)            # (1, 2, 3, 4) {}
+f(*[1], 2, *[3])            # (1, 2, 3) {}
+f(**{"a": 1}, b=2, **{"c": 3})   # {} {'a': 1, 'b': 2, 'c': 3}
 ```
+
+Arguments are evaluated in source order; duplicate keywords (including against `**` unpacking) raise `TypeError: ... got multiple values for keyword argument 'a'`; a positional argument after a keyword argument or after `**`, and `*` after `**`, are `SyntaxError`
 
 ### import and Built-in Modules
 
@@ -861,6 +884,8 @@ gcd(12, 18)                   # 6
 import operator
 sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
 ```
+
+`from __future__ import ...` is a compiler directive; PyGDS treats it as a syntactic no-op: valid feature names at the top of the file (`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`) are accepted and ignored without binding any name (annotations in PyGDS evaluate eagerly, with no lazy semantics); unknown names raise `SyntaxError: future feature x is not defined`
 
 > **Note**: only built-in modules are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
 

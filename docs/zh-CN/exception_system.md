@@ -47,7 +47,9 @@ PyGDS 将异常类型定义为 **`DSLClass` 实例**，而非单独的构造函�
 ### 内置异常层次结构
 
 ```python
-Exception                          # 根基类
+BaseException                      # 根基类 (已注册为可引用名, 可捕获 / 可继承)
+├── Exception                      # 常规异常基类
+├── GeneratorExit                  # 生成器关闭 (close() 注入, 不继承 Exception)
 ├── TypeError                      # 类型错误
 ├── ValueError                     # 值错误
 │   └── StatisticsError            # 统计错误 (statistics 模块抛出)
@@ -103,12 +105,16 @@ func _define_exception(type_name: String, base_name: String = "Exception"):
 | 参数 | 说明 |
 | :--- | :--- |
 | `type_name` | 异常类型的名称（如 `"TypeError"`） |
-| `base_name` | 父异常类型名称，默认为 `"Exception"`，传入 `""` 表示无父类（仅根 Exception 使用） |
+| `base_name` | 父异常类型名称，默认为 `"Exception"`，传入 `""` 表示无父类（仅根 BaseException 使用） |
+
+`BaseException` 已注册为全局可引用名：`issubclass(ValueError, BaseException)` 可用，`except BaseException` 可捕获包括 `GeneratorExit` 在内的全部异常（`except Exception` 不捕获裸 `BaseException` 实例，与 CPython 一致）；`it.throw(GeneratorExit())` 等以 BaseException 根异常实例为实参的调用同样合法
 
 **内置异常注册顺序**（在 `register_builtins` 中）
 
 ```gdscript
-_define_exception("Exception", "")              # 根基类, 无父类
+_define_exception("BaseException", "")          # 根基类, 无父类
+_define_exception("Exception", "BaseException") # 常规异常基类
+_define_exception("GeneratorExit", "BaseException")        # 不继承 Exception
 _define_exception("TypeError")                  # 默认继承自 Exception
 _define_exception("ValueError")
 _define_exception("RuntimeError")
