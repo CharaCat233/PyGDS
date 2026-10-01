@@ -2,6 +2,30 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.6] - 2026-10-01
+
+本版修复 alpha.5 收尾发现的挂起重放缺陷群：状态机式内建消费器跨语句驱动睡眠生成器的重放循环（P0-27）、用户迭代器 `__next__` 异常被内建消费器吞掉、解包赋值将挂起误报为 None 解包错误，并回退 alpha.5 的 `__iter__` 严格性文案（P2-43，实测与挂起重放机制冲突）
+
+### 修复
+
+- **内建消费器 + 生成器 + `time.sleep` 挂起循环（P0-27）**：生成器步内 `time.sleep` 挂起、由状态机式消费器（`itertools.groupby`）跨语句驱动时，语句重放把源迭代器游标回退到消费窗口起点，已消费元素被再次投递进状态机，组边界污染、输出截断乃至 2000 次挂起上限循环（alpha.3 起既有）；修复取 for 语句自持迭代器同规——groupby 状态机构造时让源迭代器退出语句消费窗口（游标由状态机自持，重放不回退），grouper 与外层迭代器补产出日志与消费窗口（重放轮从日志重读已交付元素，与生成器迭代器同协议），groupby 对象缓存唯一外层迭代器（对齐 CPython `iter(it) is it`）并按调用节点记忆化（与生成器对象同协议，重放轮复用同一状态机）
+- **用户迭代器 `__next__` 异常被消费器吞掉（P0-27 连带）**：用户迭代器预取把 `__next__` 抛出的全部异常一律清除并视为耗尽，`list(It())` 中迭代器中途抛 ValueError 时异常丢失且返回部分结果；现仅 StopIteration 视为耗尽并清除错误标记，其余异常保留错误状态经消费方向外传播
+- **解包赋值挂起误报（P0-27 连带）**：`k, v = next(gb)` 等解包语句的值求值中途挂起时（返回 null），被误报为 `TypeError: cannot unpack non-iterable NoneType object`；现先检查挂起标志，挂起交回语句重放
+- **`__iter__` 严格性文案回退（P2-43）**：alpha.5 的 `iter() returned non-iterator of type 'int'` 严格文案经实测与挂起重放机制冲突（生成器步内挂起的重放轮以非迭代器形态再次进入基类 `_dsl_iter` 的用户 `__iter__` 路径，误触发文案引发挂起循环），回退为宽松处理并记入已知问题清单（P2-43 不投入）；连带修正用户 `__iter__` 路径：null 结果（挂起或已有错误）原样传播不落旧式协议回退，list / tuple / range 返回值直接构造对应迭代器
+
+### 测试
+
+- 新增 5 个测试并入 `expected.json`（共 276 个用例全部通过，既有条目零变更）：`lang_iter_consumer_sleep`（内建消费器全形态 + 生成器步内 sleep）、`lang_iter_groupby_sleep`（groupby 单语句直消 / for 驱动 / 急切推导式 / 无 key / 手工 next 推进）、`lang_iter_raise`（用户迭代器与生成器中途 raise 穿透 list，StopIteration 仍为耗尽）、`lang_iter_yieldfrom_expr`（表达式内 yield 与 yield from 混合的 next 与 list 驱动）、`lang_iter_len_error`（`random.choices` 对生成器的 TypeError 文案）
+- 移除 `lang_iter_strict`（P2-43 回退连带，272 → 271）
+- 挂起综合测试 24 个用例全部通过；差分审计（45 例）保持 42/45 相同，剩余 3 条分歧全部为既定不对齐项（P2-2 两条文案差异与 P2-4 哈希数值）
+
+### 文档
+
+- `docs/zh-CN/builtin.md` 与 `docs/en/builtin.md`：模块清单补 `time`（九模块）；类型方法覆盖核对补缺 4 项（`time.process_time`、`str.maketrans`、`str.translate`、`bytes.fromhex`），反向核对无幽灵条目
+- `docs/zh-CN/usage.md` 与 `docs/en/usage.md`：type 别名段改为绑定 TypeAliasType / `__value__` 惰性求值；新增「变量注解与类型别名」小节（注解求值语义 / PEP 604 联合 / PEP 695 绑定）
+- `docs/zh-CN/architecture.md`：注解「擦除」表述改为求值并存 `__annotations__`
+- `docs/zh-CN/class_system.md` 与 `docs/en/class_system.md`：execute_class 流程补 `AnnotatedAssign`（类体注解）分支
+
 ## [0.7.0-alpha.5] - 2026-09-30
 
 本版修复 alpha.4 收尾扫描发现的全部 5 条缺陷：`.format()` 嵌套格式规格、行内复合语句体的 else / elif 接续与分号归属、内建容器 dunder 协议方法、`__iter__` 严格性文案与变量注解求值（PEP 526），并连带补齐 PEP 604 联合类型与 PEP 695 别名绑定

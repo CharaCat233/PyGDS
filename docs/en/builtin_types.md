@@ -820,6 +820,24 @@ Split at the last separator into the three-tuple; when missing, the first two it
 "a1b2".rpartition("1")              # ("a1b", "1", "2")
 ```
 
+#### `str.maketrans(x, y=None, z=None) -> dict`
+
+Builds a translation table for `translate`: the two-argument form maps characters in `x` to the corresponding characters in `y`; the three-argument form maps characters in `z` to deletion
+
+```python
+# Python: str.maketrans(x, y, z)
+table = str.maketrans("abc", "xyz", "d")
+```
+
+#### `str.translate(table) -> str`
+
+Maps characters through the table; characters missing from the table pass through unchanged, and those mapped to `None` are deleted
+
+```python
+# Python: str.translate(table)
+"abcd".translate(str.maketrans("abc", "xyz", "d"))   # "xyz"
+```
+
 #### `str.removeprefix(prefix) -> str`
 
 Remove the given prefix; returned unchanged when absent
@@ -924,6 +942,16 @@ Returns the lowercase hexadecimal string; the optional `sep` is inserted between
 # Python: bytes.hex(sep)
 b'AB'.hex()                         # "4142"
 b'AB'.hex(" ")                      # "41 42"
+```
+
+#### `bytes.fromhex(string) -> bytes`
+
+Converts a hex string back to bytes; whitespace separators are ignored, odd length or non-hex characters raise `ValueError`
+
+```python
+# Python: bytes.fromhex(string)
+bytes.fromhex("4142")               # b'AB'
+bytes.fromhex("41 42")              # b'AB'
 ```
 
 #### `bytes.upper()` / `bytes.lower()` / `bytes.title() -> bytes`

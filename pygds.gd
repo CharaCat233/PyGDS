@@ -3017,14 +3017,23 @@ class DSLObject:
 			if method != null:
 				var result = klass._invoke_func(method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if result == null:
+					# null 结果为挂起或已有错误传播, 原样返回 (不得误报为迭代失败)
 					return null
 				if result is DSLIterator:
 					return result
 				if result is DSLSeqIterator:
 					return result._ensure_driver()
+				if result is DSLList:
+					return DSLListIterator.new(result.items)
+				if result is DSLTuple:
+					return DSLListIterator.new(result.items)
+				if result is DSLRange:
+					return result._dsl_iter()
 				# __iter__ 返回另一个用户实例 (通常是 self): 按其 __next__ 驱动
-				if result._wrapped == null and result.klass != null:
-					var next_method = result.klass._lookup_method("__next__")
+				if result != null and result._wrapped == null:
+					var next_method = null
+					if result.klass != null:
+						next_method = result.klass._lookup_method("__next__")
 					if next_method != null:
 						return DSLUserIterator.new(result)
 				# __iter__ 返回生成器函数调用结果 (生成器): 直接作为迭代器
@@ -3032,10 +3041,7 @@ class DSLObject:
 					return result._dsl_iter()
 				if result is DSLGenerator:
 					return result._dsl_iter()
-				# CPython 严格性: __iter__ 必须返回迭代器 (P2-43 文案)
-				last_error = "TypeError: iter() returned non-iterator of type '%s'" % result._type_name()
-				return null
-		# 旧式迭代协议: 仅定义 __getitem__ 的对象按连续下标迭代, 以 IndexError 结束
+			# 旧式迭代协议: 仅定义 __getitem__ 的对象按连续下标迭代, 以 IndexError 结束
 		if klass != null and klass._lookup_method("__getitem__") != null:
 			return DSLGetItemIterator.new(self)
 		# 未定义 __iter__ 但定义了 __next__ 的对象自身也可迭代
@@ -11583,9 +11589,11 @@ class DSLUserIterator extends DSLIterator:
 			return
 		var res = target.klass._invoke_func(next_method, [target] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if interp != null and interp.report.has_error:
-			# StopIteration (或其它异常): 结束迭代并清除错误标记
-			interp.report.clear_error()
-			interp.last_exception = null
+			# StopIteration 视为正常耗尽并清除错误标记; 其余异常 (ValueError 等)
+			# 必须保留错误状态交消费方传播, 否则异常被当作耗尽吞掉 (P0-27)
+			if interp.last_exception != null and interp.last_exception._type_name() == "StopIteration":
+				interp.report.clear_error()
+				interp.last_exception = null
 			done = true
 			return
 		_prefetched = res
@@ -11987,6 +11995,10 @@ class DSLGroupbyState:
 		source = p_source
 		key_func = p_key_func
 		interp = p_interp
+		# 源迭代器退出语句消费窗口: 状态机的游标 (pending / have_group) 跨语句持久,
+		# 消费中途挂起后由本状态机按自身进度续拉, 若源游标被语句重放回退到窗口起点,
+		# 已消费元素会被再次投递进状态机, 组边界即被污染 (P0-27)
+		source.windowed = false
 
 	## 拉取下一个源元素 (优先消费预取) [br]
 	## [returns] 0=元素已就绪 (pending / pending_key), 1=源耗尽, 2=挂起, 3=键函数报错
@@ -12032,7 +12044,9 @@ class DSLGroupbyState:
 		ip._suspend_reason = Interpreter.SuspendReason.SLEEPING
 		ip._is_waiting = false
 
-## groupby 的组内迭代器 (grouper): 产出创建时组键对应的元素, 键变化或源耗尽时结束
+## groupby 的组内迭代器 (grouper): 产出创建时组键对应的元素, 键变化或源耗尽时结束 [br]
+## 消费中途挂起时由消费方交回语句重放: 已交付元素记入日志供重放轮重读,
+## 新元素才推进共享状态机 (一次性迭代语义, 与生成器迭代器同协议)
 class DSLGroupbyGrouper extends DSLIterator:
 	## 共享游标状态
 	var state: DSLGroupbyState
@@ -12045,11 +12059,17 @@ class DSLGroupbyGrouper extends DSLIterator:
 	func _init(st: DSLGroupbyState, tk):
 		state = st
 		tgtkey = tk
+		once = true
 
 	func _dsl_iter() -> DSLIterator:
 		return self
-	
+
 	func has_next() -> bool:
+		_begin_use(state.interp)
+		# 同外层迭代器: 入口清除挂起残留 (窗口不覆盖本迭代器时重放清理扫不到)
+		suspended = false
+		if _read_pos < _log.size():
+			return true
 		if not state.have_group:
 			return false
 		if state.has_pending:
@@ -12067,13 +12087,21 @@ class DSLGroupbyGrouper extends DSLIterator:
 		return state._pending_key_matches_of(tgtkey)
 
 	func next() -> DSLObject:
+		_begin_use(state.interp)
+		suspended = false
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
+			return buffered
 		if not state.have_group:
 			return null
 		if state.has_pending:
 			if not state._pending_key_matches_of(tgtkey):
 				return null
 			state.has_pending = false
-			return state.pending
+			return _deliver(state.pending)
 		var r = state._pull()
 		if r == 2:
 			suspended = true
@@ -12087,9 +12115,19 @@ class DSLGroupbyGrouper extends DSLIterator:
 		if not state._pending_key_matches_of(tgtkey):
 			return null
 		state.has_pending = false
-		return state.pending
+		return _deliver(state.pending)
 
-## groupby 的外层迭代器: 产出 (键, grouper) 对, 推进时跳过当前组剩余元素
+	## 交付一个元素并记入日志 (重放轮由消费方从日志重读)
+	func _deliver(v: DSLObject) -> DSLObject:
+		_log.append(v)
+		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
+		return v
+
+## groupby 的外层迭代器: 产出 (键, grouper) 对, 推进时跳过当前组剩余元素 [br]
+## 消费中途挂起时由消费方交回语句重放: 已交付的组对记入日志供重放轮重读,
+## 新组才推进共享状态机 (一次性迭代语义, 与生成器迭代器同协议)
 class DSLGroupbyOuterIterator extends DSLIterator:
 	## 共享游标状态
 	var state: DSLGroupbyState
@@ -12102,21 +12140,44 @@ class DSLGroupbyOuterIterator extends DSLIterator:
 	## [param st] 共享游标状态
 	func _init(st: DSLGroupbyState):
 		state = st
+		once = true
 
 	func _dsl_iter() -> DSLIterator:
 		return self
-	
+
 	func has_next() -> bool:
+		_begin_use(state.interp)
+		# 本迭代器不参与消费窗口 (帧栈自持进度), 挂起残留须在入口清除,
+		# 否则续拉轮会被上一轮的 suspended 短路成耗尽
+		suspended = false
+		if _read_pos < _log.size():
+			return true
 		_ensure_pair()
+		if suspended:
+			return false
 		return has_pair
 
 	func next() -> DSLObject:
+		_begin_use(state.interp)
+		suspended = false
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
+			return buffered
 		_ensure_pair()
+		if suspended:
+			return null
 		if not has_pair:
 			return null
 		has_pair = false
 		var pair = pending_pair
 		pending_pair = null
+		_log.append(pair)
+		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
 		return pair
 
 	## 确保预取了下一组: 跳过未消费的当前组, 从预取元素或源开启新组
@@ -12184,10 +12245,14 @@ class DSLGroupbyGrouperView extends DSLObject:
 			_it = DSLGroupbyGrouper.new(state, tgtkey)
 		return _it
 
-## itertools.groupby 对象: 可迭代包装, _dsl_iter 返回外层迭代器
+## itertools.groupby 对象: 可迭代包装, _dsl_iter 返回外层迭代器 [br]
+## CPython 中 groupby 对象自身即迭代器 (iter(it) is it), 外层迭代器按对象缓存, [br]
+## 重放轮重新 iter 不得另建游标 (否则已交付组对的进度丢失)
 class DSLGroupby extends DSLObject:
 	## 共享游标状态
 	var state: DSLGroupbyState
+	## 缓存的外层迭代器
+	var _outer: DSLGroupbyOuterIterator = null
 
 	## 构造 groupby 对象 [br]
 	## [param st] 共享游标状态
@@ -12198,7 +12263,9 @@ class DSLGroupby extends DSLObject:
 		return "groupby"
 
 	func _dsl_iter() -> DSLIterator:
-		return DSLGroupbyOuterIterator.new(state)
+		if _outer == null:
+			_outer = DSLGroupbyOuterIterator.new(state)
+		return _outer
 
 class DSLTeeHandle extends DSLObject:
 	## 共享状态: {items: 缓冲数组, it: 源迭代器, interp: 解释器}
@@ -19647,7 +19714,10 @@ class Interpreter:
 		if kwargs.has("key") and not (kwargs["key"] is DSLNone):
 			key_func = kwargs["key"]
 		var state = DSLGroupbyState.new(it, key_func, self)
-		return DSLGroupby.new(state)
+		# 按调用节点记忆化 (与生成器同协议): 消费中途挂起后语句整句重放时,
+		# 重建 groupby 会拿到全新状态机, 而源迭代器游标已在消费中段,
+		# 重建体将漏掉已消费的元素, 故重放轮必须复用同一对象
+		return _memo_generator(_current_call_node, DSLGroupby.new(state))
 
 	## itertools.starmap(func, iterable) [br]
 	## 用每组参数解包调用 func, 返回结果列表
@@ -21782,6 +21852,10 @@ class Interpreter:
 		
 		if expr is UnpackAssign:
 			var val = evaluate(expr.value)
+			if _suspended:
+				# 求值中途挂起 (如 next() 驱动的迭代器在生成器步内睡眠): null 不代表真值,
+				# 交回语句重放, 不得误报 None 解包错误 (P0-27)
+				return null
 			if val == null or val is DSLNone:
 				raise_exception("TypeError", "cannot unpack non-iterable NoneType object")
 				return null

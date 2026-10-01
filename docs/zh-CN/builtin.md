@@ -585,7 +585,7 @@ list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
 
 ## 内置模块 (import)
 
-PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator` 等纯逻辑模块（引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
+PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time` 共九个内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
 
 ### import 语法
 
@@ -820,6 +820,7 @@ time.monotonic()        # 单调递增时钟 (秒, 不受系统时间调整影�
 time.monotonic_ns()     # 单调递增时钟 (纳秒)
 time.perf_counter()     # 性能计数器 (秒)
 time.perf_counter_ns()  # 性能计数器 (纳秒)
+time.process_time()     # 当前进程 CPU 时间 (秒)
 ```
 
 `time.sleep()` 可用于推导式、生成器表达式与生成器函数体内（与 CPython 行为一致）：

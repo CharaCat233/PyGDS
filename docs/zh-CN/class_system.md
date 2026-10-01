@@ -315,6 +315,7 @@ class Foo:       # 等价于 class Foo(object):
    - `FunctionStmt` → 创建 `DSLFunction`，存入 `methods`
    - `ExpressionStmt(Assign)`（类级赋值）→ 求值并存入 `class_attrs` 与 `class_env`
    - `GlobalStmt`（类体内 `global` 声明）→ 在 `class_env` 上标记；其后同名赋值经 `set_val` 写入模块全局，不落类属性（`nonlocal` 声明同法绑定外层函数作用域，找不到绑定时报 `no binding for nonlocal 'x' found`）
+   - `AnnotatedAssign`（类体注解 `a: int = 1`）→ 注解求值并入类 `__annotations__`；带值时同 Assign 语义创建类属性，裸注解不创建类属性（CPython 语义）
 4. **创建 DSLClass**：`DSLClass.new(name, 首个基类, methods, self)` 后写入 `bases` 并重算 MRO
 5. **注册到环境**：`environment.define(name, class_obj)`，使类名在作用域中可见
 

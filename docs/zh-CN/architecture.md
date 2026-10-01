@@ -163,7 +163,7 @@ expression_statement （处理赋值、增强赋值、解包赋值）
 
 方法 `PyGDS.Parser.skip_type_annotation` 将跳过类型注释部分，遇到 `=`、`,`、`:`、`)`、换行时停止，支持嵌套泛型括号
 
-该解析过程会将类型注释进行擦除，而 Python 则是将其保存在 `__annotations__`  字典之内
+模块与类体的注解表达式在声明处求值并保存到 `__annotations__` 字典（函数体内不求值，`from __future__ import annotations` 生效时全部跳过），与 CPython 的保存位置一致
 
 > 如果您对 Python 类型注释感兴趣，可以查阅 PEP 563 和 PEP 649
 

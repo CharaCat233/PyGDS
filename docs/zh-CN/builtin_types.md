@@ -827,6 +827,24 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "a1b2".rpartition("1")              # ("a1b", "1", "2")
 ```
 
+#### `str.maketrans(x, y=None, z=None) -> dict`
+
+构造 translate 用的转换表：两参形式把 `x` 中字符映射到 `y` 中对应字符，三参形式把 `z` 中字符映射为删除
+
+```python
+# Python: str.maketrans(x, y, z)
+table = str.maketrans("abc", "xyz", "d")
+```
+
+#### `str.translate(table) -> str`
+
+按转换表逐字符映射；表中缺失的字符原样保留，映射为 `None` 的字符删除
+
+```python
+# Python: str.translate(table)
+"abcd".translate(str.maketrans("abc", "xyz", "d"))   # "xyz"
+```
+
 #### `str.removeprefix(prefix) -> str`
 
 去除指定前缀，无该前缀时原样返回
@@ -932,6 +950,16 @@ b'\xff'.decode("utf-8", "replace")  # '\ufffd'
 # Python: bytes.hex(sep)
 b'AB'.hex()                         # "4142"
 b'AB'.hex(" ")                      # "41 42"
+```
+
+#### `bytes.fromhex(string) -> bytes`
+
+把十六进制字符串转回字节串；忽略空白分隔符，奇数长度或非十六进制字符报 `ValueError`
+
+```python
+# Python: bytes.fromhex(string)
+bytes.fromhex("4142")               # b'AB'
+bytes.fromhex("41 42")              # b'AB'
 ```
 
 #### `bytes.upper()` / `bytes.lower()` / `bytes.title() -> bytes`

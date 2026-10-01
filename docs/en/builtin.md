@@ -586,7 +586,7 @@ list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
 
 ## Built-in Modules (import)
 
-PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the pure-logic modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string` and `operator` (engine-related capabilities are better exposed through `register_api()` from the GDScript side).
+PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides nine built-in modules: `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator` and `time` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
 
 ### import Syntax
 
@@ -822,6 +822,8 @@ time.monotonic()        # monotonically increasing clock (seconds, unaffected by
 time.monotonic_ns()     # monotonically increasing clock (nanoseconds)
 time.perf_counter()     # performance counter (seconds)
 time.perf_counter_ns()  # performance counter (nanoseconds)
+
+time.process_time()     # process CPU time (seconds)
 ```
 
 `time.sleep()` works inside comprehensions, generator expressions and generator function bodies (matching CPython):

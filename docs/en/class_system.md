@@ -315,6 +315,7 @@ Their `__new__` is bound to `api_<type>_new` (returning a raw DSLObject), and `_
    - `FunctionStmt` → create a `DSLFunction`, store in `methods`
    - `ExpressionStmt(Assign)` (class-level assignment) → evaluate and store in `class_attrs` and `class_env`
    - `GlobalStmt` (a `global` declaration in the class body) → mark on `class_env`; subsequent assignments to the name go through `set_val` into the module globals instead of the class attributes (`nonlocal` declarations likewise bind the enclosing function scope, raising `no binding for nonlocal 'x' found` when no binding exists)
+   - `AnnotatedAssign` (class-body annotation `a: int = 1`) → the annotation is evaluated into the class `__annotations__`; with a value it follows Assign semantics to create the class attribute, bare annotations create none (CPython semantics)
 4. **Create DSLClass**: `DSLClass.new(name, first_base, methods, self)`, then set `bases` and recompute the MRO.
 5. **Register in the environment**: `environment.define(name, class_obj)` makes the class name visible in scope.
 
