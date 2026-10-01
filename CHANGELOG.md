@@ -2,6 +2,41 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.7] - 2026-10-02
+
+本版完成行为一致性测试体系重构（`ci/` 双端实时比对，277 例）并退役冻结基线体系；同时完成全项目审计，新发现 12 条问题（含 2 条 P0）已记录入已知问题清单，随本版修复 4 条解释器行为分歧
+
+### 修复
+
+- **`ord()` 长度校验**：`ord("ab")` 此前不报错并静默取首字符码点，现按 CPython 抛 `TypeError: ord() expected a character, but string of length N found`
+- **bytes/str `%` 格式化数值实参类型校验**：`b"%d" % "x"` 此前静默按 `0` 处理，现按 CPython 抛 `TypeError: %d format: a real number is required, not str`
+- **`pow` 三参负指数模逆**：`pow(2, -1, 5)` 此前按 `(2 ** -1) % 5` 得 `0.5`，现实现整数模幂（平方乘，避免大中间值）与扩展欧几里得模逆，负指数按 CPython 语义求逆（底数与模不互素时抛 `ValueError: base is not invertible for the given modulus`）
+- **statistics 异常类型**：`mean`/`median`/`mode`/`variance`/`pvariance`/`stdev` 的数据点不足错误由 `ValueError` 改为 `StatisticsError`（`ValueError` 子类，既有 `except ValueError` 不受影响），`mean`/`stdev` 文案同步对齐 CPython
+
+### 测试
+
+- **行为一致性测试体系重构（ci/）**：全部用例（277 个）自 `py_package/` 冻结基线体系整体 1:1 迁入 `ci/cases/`，改为**双端实时比对**——每次运行现场执行 CPython 与 PyGDS 各一次，按用例头注声明的比对语义判定，不再使用冻结的期望输出：
+  - `same_output`（232 例）：双端均正常完成，stdout 归一化后逐字一致
+  - `same_error`（45 例）：双端均报错，异常类名与消息均一致（剥离 `(line N)` 尾缀后）
+  - 另有 `same_exception`（类名精确一致，不支持子类容差）与 `diverge`（已文档化既定分歧）两种声明供后续使用；任何单边报错一律判失败
+- **用例名改为职责编码命名**：`syntax_*`（文法与其编译期错误）/ 推导式家族（`comprehension_*`，与 `syntax_for` 区分）/ `builtin_*`（内置函数）/ `type_*`（内置类型）/ `module_*`（标准库模块）/ `class_*`（用户类系统）/ `exception_*`（异常体系）/ `suspend_*`（挂起系统）；原空壳用例 `func_unpack` 补写为调用处解包错误路径（`syntax_unpack_args`）
+- **新增 `ci/run_cases.gd` 双端运行器**：自动探测 CPython 命令（Windows 先 `python`，Linux 先 `python3`），经 `ci/_pyrun.py` 垫片（结果经 JSON 文件传递，强制 UTF-8）规避 `OS.execute` 输出切分与平台编码差异；内置归一化（对象默认 repr 的内存地址与 `__main__.` 前缀、未对齐解析文案的 `SyntaxError` 类名归一）；支持 `-- --filter=<名>` 过滤单跑
+- **运行器支持可选行号比对**：报错用例声明 `# 行号: same` 后，运行器将 PyGDS 错误行的 `(line N)` 尾缀与 CPython traceback 末帧行号核对——运行期错误行号这一 README 兼容性矩阵特性由 `exception_uncaught_line` 用例守住（此前为比对盲区）
+- **运行器支持可选行号比对**：报错用例声明 `# 行号: same` 后，运行器将 PyGDS 错误行的 `(line N)` 尾缀与 CPython traceback 末帧行号核对——运行期错误行号这一 README 兼容性矩阵宣称的特性由 `exception_uncaught_line` 用例守住
+- **命名注册表调整**：推导式家族统一为 `comprehension_*` 前缀（`comprehension_list` / `comprehension_genexp` 等）；新增 `misc_*` 未分类兜底前缀；规范文档迁移至 `docs/zh-CN/ci.md` 与 `docs/en/ci.md`
+- **头注键中英并存**：`duty`/`compare`/`anchor`/`ref`/`lines`/`skip` 与中文键等价，解析器统一归一化；值中 `" # "` 起为尾注释，解析时剥离
+- **新增 `ci/lint_cases.py` 结构检查**：头注元数据完整合法、文件名符合家族注册表、`same_output` 用例可编译、中英两份文档条目与用例一一对应（双向）
+- **文档与 GDScript 机械自查脚本迁入 `ci/`**（`lint_md.py` / `lint_gd.py`），`build/` 临时目录整体移除
+- **旧体系退役**：`py_package/` 目录与根目录 `test.gd`（单端冻结基线比对器）移除，CI 只运行新体系（lint + 双端运行）
+- **全项目审计**：21 个差分探针 + CI 日志归因新发现 12 条问题（P0-28/29、P1-68~70、P2-45~51，含 `nonlocal` 跨级闭包链挂死与跨容器相等语义两条 P0），已记录入已知问题清单，随后续版本修复
+- `actions/checkout` 升级至 `v5`（消除 Node.js 20 弃用告警）；挂起 demo 逐测试释放 PyGDS 实例
+
+### 文档
+
+- **新增 `docs/zh-CN/behavioral.md` 与 `docs/en/behavioral.md`**：277 个用例的逐例说明（职责/比对/源文件链接，中英双语），按八大家族分组附导语，文档中的代码标识符一律行内代码包裹
+- `README`（中英）行为测试章节改为新体系说明，详细文档表补 behavioral.md 条目
+- `docs/zh-CN/ci.md` 与 `docs/en/ci.md`：命名注册表（含 `comprehension_*` 推导式家族与 `misc_*` 未分类兜底前缀）、边界规则、判定矩阵、归一化集合、用例书写规范（确定性）与新增用例流程
+
 ## [0.7.0-alpha.6] - 2026-10-01
 
 本版修复 alpha.5 收尾发现的挂起重放缺陷群：状态机式内建消费器跨语句驱动睡眠生成器的重放循环（P0-27）、用户迭代器 `__next__` 异常被内建消费器吞掉、解包赋值将挂起误报为 None 解包错误，并回退 alpha.5 的 `__iter__` 严格性文案（P2-43，实测与挂起重放机制冲突）

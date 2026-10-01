@@ -1,0 +1,18 @@
+# 职责: int/float 位方法与 format()
+# 比对: same_output
+
+
+print((255).bit_length())
+print((7).bit_count())
+print((5).to_bytes(2, 'big'))
+print(int.from_bytes(b'\x01\x00', 'big'))
+print(int.from_bytes((255).to_bytes(2, 'big'), 'big'))
+print(1.5.is_integer())
+print(2.0.is_integer())
+print(2.0.as_integer_ratio())
+print(0.5.as_integer_ratio())
+print(format(255, 'x'))
+print(format(1234567, ','))
+print(format(3.14, '.1f'))
+print(format(42))
+print('done')

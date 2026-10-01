@@ -1,2 +1,0 @@
-async with x:
-    pass

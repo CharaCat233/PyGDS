@@ -128,13 +128,13 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Literal `*` unpacking | ✅ Full | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}` (Python 3.5+) |
 | Assignment expressions (`:=`) | ✅ Full | `if (n := len(a)) > 5:`, `while chunk := read():`, binds to the enclosing scope inside comprehensions (Python 3.8+); matching CPython, both "rebinding a comprehension iteration variable" and "appearing in a comprehension iterable expression" are rejected |
 | `slice` | ✅ Full | `slice(start, stop[, step])` object, reusable indexing `lst[slice(...)]` |
-| Augmented Assignment | ✅ Full | `+=`, `-=`, `*=`, `/=`, etc. |
+| Augmented Assignment | ⚠️ Partial | `+=` `-=` `*=` `/=` `**=` `//=` `%=` `\|=` supported; `&=` `^=` `<<=` `>>=` not yet (P1-68) |
 | Subscript Access | ✅ Full | `obj[key]` with `getitem`/`setitem`; slice assignment/deletion `a[1:3] = [9]` / `del a[1:3]` |
 | Attribute Access | ✅ Full | `obj.attr` with `getattr`/`setattr` |
 | Method Type System | ✅ Full | 7 types strictly matching CPython |
 | Descriptor Protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
 | Magic Methods | ✅ Full | `__add__`/`__str__`/`__init__`, etc., registered at class level |
-| Operators | ✅ Full | Binary/unary/comparison/augmented all supported |
+| Operators | ⚠️ Partial | Binary/unary/comparison fully supported; augmented assignment lacks `&=` `^=` `<<=` `>>=` (P1-68) |
 | f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers, conversion flags, the `=` debug specifier and nested format widths, plus same-quote nesting and nested f-strings (PEP 701, Python 3.12+); replacement-field expressions support multiple lines (indented continuations and comments included) |
 | lambda | ✅ Full | Anonymous functions with default arguments and closures |
 | `super()` | ✅ Full | Call parent methods/constructors under single inheritance |
@@ -186,7 +186,7 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 ### P0 — Silent Wrong Values
 
-The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`. P0-13 (silent wrapping for integers beyond the int64 range) was fixed in v0.6.0-alpha.7 to raise an explicit `OverflowError`; one standing divergence remains: PyGDS `int` is a 64-bit signed integer while CPython `int` has arbitrary precision (it never overflows), so out-of-range operations raise an explicit error in PyGDS where CPython produces the exact result; full alignment would require an arbitrary-precision integer architecture (evaluated and deferred), see the integer-literals section of `docs/en/usage.md` for behavior
+The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`. P0-13 (silent wrapping for integers beyond the int64 range) was fixed in v0.6.0-alpha.7 to raise an explicit `OverflowError`; one standing divergence remains: PyGDS `int` is a 64-bit signed integer while CPython `int` has arbitrary precision (it never overflows), so out-of-range operations raise an explicit error in PyGDS where CPython produces the exact result; full alignment would require an arbitrary-precision integer architecture (evaluated and deferred), see the integer-literals section of `docs/en/usage.md` for behavior. The v0.7.0-alpha.7 project-wide audit uncovered two new P0s (both unfixed): P0-28 (dead loop in `nonlocal` binding search — the interpreter hangs across multi-level closure chains, requiring the host process to be killed) and P0-29 (cross-container equality semantics: `[1] == (1,)` evaluates to `True`)
 
 ### P1 — Clear Errors or Missing Features
 
@@ -197,6 +197,9 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3
 | P1-7 | `with` statement unsupported | Not implemented by design for now |
 | P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
 | P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`). As reserved words, misuse of `async` / `await` now raises `SyntaxError` matching CPython |
+| P1-68 | Augmented assignment `&=` `^=` `<<=` `>>=` unsupported | Rejected at parse time (`Unexpected token '='`); the other eight augmented operators are supported (v0.7.0-alpha.7 audit) |
+| P1-69 | Set operations between dict views and sets unsupported | `d.keys() & {"a"}` etc. raise `TypeError` (CPython supports all view↔set operations) (v0.7.0-alpha.7 audit) |
+| P1-70 | `in` membership on `__getitem__`-only iterables unsupported | Raises `'G' object is not a container`; consumers like `list` / `zip` / `max` / `any` are supported (v0.7.0-alpha.7 audit) |
 
 ### P2 — Edge Differences
 
@@ -205,6 +208,13 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3
 | P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
 | P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` and for trailing redundant tokens are aligned; the unclosed-bracket message was aligned in **v0.5.0-alpha.6** (`'(' was never closed`). Wording and line-number formatting of other parse-time errors may still differ (e.g. a missing colon, an unterminated string) |
 | P2-4 | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match |
+| P2-45 | `send(non-None)` on a just-started generator raises `StopIteration` instead of `TypeError` | v0.7.0-alpha.7 audit |
+| P2-46 | `%#o` alternate form and f-string `#` integer prefixes wrong (`%#o % 8` → `10`; `{255:#06x}` → `000xff`) | v0.7.0-alpha.7 audit |
+| P2-47 | `"%c" % "A"` emits a U+FFFD replacement character | v0.7.0-alpha.7 audit |
+| P2-48 | format-spec `.N` float precision treated as decimal places (CPython: N significant digits when type is unspecified) | v0.7.0-alpha.7 audit |
+| P2-49 | `str.casefold()` lacks full Unicode case folding (`"ß"` → `"ß"` instead of `"ss"`) | v0.7.0-alpha.7 audit |
+| P2-50 | Deep recursion hitting `RecursionError` prints per-frame `Stack underflow! (Engine Bug)` engine logs (~531 per run; log noise only, output and verdicts correct) | v0.7.0-alpha.7 audit |
+| P2-51 | `ObjectDB instances leaked at exit` warnings (`DSLObject` is a plain `Object` with no per-case lifecycle reclamation) plus the correlated `resources still in use` | v0.7.0-alpha.7 audit |
 
 ### Platform Limitations
 
@@ -307,28 +317,20 @@ var state = dsl.run()
 
 ## Behavioral Tests
 
-The [py_package](./py_package/) package contains a [tests](./py_package/tests/) folder and a [test.py](./py_package/test.py) file. Running it will execute all Python files in the [tests](./py_package/tests/) folder, capture console output, and save results based on the `OUTPUT_FILE` variable (defaults to `./expected.json`).
+Behavior tests use **dual-end live comparison**: each run executes CPython and PyGDS once, side by side, and verifies that both behave identically according to the comparison semantics declared per case (`same_output` exact stdout match / `same_exception` exception class match / `same_error` exception class and message match). All cases live in [ci/cases](./ci/cases/); each `.py` file covers one responsibility — e.g. `module_math_sqrt` tests the single `math.sqrt` function, `comprehension_list` tests list comprehensions — the file name is the responsibility statement.
 
-The JSON structure is `{"test_name": {"source": "source code", "expected": "console output or compilation error"}}`.
-
-You can run the GDScript test file using:
-
-```cmd
-godot --headless --path /your/project/path --script /pygds/path/test.gd
-```
-
-to verify that PyGDS behavior matches Python.
-
-### Adding Tests and Regenerating expected.json
-
-After adding a new `*.py` test file to [tests](./py_package/tests/), record the real Python output into `expected.json`:
+- Verdict matrix, naming registry, case authoring rules and the workflow for adding cases: [`docs/en/ci.md`](docs/en/ci.md)
+- Per-case documentation: [docs/zh-CN/behavioral.md](./docs/zh-CN/behavioral.md) / [docs/en/behavioral.md](./docs/en/behavioral.md)
 
 ```cmd
-cd py_package
-python test.py
+godot --headless --path /your/project/path --script /pygds/path/ci/run_cases.gd
 ```
 
-> **Note**: `expected.json` is a **curated** baseline. `test.py` rewrites it entirely, and a few cases (e.g., the object memory address in `edge_str_repr`) need manual normalization to the `<OnlyStr object>` form. Recommended workflow: after running `test.py`, **merge only the `expected` values of newly added cases** into the existing file, keep the already-curated entries, then run `test.gd` to verify.
+The runner auto-detects the CPython command (`python` first on Windows, `python3` first on Linux); dual-end comparison requires a local CPython installation.
+
+### Adding Tests
+
+After adding a case to [ci/cases](./ci/cases/), run `python ci/lint_cases.py` — it will point out missing documentation entries; the full workflow (header metadata → lint → add a behavioral.md entry → filtered run → full regression) is described in [`docs/en/ci.md`](docs/en/ci.md) under "新增用例流程" (case authoring workflow).
 
 ---
 
@@ -386,4 +388,5 @@ Yes. Expose GDScript-side capabilities to scripts via `register_api()`; asynchro
 | [class_system.md](docs/en/class_system.md) | Class and instance system |
 | [builtin_types.md](docs/en/builtin_types.md) | Built-in type details |
 | [exception_system.md](docs/en/exception_system.md) | Exception system |
+| [behavioral.md](docs/en/behavioral.md) | Behavioral tests per-case reference |
 | [usage.md](docs/en/usage.md) | Usage guide and API registration |

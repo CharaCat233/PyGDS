@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Godot 4.7.2
         run: |
@@ -19,9 +19,18 @@ jobs:
           unzip -q Godot_v4.7.2-stable_linux.x86_64.zip
           ls -la Godot*
 
-      - name: Run behavior tests (test.gd)
+      - name: Lint behavior cases
         run: |
-          ./Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://test.gd
+          python3 ci/lint_cases.py
+
+      - name: Lint markdown and GDScript
+        run: |
+          python3 ci/lint_md.py
+          python3 ci/lint_gd.py
+
+      - name: Run dual-end behavior cases (ci/)
+        run: |
+          ./Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://ci/run_cases.gd
 
       - name: Run suspend system tests
         run: |

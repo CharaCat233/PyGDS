@@ -5124,6 +5124,10 @@ class DSLString extends DSLObject:
 	func _format_one(val: DSLObject, conv: String, width: int, precision: int, flags: String) -> String:
 		if val == null:
 			return "%" + conv
+		if val is DSLString and conv != 's' and conv != 'r' and conv != 'a' and conv != 'c':
+			# CPython: 数值转换符不接受 str 实参
+			last_error = "TypeError: %" + conv + " format: a real number is required, not str"
+			return ""
 		var s = ""
 		var is_numeric = false
 		match conv:
@@ -19068,7 +19072,7 @@ class Interpreter:
 		var nums: Array = collected[0]
 		var all_int: bool = collected[1]
 		if nums.size() == 0:
-			raise_exception("ValueError", "mean() requires at least one data point")
+			raise_exception("StatisticsError", "mean requires at least one data point")
 			return null
 		var total = 0.0
 		for n in nums:
@@ -19084,7 +19088,7 @@ class Interpreter:
 		var nums: Array = collected[0]
 		var all_int: bool = collected[1]
 		if nums.size() == 0:
-			raise_exception("ValueError", "median() requires at least one data point")
+			raise_exception("StatisticsError", "median() requires at least one data point")
 			return null
 		nums.sort()
 		var n = nums.size()
@@ -19127,7 +19131,7 @@ class Interpreter:
 			else:
 				counts[k]["count"] += 1
 		if order.size() == 0:
-			raise_exception("ValueError", "mode() requires at least one data point")
+			raise_exception("StatisticsError", "mode() requires at least one data point")
 			return null
 		var best_key = order[0]
 		for k in order:
@@ -19136,7 +19140,7 @@ class Interpreter:
 		return counts[best_key]["obj"]
 
 	## statistics.variance(data) - 样本方差 (n-1)
-	func _stat_variance(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	func _stat_variance(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject], err_type: String = "StatisticsError", err_msg: String = "variance() requires at least two data points") -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "variance() takes exactly one argument")
 			return null
@@ -19144,7 +19148,7 @@ class Interpreter:
 		var nums: Array = collected[0]
 		var all_int: bool = collected[1]
 		if nums.size() < 2:
-			raise_exception("ValueError", "variance() requires at least two data points")
+			raise_exception(err_type, err_msg)
 			return null
 		var mean = 0.0
 		for n in nums:
@@ -19158,7 +19162,7 @@ class Interpreter:
 
 	## statistics.stdev(data) - 样本标准差
 	func _stat_stdev(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var v = _stat_variance(args, _kwargs)
+		var v = _stat_variance(args, _kwargs, "StatisticsError", "stdev requires at least two data points")
 		var vnum = v.value if (v is DSLInteger or v is DSLFloat) else 0.0
 		return DSLFloat.new(sqrt(float(vnum)))
 
@@ -19171,7 +19175,7 @@ class Interpreter:
 		var nums: Array = collected[0]
 		var all_int: bool = collected[1]
 		if nums.size() == 0:
-			raise_exception("ValueError", "pvariance() requires at least one data point")
+			raise_exception("StatisticsError", "pvariance() requires at least one data point")
 			return null
 		var mean = 0.0
 		for n in nums:
@@ -25098,11 +25102,68 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		var base = args[0]
 		var exp_ = args[1]
-		var result = base.magic_pow([base, exp_] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if args.size() >= 3:
 			var mod = args[2]
+			if base is DSLInteger and exp_ is DSLInteger and mod is DSLInteger:
+				# 整数模幂: 平方乘避免中间结果溢出; 负指数先求模逆 (对齐 CPython)
+				var m: int = mod.value
+				if m == 0:
+					raise_exception("ValueError", "pow() 3rd argument cannot be 0")
+					return null
+				var b_val: int = base.value
+				var e_abs: int = absi(exp_.value)
+				if exp_.value < 0:
+					var inv = _mod_inverse(b_val, m)
+					if inv == null:
+						raise_exception("ValueError", "base is not invertible for the given modulus")
+						return null
+					b_val = inv
+				var result := 1
+				var cur := _py_mod(b_val, m)
+				var m_abs := absi(m)
+				var e := e_abs
+				while e > 0:
+					if e & 1 == 1:
+						result = (result * cur) % m_abs
+					cur = (cur * cur) % m_abs
+					e = e >> 1
+				return DSLInteger.pooled(_py_mod(result, m))
+			var result = base.magic_pow([base, exp_] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			result = result.magic_mod([result, mod] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-		return result
+			return result
+		return base.magic_pow([base, exp_] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+
+	## CPython 语义的取模 (结果符号随除数)
+	func _py_mod(x: int, m: int) -> int:
+		var m_abs := absi(m)
+		var r := x % m_abs
+		if r < 0:
+			r += m_abs
+		if r != 0 and m < 0:
+			r -= m_abs
+		return r
+
+	## 扩展欧几里得求 b 在模 m 下的逆元; 不可逆返回 null
+	func _mod_inverse(b: int, m: int):
+		var m_abs := absi(m)
+		var bb := _py_mod(b, m_abs)
+		if bb == 0:
+			return null
+		var old_r := bb
+		var r := m_abs
+		var old_s := 1
+		var s := 0
+		while r != 0:
+			var q := old_r / r
+			var tmp_r := old_r - q * r
+			old_r = r
+			r = tmp_r
+			var tmp_s := old_s - q * s
+			old_s = s
+			s = tmp_s
+		if old_r != 1:
+			return null
+		return old_s % m_abs
 	
 	## divmod(a, b) - 返回商和余数的元组
 	func builtin_divmod(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLTuple:
@@ -25462,8 +25523,8 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		var obj = args[0]
 		if obj is DSLString:
-			if obj.value.length() == 0:
-				raise_exception("TypeError", "ord() expected a character, but string of length 0 found")
+			if obj.value.length() != 1:
+				raise_exception("TypeError", "ord() expected a character, but string of length %d found" % obj.value.length())
 				return null
 			return DSLInteger.pooled(obj.value.unicode_at(0))
 		raise_exception("TypeError", "ord() expected string of length 1")
