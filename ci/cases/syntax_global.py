@@ -82,3 +82,17 @@ def outer():
 
 
 print(outer())
+
+# 跨两级闭包链的 nonlocal: 目标变量在祖父级作用域 (P0-28)
+def counter():
+    total = 0
+    def mid():
+        def add():
+            nonlocal total
+            total += 1
+        add()
+        add()
+    mid()
+    return total
+
+print(counter())

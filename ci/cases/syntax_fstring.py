@@ -56,3 +56,8 @@ x = 5
 print(f"outer {f'inner {x}'}")
 
 print("done")
+
+# 备用形式与零填充: 前缀参与布局 (P2-46)
+print(f"{255:#06x}")             # 0x00ff
+print(f"{-255:#06x}")            # -0x0ff
+print(f"{8:#06o}")               # 0o0010

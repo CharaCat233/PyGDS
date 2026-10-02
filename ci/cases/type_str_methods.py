@@ -31,3 +31,7 @@ print(hello_str.find("xx"))  # -1
 print(hello_str.startswith("he"))  # True
 print(hello_str.endswith("lo"))  # True
 print(hello_str.endswith("xx"))  # False
+
+# casefold 完整 Unicode 折叠 (P2-49)
+print("ß".casefold(), "ABC".casefold())
+print("ﬁ".casefold(), "ſ".casefold())

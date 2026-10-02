@@ -2,6 +2,30 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.8] - 2026-10-02
+
+本版修复 v0.7.0-alpha.7 全项目审计新发现的问题中的 5 条：两条 P0（`nonlocal` 绑定搜索死循环、跨容器相等语义）与三条 P1（增强赋值运算符缺口、dict 视图集合运算、旧式迭代的 `in` 判定），并同步补充双端回归用例
+
+### 修复
+
+- **`nonlocal` 绑定搜索死循环（P0-28）**：`NonlocalStmt` 执行时的绑定搜索 while 循环缺少 `env = env.enclosing` 链推进，目标变量不在第一个外层环境时解释器无限空转挂死（不受步数上限约束，宿主进程需强杀）；修复后跨多级闭包链的 `nonlocal` 正确解析至目标环境，无绑定时按 CPython 报 `SyntaxError: no binding for nonlocal '...'`
+- **跨容器类型相等语义（P0-29）**：`[1] == (1,)` 此前按内容比较判 `True`，现按 CPython 语义——不同内建容器类型（list/tuple/set/dict 互比）恒为 `False`，同类型比较行为不变
+- **增强赋值 `&=` `^=` `<<=` `>>=`（P1-68）**：四个运算符此前在解析期拒绝（`Unexpected token '='`），现接入词法/解析/执行链路，整数按位与/或/异或/移位与 set 的原地对称差等语义与对应二元运算符一致
+- **dict 视图与 set 的集合运算（P1-69）**：`d.keys()` / `d.values()` / `d.items()` 支持 `&` `|` `-` `^` 与 set/view 的全部组合，结果为 `set`
+- **旧式 `__getitem__` 迭代对象的 `in` 判定（P1-70）**：`in` 运算在无 `__contains__` 时回退到旧式迭代协议逐元素比对（与 `list()` 等内建消费器同规），不再报 `'G' object is not a container`
+- **`%#o` 备用前缀（P2-46a）**：`%` 引擎八进制备用形式此前被忽略（`%#o % 8` → `10`），现按 CPython 输出 `0o10`
+- **f-string/str.format 进制前缀与零填充布局（P2-46b）**：`{255:#06x}` 此前为 `000xff`（前缀未参与零填充布局、负号位于前缀之后），现两引擎统一为 CPython 形态 `0x00ff` / `-0x0ff`
+- **`%c` 单字符 str 实参（P2-47）**：`"%c" % "A"` 此前输出替换字符，现接受长度为 1 的 `str`；错误消息对齐 CPython（`%c requires int or char`）
+- **format `.N` 有效数字语义（P2-48）**：无类型 `.N` 此前按小数位处理（`"{:.3}".format(3.14159)` → `3.142`），现实现 CPython 语义——舍入到 N 位有效数字后按数量级取定点 repr 或去尾零科学计数（`3.14` / `1.23e+02` / `1e+01`）
+- **`str.casefold` 完整折叠（P2-49）**：`"ß".casefold()` 此前返回 `"ß"`，现实现 CaseFolding 多字符特例（`ß` → `ss`、连字 `ﬁ`/`ﬂ` 等与 `ſ` → `s`）
+- **P2-45 复核为误报**：审计记录的「刚启动生成器 `send(非 None)` 抛 `StopIteration`」经复核不成立——PyGDS 行为与 CPython 一致（`TypeError`），系探针自身把生成器耗尽的 `StopIteration` 误归因，从清单更正
+
+### 测试
+
+- `syntax_global` 补跨两级闭包链的 `nonlocal` 断言；`type_seq_compare` 补跨容器相等断言；`syntax_augassign` 补 `&=` `^=` `<<=` `>>=` 断言；`type_dict_view_types` 补 `view` 与 `set` 集合运算断言；旧式迭代的 `in` 断言并入既有 `__getitem__` 迭代用例
+- `syntax_yield_control` 补 fresh-send `TypeError` 断言；`type_str_percent` 补 `%#o` 与 `%c` str 实参断言；`type_str_format` 补 `.N` 有效数字断言；`syntax_fstring` 补 `#06x` 断言；`type_str_methods` 补 `casefold` 断言
+- 全量回归 277/277 通过（本地 Godot 4.7.2 与 CI 同版本）
+
 ## [0.7.0-alpha.7] - 2026-10-02
 
 本版完成行为一致性测试体系重构（`ci/` 双端实时比对，277 例）并退役冻结基线体系；同时完成全项目审计，新发现 12 条问题（含 2 条 P0）已记录入已知问题清单，随本版修复 4 条解释器行为分歧
@@ -28,7 +52,7 @@
 - **新增 `ci/lint_cases.py` 结构检查**：头注元数据完整合法、文件名符合家族注册表、`same_output` 用例可编译、中英两份文档条目与用例一一对应（双向）
 - **文档与 GDScript 机械自查脚本迁入 `ci/`**（`lint_md.py` / `lint_gd.py`），`build/` 临时目录整体移除
 - **旧体系退役**：`py_package/` 目录与根目录 `test.gd`（单端冻结基线比对器）移除，CI 只运行新体系（lint + 双端运行）
-- **全项目审计**：21 个差分探针 + CI 日志归因新发现 12 条问题（P0-28/29、P1-68~70、P2-45~51，含 `nonlocal` 跨级闭包链挂死与跨容器相等语义两条 P0），已记录入已知问题清单，随后续版本修复
+- **全项目审计**：21 个差分探针 + CI 日志归因新发现 12 条问题（P0-28/29、P1-68~70、P2-45~51，含 `nonlocal` 跨级闭包链挂死与跨容器相等语义两条 P0），已记录入已知问题清单
 - `actions/checkout` 升级至 `v5`（消除 Node.js 20 弃用告警）；挂起 demo 逐测试释放 PyGDS 实例
 
 ### 文档

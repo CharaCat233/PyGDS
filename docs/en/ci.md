@@ -105,7 +105,9 @@ Dual-end comparison requires cases to be stable **across two runs on the same en
 1. Do not print raw memory addresses (default repr excepted, already normalized), raw `time.time()` values, or raw `random` values; test random behavior through invariants ("same `seed` yields the same sequence", "zero-weight elements are never drawn")
 2. Keep `time.sleep` at the `0.05` scale — the CPython side blocks for real, so large values slow the whole suite; and intervals below the Windows timer quantum (~0.0156s) may not advance at all, making monotonic-clock assertions non-deterministic
 3. Do not use `sys.exit` / `input` / file IO
-4. Error cases: scripts ending in an uncaught exception use `same_error`/`same_exception`; `try`-caught-and-printed ones are plain `same_output`
+4. Float results of non-IEEE-correctly-rounded libm functions (`cbrt` / `pow` / `exp` / `log` / trig family) must be compared after `round(..., N)` — glibc and the Windows CRT round differently; `sqrt` / `remainder` are correctly rounded and compare directly
+5. Do not test `is` identity of runtime-constructed strings — the single-char cache and strip self-return are CPython version-specific implementation details (3.12.8 and 3.13 differ); test compile-time literal identity and `==` semantics
+6. Error cases: scripts ending in an uncaught exception use `same_error`/`same_exception`; `try`-caught-and-printed ones are plain `same_output`
 
 ## Workflow for Adding a Case
 

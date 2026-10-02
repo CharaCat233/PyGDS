@@ -14,14 +14,15 @@ print("a" * 100 + "b" * 100 is long_lit)
 # 大结果不折叠 (CPython 编译器 4096 上限)
 print("x" * 5000 == "x" * 5000, "x" * 5000 is "x" * 5000)
 
-# 单字符 latin-1 缓存: 运行期结果与字面量共享
-print("a b".split()[0] is "a")
-print(chr(97) is "a", chr(0x4e2d) is "中")
-print("abc"[1] is "b", list("ab")[0] is "a", "ab"[0:1] is "a")
+# 运行期构造的串只比对值: 单字符 latin-1 缓存是 CPython 版本相关实现
+# 细节 (3.12.8 Windows 与 3.13 Linux 行为不同), is 不做双端比对
+print("a b".split()[0] == "a")
+print(chr(97) == "a", chr(0x4e2d) == "中")
+print("abc"[1] == "b", list("ab")[0] == "a", "ab"[0:1] == "a")
 s = "a"
-print(s[0] is "a")
+print(s[0] == "a")
 it = iter("ab")
-print(next(it) is "a")
+print(next(it) == "a")
 
 # 空串全局单例
 print("".join([]) is "")
@@ -39,4 +40,4 @@ print(h.center(5) is h, h.ljust(5) is h, h.rjust(5) is h, h.zfill(5) is h)
 print(h.expandtabs() is h, "x".expandtabs(0) is "x")
 w = "abc"
 print("%s" % w is w, "{}".format(w) is w)
-print(" a ".strip() is "a", "ax".removeprefix("a") is "x")
+print(" a ".strip() == "a", "ax".removeprefix("a") == "x")

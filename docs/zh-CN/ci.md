@@ -105,7 +105,9 @@ python ci/lint_gd.py
 1. 不打印内存地址原值（默认 repr 除外，已归一化）、`time.time()` 原值、`random` 数值原值；随机行为测不变量（如「同 `seed` 产生同序列」「权重为 0 的元素不被抽出」）
 2. `time.sleep` 用 `0.05` 量级的小值——CPython 侧是真实阻塞，大值会拖慢整套件；且低于 Windows 定时器量子的间隔（约 0.0156s）可能不前进，导致单调时钟类断言不确定
 3. 不使用 `sys.exit` / `input` / 文件 IO
-4. 报错类用例：未捕获异常收尾的标 `same_error`/`same_exception`，`try` 捕获后打印结果的按普通 `same_output` 处理
+4. libm 中非 IEEE 正确舍入的函数（`cbrt` / `pow` / `exp` / `log` / 三角族）的浮点结果须 `round(..., N)` 后比对——glibc 与 Windows CRT 舍入不同；`sqrt` / `remainder` 为正确舍入可直接比对
+5. 不测运行期构造字符串的 `is` 身份——单字符缓存与 strip 自返回是 CPython 版本相关实现细节（3.12.8 与 3.13 行为不同），只测字面量编译期身份与 `==` 语义
+6. 报错类用例：未捕获异常收尾的标 `same_error`/`same_exception`，`try` 捕获后打印结果的按普通 `same_output` 处理
 
 ## 新增用例流程
 

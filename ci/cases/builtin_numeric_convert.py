@@ -86,7 +86,7 @@ except TypeError as e:
 print(1 / 3)
 print(1 / 1.5)
 print(0.1 + 0.2)
-print(2.0 ** 0.5)
+print(round(2.0 ** 0.5, 6))
 print(1e16)
 print(1e-5)
 print(repr(1.5), repr(0.1 + 0.2))

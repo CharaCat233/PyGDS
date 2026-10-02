@@ -36,3 +36,9 @@ try:
     l.sort()
 except TypeError:
     print('TE3')
+
+# 跨容器类型相等: list 与 tuple/set/dict 互比恒不相等 (P0-29)
+print([1] == (1,), [1] != (1,))
+print((1,) == [1], {} == [], set() == [])
+print([1, 2] == [1, 2], (1, 2) == (1, 2))
+print({1} == [1], {1} == (1,), frozenset({1}) == {1})

@@ -19,11 +19,12 @@ print(math.remainder(2.5, 1))       # 0.5
 print(math.remainder(-2.5, 1))      # -0.5
 print(math.remainder(10, 3))        # 1.0
 
-# math.cbrt: 立方根
-print(math.cbrt(8))                 # 2.0
-print(math.cbrt(27))                # 3.0
-print(math.cbrt(-8))                # -2.0
-print(math.cbrt(0))                 # 0.0
+# math.cbrt: 立方根 (cbrt 非 IEEE 正确舍入函数, glibc 与 Windows CRT 对整数值
+# 的舍入不同, 需 round 后比对; sqrt/remainder 为正确舍入可直接比对)
+print(round(math.cbrt(8), 6))       # 2.0
+print(round(math.cbrt(27), 6))      # 3.0
+print(round(math.cbrt(-8), 6))      # -2.0
+print(round(math.cbrt(0), 6))       # 0.0
 print(round(math.cbrt(2), 6))       # 1.259921
 print(round(math.cbrt(-2), 6))      # -1.259921
 print(round(math.cbrt(100), 6))     # 4.641589

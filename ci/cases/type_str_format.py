@@ -50,3 +50,11 @@ print("{0!r:>10}".format("hi"))         # "      'hi'"
 print("{:s}".format("hi"))              # hi
 
 print("done")
+
+# 无类型 .N: N 位有效数字 (P2-48)
+print("{:.3}".format(3.14159))   # 3.14
+print("{:.3}".format(123.0))     # 1.23e+02
+print("{:.3}".format(2.0))       # 2.0
+print("{:.3}".format(1234.5678)) # 1.23e+03
+print("{:.3}".format(0.000123456))
+print("{:.2}".format(9.99))      # 1e+01

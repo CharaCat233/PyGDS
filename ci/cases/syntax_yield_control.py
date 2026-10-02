@@ -123,3 +123,13 @@ print(next(go))             # 2
 print(next(go))             # after
 
 print("done")
+
+# 刚启动生成器 send 非 None → TypeError (P2-45 复核固定)
+def fresh():
+    yield 1
+fgi = fresh()
+try:
+    fgi.send(1)
+except TypeError as e:
+    print("fresh-send TE ok")
+print(next(fgi))

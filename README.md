@@ -128,13 +128,13 @@ dsl.run()
 | 字面量 `*` 解包 | ✅ 完整 | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}`（Python 3.5+） |
 | 赋值表达式 (`:=`) | ✅ 完整 | `if (n := len(a)) > 5:`、`while chunk := read():`、推导式内绑定到外层作用域（Python 3.8+）；与 CPython 一致地拒绝「重绑定推导式循环变量」与「出现在推导式可迭代表达式内」两种写法 |
 | `slice` | ✅ 完整 | `slice(start, stop[, step])` 对象，可复用索引 `lst[slice(...)]` |
-| 增强赋值 | ⚠️ 部分 | `+=` `-=` `*=` `/=` `**=` `//=` `%=` `\|=` 已支持；`&=` `^=` `<<=` `>>=` 暂不支持（P1-68） |
+| 增强赋值 | ✅ 完整 | `+=` `-=` `*=` `/=` `**=` `//=` `%=` `\|=` `&=` `^=` `<<=` `>>=` 全部支持 |
 | 下标访问 | ✅ 完整 | `obj[key]` 含 `getitem`/`setitem`；切片赋值/删除 `a[1:3] = [9]` / `del a[1:3]` |
 | 属性访问 | ✅ 完整 | `obj.attr` 含 `getattr`/`setattr` |
 | 方法类型系统 | ✅ 完整 | 六种类型严格对标 CPython |
 | Descriptor 协议 | ✅ 完整 | `__get__` 实现类级/实例级绑定 |
 | 魔法方法 | ✅ 完整 | `__add__`/`__str__`/`__init__` 等类级注册 |
-| 运算符 | ⚠️ 部分 | 二元/一元/比较全部支持；增强赋值缺 `&=` `^=` `<<=` `>>=`（P1-68） |
+| 运算符 | ✅ 完整 | 二元/一元/比较/增强赋值全部支持 |
 | f-string | ✅ 完整 | `f"value: {x:.2f}"`，含格式说明符、转换标志、`=` 调试符与嵌套格式宽度，以及同引号嵌套与嵌套 f-string（PEP 701，Python 3.12+），替换字段内表达式支持多行书写（含缩进续行与注释） |
 | lambda | ✅ 完整 | 匿名函数，支持默认参数与闭包 |
 | `super()` | ✅ 完整 | 单继承下调用父类方法/构造函数 |
@@ -186,7 +186,7 @@ dsl.run()
 
 ### P0 — 静默错值
 
-v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节。P0-13（整数超出 int64 范围静默环绕）已在 v0.6.0-alpha.7 修复为明确报 `OverflowError`；仍需注意的既定差异：PyGDS 的 `int` 为 64 位有符号整数，CPython 的 `int` 为任意精度整数（永不溢出），超出 int64 的运算 PyGDS 明确报错而 CPython 给出精确结果，彻底对齐需任意精度整数架构（经评估暂缓），行为详见 `docs/zh-CN/usage.md` 的数字字面量小节。v0.7.0-alpha.7 全项目审计新发现两条 P0（均暂未修复）：P0-28（`nonlocal` 声明的绑定搜索死循环——跨多级闭包链时解释器挂死，宿主进程需强杀）、P0-29（跨容器类型相等语义：`[1] == (1,)` 判 `True`）
+v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节；v0.7.0-alpha.7 审计新发现的 P1-68（增强赋值 `&=` `^=` `<<=` `>>=`）、P1-69（dict 视图集合运算）、P1-70（旧式迭代的 `in` 判定）已在 v0.7.0-alpha.8 修复。P0-13（整数超出 int64 范围静默环绕）已在 v0.6.0-alpha.7 修复为明确报 `OverflowError`；仍需注意的既定差异：PyGDS 的 `int` 为 64 位有符号整数，CPython 的 `int` 为任意精度整数（永不溢出），超出 int64 的运算 PyGDS 明确报错而 CPython 给出精确结果，彻底对齐需任意精度整数架构（经评估暂缓），行为详见 `docs/zh-CN/usage.md` 的数字字面量小节。v0.7.0-alpha.7 全项目审计新发现的两条 P0 已在 v0.7.0-alpha.8 修复：P0-28（`nonlocal` 声明的绑定搜索死循环——跨多级闭包链时解释器挂死）、P0-29（跨容器类型相等语义：`[1] == (1,)` 曾判 `True`）
 
 ### P1 — 明确报错或功能缺失
 
@@ -197,9 +197,6 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 | P1-7 | `with` 语句不支持 | 按既定范围当前不实现 |
 | P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
 | P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
-| P1-68 | 增强赋值 `&=` `^=` `<<=` `>>=` 不支持 | 解析期拒绝（`Unexpected token '='`）；其余八种增强赋值已支持（v0.7.0-alpha.7 审计发现） |
-| P1-69 | dict 视图与 set 的集合运算不支持 | `d.keys() & {"a"}` 等抛 `TypeError`（CPython 支持 view↔set 全部运算）（v0.7.0-alpha.7 审计发现） |
-| P1-70 | 旧式 `__getitem__` 可迭代对象的 `in` 判定不支持 | 报 `'G' object is not a container`；`list` / `zip` / `max` / `any` 等消费器已支持（v0.7.0-alpha.7 审计发现） |
 
 ### P2 — 边缘差异
 
@@ -208,13 +205,10 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
 | P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案与「语句尾部冗余 Token」已对齐；括号未闭合的文案已在 **v0.5.0-alpha.6** 对齐（`'(' was never closed`）。其余解析期错误的措辞与行号格式仍可能不同（如缺冒号、未结束字符串） |
 | P2-4 | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致 |
-| P2-45 | 刚启动生成器 `send(非 None)` 抛 `StopIteration` 而非 `TypeError` | v0.7.0-alpha.7 审计发现 |
-| P2-46 | `%#o` 备用形式与 f-string `#` 整数前缀错误（`%#o % 8` → `10`；`{255:#06x}` → `000xff`） | v0.7.0-alpha.7 审计发现 |
-| P2-47 | `"%c" % "A"` 输出含 U+FFFD 替换字符 | v0.7.0-alpha.7 审计发现 |
-| P2-48 | format 规格 `.N` 浮点精度按小数位处理（CPython 未指定类型时为 N 位有效数字） | v0.7.0-alpha.7 审计发现 |
-| P2-49 | `str.casefold()` 未实现完整 Unicode 折叠（`"ß"` → `"ß"` 而非 `"ss"`） | v0.7.0-alpha.7 审计发现 |
 | P2-50 | 深递归触发 `RecursionError` 后帧回卷打印大量 `Stack underflow! (Engine Bug)` 引擎日志（每次 ~531 条；仅日志噪音，输出与判定正确） | v0.7.0-alpha.7 审计发现 |
 | P2-51 | 退出时 ObjectDB 实例泄漏告警（`DSLObject` 为裸 `Object`，无逐用例回收）及连带 `resources still in use` | v0.7.0-alpha.7 审计发现 |
+
+v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-string `#` 前缀布局）、P2-47（`%c` str 实参）、P2-48（`.N` 有效数字语义）、P2-49（`casefold` 完整折叠）已随 v0.7.0-alpha.8 修复
 
 ### 平台限制
 

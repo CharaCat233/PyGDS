@@ -55,3 +55,11 @@ print("%(name)s is %(age)d" % {"name": "Li", "age": 3})
 print("%(x)05.1f|" % {"x": 3.14159})
 
 print("done")
+
+# %#o 备用前缀与 %c 的单字符 str 实参 (P2-46/P2-47)
+print("%#o" % 8, "%#o" % -8)     # 0o10 -0o10
+print("%c" % "A")                # A
+try:
+    "%c" % "AB"
+except TypeError as e:
+    print("TE:", e)

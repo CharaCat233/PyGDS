@@ -154,6 +154,9 @@ func _run_case(case_name: String, python_cmd: String) -> void:
 
 	# PyGDS 侧: 进程内执行, 推进挂起直至结束
 	var dsl = load("res://pygds.gd").new()
+	if dsl == null:
+		_fail(case_name, "CASE-ERR", "pygds.gd 加载失败 (解析错误?)")
+		return
 	dsl.set_debug_mode(false)
 	dsl.write_dsl_script(source)
 	dsl.run()

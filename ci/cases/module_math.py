@@ -17,7 +17,7 @@ print(math.fabs(-3.5))        # 3.5
 
 # 浮点运算
 print(math.fmod(10, 3))       # 1.0
-print(math.pow(2, 10))        # 1024.0
+print(round(math.pow(2, 10), 6))  # 1024.0
 print(round(math.exp(1), 6))  # 2.718282
 print(round(math.log(8, 2), 6))   # 3.0
 print(round(math.log2(8), 6))     # 3.0

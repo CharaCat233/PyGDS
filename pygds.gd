@@ -17,7 +17,8 @@ enum TokenType {
 	AT, NULL,
 	TRY, EXCEPT, FINALLY, RAISE, AS,
 	PLUS_EQ, MINUS_EQ, STAR_EQ, SLASH_EQ, DOUBLESLASH_EQ, STARSTAR_EQ, PERCENT_EQ,
-	PIPE_EQ, IS, IS_NOT, NOT_IN, COLON_EQ,
+	PIPE_EQ, AMP_EQ, CARET_EQ, LESS_LESS_EQ, GREATER_GREATER_EQ,
+	IS, IS_NOT, NOT_IN, COLON_EQ,
 	YIELD,
 	ASYNC, AWAIT
 }
@@ -245,7 +246,11 @@ class Lexer:
 					add_token(TokenType.PERCENT_EQ)
 				else:
 					add_token(TokenType.PERCENT)
-			'&': add_token(TokenType.BITAND)
+			'&':
+				if match_char('='):
+					add_token(TokenType.AMP_EQ)
+				else:
+					add_token(TokenType.BITAND)
 			'|':
 				if match_char('='):
 					add_token(TokenType.PIPE_EQ)
@@ -309,19 +314,29 @@ class Lexer:
 					add_token(TokenType.BANG)
 			'>':
 				if match_char('>'):
-					add_token(TokenType.GREATER_GREATER)
+					if match_char('='):
+						add_token(TokenType.GREATER_GREATER_EQ)
+					else:
+						add_token(TokenType.GREATER_GREATER)
 				elif match_char('='):
 					add_token(TokenType.GREATER_EQUAL)
 				else:
 					add_token(TokenType.GREATER)
 			'<':
 				if match_char('<'):
-					add_token(TokenType.LESS_LESS)
+					if match_char('='):
+						add_token(TokenType.LESS_LESS_EQ)
+					else:
+						add_token(TokenType.LESS_LESS)
 				elif match_char('='):
 					add_token(TokenType.LESS_EQUAL)
 				else:
 					add_token(TokenType.LESS)
-			'^': add_token(TokenType.CARET)
+			'^':
+				if match_char('='):
+					add_token(TokenType.CARET_EQ)
+				else:
+					add_token(TokenType.CARET)
 			'~': add_token(TokenType.TILDE)
 			'#':
 				while peek() != '\n' and not is_at_end():
@@ -2945,14 +2960,51 @@ class DSLObject:
 				return klass._invoke_func(method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		return DSLString.new("<" + _type_name() + " object>")
 	
+	## 从元素数组构建 set (P1-69 dict 视图集合运算用)
+	func _set_from_elements(elems: Array[DSLObject]) -> DSLSet:
+		var s = DSLSet.new()
+		for e in elems:
+			s._dsl_add(e)
+		return s
+
+	## dict 视图集合运算: self 元素集与 other (set/frozenset/视图) 按 op 计算
+	## op 为 "&" / "union" / "-" / "^" 之一; other 不可集合化时报 TypeError 返回 null
+	func _view_set_op(self_elems: Array[DSLObject], other: DSLObject, op: String) -> DSLObject:
+		var other_unwrapped = other
+		if other_unwrapped != null:
+			other_unwrapped = DSLObject._unwrap_dsl(other_unwrapped)
+		var other_set: DSLSet = null
+		if other_unwrapped is DSLSet:
+			other_set = other_unwrapped
+		elif other_unwrapped != null and other_unwrapped.has_method("_view_elements"):
+			other_set = _set_from_elements(other_unwrapped._view_elements())
+		if other_set == null:
+			_arithmetic_type_error(op, other)
+			return null
+		var self_set := _set_from_elements(self_elems)
+		match op:
+			"&":
+				return self_set._dsl_intersection(other_set)
+			"union":
+				return self_set._dsl_union(other_set)
+			"-":
+				return self_set._dsl_difference(other_set)
+			"^":
+				return self_set._dsl_symmetric_difference(other_set)
+		return null
+
+	## 视图元素集: 非视图对象返回 null (dict 视图类覆写, P1-69)
+	func _view_elements():
+		return null
+
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var target = args[1] if args.size() > 1 else null
 		if klass != null:
 			var method = klass._lookup_method("__contains__")
 			if method != null:
 				return klass._invoke_func(method, args, _kwargs)
 		# 未定义 __contains__ 时回退为迭代查找 (CPython 的行为)
 		if klass != null and klass._lookup_method("__iter__") != null:
-			var target = args[1]
 			var it = _dsl_iter()
 			if it != null:
 				while it.has_next():
@@ -2962,6 +3014,18 @@ class DSLObject:
 					if item._dsl_eq(target):
 						return DSLBool.new(true)
 				return DSLBool.new(false)
+		# 旧式迭代协议 (P1-70): 仅定义 __getitem__ 的对象同样支持 in
+		if klass != null and klass._lookup_method("__getitem__") != null:
+			var it2 = DSLGetItemIterator.new(self)
+			var found := false
+			while it2.has_next():
+				var item = it2.next()
+				if item._dsl_eq(target):
+					found = true
+					break
+			if Interpreter.active != null and Interpreter.active.report.has_error:
+				return null
+			return DSLBool.new(found)
 		last_error = "TypeError: '%s' object is not a container" % [_type_name()]
 		return null
 
@@ -5152,13 +5216,20 @@ class DSLString extends DSLObject:
 			'o':
 				is_numeric = true
 				var n = int(_num(val))
-				s = ("-" if n < 0 else "") + _int_to_base_str(abs(n), 8)
+				s = ("-" if n < 0 else "") + ("0o" if flags.find("#") != -1 else "") + _int_to_base_str(abs(n), 8)
 			'c':
-				var cp_c = int(_num(val))
-				if cp_c < 0 or cp_c > 0x10FFFF:
-					last_error = "OverflowError: %c arg not in range(0x110000)"
-					return ""
-				s = char(cp_c)
+				if val is DSLString:
+					# CPython: %c 接受长度为 1 的 str
+					if val.value.length() != 1:
+						last_error = "TypeError: %c requires int or char"
+						return ""
+					s = val.value
+				else:
+					var cp_c = int(_num(val))
+					if cp_c < 0 or cp_c > 0x10FFFF:
+						last_error = "OverflowError: %c arg not in range(0x110000)"
+						return ""
+					s = char(cp_c)
 			'f', 'F':
 				is_numeric = true
 				s = _fixed_float_str(float(_num(val)), precision if precision >= 0 else 6)
@@ -5406,18 +5477,27 @@ class DSLString extends DSLObject:
 				s = "+" + s
 			elif sign == " ":
 				s = " " + s
-		# 备用形式 (进制前缀)
+		# 备用形式 (进制前缀置于符号之后)
 		if alt and type_c in ["x", "X", "o", "b"] and is_numeric:
 			var prefix = "0x" if type_c == "x" else ("0X" if type_c == "X" else ("0o" if type_c == "o" else "0b"))
+			var sign_head := ""
+			if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
+				sign_head = s.substr(0, 1)
+				s = s.substr(1)
 			if not s.begins_with(prefix):
 				s = prefix + s
-		# 零填充
+			s = sign_head + s
+		# 零填充 (符号与 0x/0o/0b 前缀在填充之前: f"{255:#06x}" == "0x00ff")
 		if zero_pad and align == "" and width > s.length():
 			var pad = width - s.length()
+			var head := ""
 			if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
-				s = s[0] + "0".repeat(pad) + s.substr(1)
-			else:
-				s = "0".repeat(pad) + s
+				head = s[0]
+				s = s.substr(1)
+			if s.length() >= 2 and s[0] == "0" and s[1] in "xXob":
+				head += s.substr(0, 2)
+				s = s.substr(2)
+			s = head + "0".repeat(pad) + s
 		# 对齐与宽度
 		if width > s.length():
 			var pad = width - s.length()
@@ -5445,6 +5525,57 @@ class DSLString extends DSLObject:
 	## [param precision] 精度 (-1 未指定) [br]
 	## [param comma] 是否千分位 [br]
 	## [returns] 基础格式化字符串
+	## 解析浮点的十进制指数 (floor(log10 |x|)); 0 返回 0
+	func _float_exp(x: float) -> int:
+		if x == 0.0:
+			return 0
+		var sci := _sci_float_str(x, 5, false)
+		var idx := sci.find("e")
+		if idx < 0:
+			return 0
+		return int(sci.substr(idx + 1))
+
+	## 科学计数 mantissa 去尾零 (1.00e+02 → 1e+02)
+	func _strip_mant_zeros(sci: String) -> String:
+		var idx := sci.find("e")
+		if idx < 0:
+			return sci
+		var mant := sci.substr(0, idx)
+		if mant.contains("."):
+			while mant.ends_with("0"):
+				mant = mant.substr(0, mant.length() - 1)
+			if mant.ends_with("."):
+				mant = mant.substr(0, mant.length() - 1)
+		return mant + sci.substr(idx)
+
+	## repr 形态的有效位计数 ("10.0" → 3, "0.000123" → 3)
+	func _sig_digit_count(s: String) -> int:
+		if s.contains("e"):
+			s = s.substr(0, s.find("e"))
+		s = s.replace("-", "").replace(".", "")
+		while s.begins_with("0"):
+			s = s.substr(1)
+		return 1 if s == "" else s.length()
+
+	## CPython format 规格无类型 + .N: 舍入到 N 位有效数字后取 repr 形态 (P2-48)
+	## (123.0, 3) → "1.23e+02"; (2.0, 3) → "2.0"; (3.14159, 3) → "3.14"
+	func _sig_float_str(x: float, p: int) -> String:
+		if x == 0.0:
+			return "0.0"
+		var neg := x < 0.0
+		var ax: float = absf(x)
+		# 舍入到 p 位有效数字: %.{p-1}e 再转回数值
+		var r: float = _sci_float_str(ax, maxi(p - 1, 0), false).to_float()
+		var e2 := _float_exp(r)
+		var out := ""
+		if e2 <= p - 2 and e2 >= -4:
+			# 定点: 舍入值的 repr (Python float repr 形态)
+			out = DSLFloat.new(r)._dsl_str()
+		else:
+			# 科学计数: mantissa 去尾零
+			out = _strip_mant_zeros(_sci_float_str(r, maxi(p - 1, 0), false))
+		return ("-" if neg else "") + out
+
 	func _format_spec_base(value: DSLObject, type_c: String, precision: int, group_sep: String) -> String:
 		# bool 是 int 子类: 按 0/1 参与格式化
 		if value is DSLBool:
@@ -5501,7 +5632,7 @@ class DSLString extends DSLObject:
 		if is_int and group_sep != "":
 			return _add_grouped(value._dsl_str(), group_sep, 3)
 		if is_float:
-			var body = _fixed_float_str(value.value, precision) if precision >= 0 else value._dsl_str()
+			var body = DSLString.new("")._sig_float_str(value.value, precision) if precision >= 0 else value._dsl_str()
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		if group_sep != "":
 			last_error = "ValueError: Cannot specify '%s' with 's'." % group_sep
@@ -6179,8 +6310,22 @@ class DSLString extends DSLObject:
 			return DSLString.cached("")
 		return DSLString.new(s[0].to_upper() + s.substr(1).to_lower())
 	
+	## 完整大小写折叠的多字符特例 (CaseFolding.txt C+F 档常用项, P2-49)
+	const _CASEFOLD_SPECIAL := {
+		"ß": "ss", "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl",
+		"ﬅ": "st", "ﬆ": "st", "ŉ": "ʼn", "ſ": "s", "ẛ": "ṡ",
+	}
+
 	func builtin_casefold(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLString.new(DSLObject._unwrap_dsl(args[0]).value.to_lower())
+		var raw = DSLObject._unwrap_dsl(args[0]).value
+		var out := ""
+		for i in range(raw.length()):
+			var ch = raw[i]
+			if _CASEFOLD_SPECIAL.has(ch):
+				out += _CASEFOLD_SPECIAL[ch]
+			else:
+				out += ch.to_lower()
+		return DSLString.new(out)
 	
 	func builtin_title(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
@@ -6764,13 +6909,7 @@ class DSLList extends DSLObject:
 				if not self_obj.items[i]._dsl_eq(other.items[i]):
 					return DSLBool.new(false)
 			return DSLBool.new(true)
-		if other is DSLTuple:
-			if self_obj.items.size() != other.items.size():
-				return DSLBool.new(false)
-			for i in range(self_obj.items.size()):
-				if not self_obj.items[i]._dsl_eq(other.items[i]):
-					return DSLBool.new(false)
-			return DSLBool.new(true)
+		# 跨容器类型恒不相等 (P0-29): list 与 tuple/set/dict 互比按 CPython 为 False
 		return DSLBool.new(false)
 	
 	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -6784,13 +6923,7 @@ class DSLList extends DSLObject:
 				if not self_obj.items[i]._dsl_eq(other.items[i]):
 					return DSLBool.new(true)
 			return DSLBool.new(false)
-		if other is DSLTuple:
-			if self_obj.items.size() != other.items.size():
-				return DSLBool.new(true)
-			for i in range(self_obj.items.size()):
-				if not self_obj.items[i]._dsl_eq(other.items[i]):
-					return DSLBool.new(true)
-			return DSLBool.new(false)
+		# 跨容器类型恒不相等 (P0-29)
 		return DSLBool.new(true)
 
 	## 序列字典序比较核心 (list 与 tuple 共用) [br]
@@ -8216,6 +8349,26 @@ class DSLDictKeys extends DSLObject:
 		if source != null:
 			return DSLDictKeyIterator.new(source.dict, source)
 		return DSLListIterator.new(keys_list)
+	## 视图元素集 (P1-69): 迭代自身产出元素
+	func _view_elements() -> Array[DSLObject]:
+		var out: Array[DSLObject] = []
+		var it = _dsl_iter()
+		while it.has_next():
+			out.append(it.next())
+		return out
+
+	func magic_and(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "&")
+
+	func magic_or(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "union")
+
+	func magic_sub(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "-")
+
+	func magic_xor(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "^")
+
 	
 	## 长度支持 (CPython: len(d.keys()) == len(d))
 	func _dsl_len_hint() -> int:
@@ -8324,6 +8477,7 @@ class DSLDictValues extends DSLObject:
 		if source != null:
 			return DSLDictValueIterator.new(source)
 		return DSLListIterator.new(values_list)
+
 	
 	## 长度支持 (CPython: len(d.values()) == len(d))
 	func _dsl_len_hint() -> int:
@@ -8392,6 +8546,26 @@ class DSLDictItems extends DSLObject:
 		if source != null:
 			return DSLDictItemIterator.new(source)
 		return DSLListIterator.new(items)
+	## 视图元素集 (P1-69): 迭代自身产出元素
+	func _view_elements() -> Array[DSLObject]:
+		var out: Array[DSLObject] = []
+		var it = _dsl_iter()
+		while it.has_next():
+			out.append(it.next())
+		return out
+
+	func magic_and(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "&")
+
+	func magic_or(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "union")
+
+	func magic_sub(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "-")
+
+	func magic_xor(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "^")
+
 
 	## 长度支持 (len(d.items()) == len(d))
 	func magic_len(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -9544,6 +9718,12 @@ class DSLSet extends DSLObject:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return args[0]._dsl_union(other)
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return args[0]._dsl_union(vs)
 		args[0]._arithmetic_type_error("|", args[1])
 		return null
 
@@ -9552,6 +9732,12 @@ class DSLSet extends DSLObject:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return args[0]._dsl_intersection(other)
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return args[0]._dsl_intersection(vs)
 		args[0]._arithmetic_type_error("&", args[1])
 		return null
 
@@ -9560,6 +9746,12 @@ class DSLSet extends DSLObject:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return args[0]._dsl_difference(other)
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return args[0]._dsl_difference(vs)
 		args[0]._arithmetic_type_error("-", args[1])
 		return null
 
@@ -9568,6 +9760,12 @@ class DSLSet extends DSLObject:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return args[0]._dsl_symmetric_difference(other)
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return args[0]._dsl_symmetric_difference(vs)
 		args[0]._arithmetic_type_error("^", args[1])
 		return null
 
@@ -9983,6 +10181,12 @@ class DSLFrozenSet extends DSLSet:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return _from_set(args[0]._dsl_union(other))
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return _from_set(args[0]._dsl_union(vs))
 		args[0]._arithmetic_type_error("|", args[1])
 		return null
 
@@ -9991,6 +10195,12 @@ class DSLFrozenSet extends DSLSet:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return _from_set(args[0]._dsl_intersection(other))
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return _from_set(args[0]._dsl_intersection(vs))
 		args[0]._arithmetic_type_error("&", args[1])
 		return null
 
@@ -9999,6 +10209,12 @@ class DSLFrozenSet extends DSLSet:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return _from_set(args[0]._dsl_difference(other))
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return _from_set(args[0]._dsl_difference(vs))
 		args[0]._arithmetic_type_error("-", args[1])
 		return null
 
@@ -10007,6 +10223,12 @@ class DSLFrozenSet extends DSLSet:
 		var other = DSLObject._unwrap_dsl(args[1])
 		if other is DSLSet:
 			return _from_set(args[0]._dsl_symmetric_difference(other))
+		if other != null:
+			var ve = other._view_elements()
+			if ve != null:
+				# dict 视图作为 set 形操作数 (P1-69)
+				var vs = _set_from_elements(ve)
+				return _from_set(args[0]._dsl_symmetric_difference(vs))
 		args[0]._arithmetic_type_error("^", args[1])
 		return null
 
@@ -16635,7 +16857,7 @@ class Parser:
 			return null
 
 		# 增强赋值 x += 1, x -= 2, x *= 3, x /= 4, x //= 5, x **= 6, x %= 7, x |= 8
-		if match_types([TokenType.PLUS_EQ, TokenType.MINUS_EQ, TokenType.STAR_EQ, TokenType.SLASH_EQ, TokenType.DOUBLESLASH_EQ, TokenType.STARSTAR_EQ, TokenType.PERCENT_EQ, TokenType.PIPE_EQ]):
+		if match_types([TokenType.PLUS_EQ, TokenType.MINUS_EQ, TokenType.STAR_EQ, TokenType.SLASH_EQ, TokenType.DOUBLESLASH_EQ, TokenType.STARSTAR_EQ, TokenType.PERCENT_EQ, TokenType.PIPE_EQ, TokenType.AMP_EQ, TokenType.CARET_EQ, TokenType.LESS_LESS_EQ, TokenType.GREATER_GREATER_EQ]):
 			var op = previous()
 			var value = tuple_expression()
 			if value == null:
@@ -17370,6 +17592,14 @@ class Interpreter:
 				return _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PIPE_EQ:
 				return _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+			TokenType.AMP_EQ:
+				return _binary_with_reflect(left, right, "__and__", "__rand__", func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+			TokenType.CARET_EQ:
+				return _binary_with_reflect(left, right, "__xor__", "__rxor__", func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+			TokenType.LESS_LESS_EQ:
+				return _binary_with_reflect(left, right, "__lshift__", "__rlshift__", func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+			TokenType.GREATER_GREATER_EQ:
+				return _binary_with_reflect(left, right, "__rshift__", "__rrshift__", func(): return left.magic_rshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			_:
 				return null
 	
@@ -17394,6 +17624,14 @@ class Interpreter:
 				return "__imod__"
 			TokenType.PIPE_EQ:
 				return "__ior__"
+			TokenType.AMP_EQ:
+				return "__iand__"
+			TokenType.CARET_EQ:
+				return "__ixor__"
+			TokenType.LESS_LESS_EQ:
+				return "__ilshift__"
+			TokenType.GREATER_GREATER_EQ:
+				return "__irshift__"
 			_:
 				return ""
 	
@@ -21247,6 +21485,7 @@ class Interpreter:
 					if env.values.has(name):
 						environment.mark_nonlocal(name, env)
 						break
+					env = env.enclosing
 				if not (env and env != globals):
 					raise_exception("SyntaxError", "no binding for nonlocal '%s'" % name)
 					return ExecResult.RAISE
@@ -23014,18 +23253,27 @@ class Interpreter:
 				s = "+" + s
 			elif sign == " ":
 				s = " " + s
-		# 备用形式 (进制前缀)
+		# 备用形式 (进制前缀置于符号之后)
 		if alt and type_c in ["x", "X", "o", "b"] and _is_numeric_value(value):
 			var prefix = "0x" if type_c == "x" else ("0X" if type_c == "X" else ("0o" if type_c == "o" else "0b"))
+			var sign_head := ""
+			if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
+				sign_head = s.substr(0, 1)
+				s = s.substr(1)
 			if not s.begins_with(prefix):
 				s = prefix + s
-		# 零填充
+			s = sign_head + s
+		# 零填充 (符号与进制前缀在填充之前)
 		if zero_pad and align == "" and width > s.length():
 			var pad = width - s.length()
+			var head := ""
 			if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
-				s = s[0] + "0".repeat(pad) + s.substr(1)
-			else:
-				s = "0".repeat(pad) + s
+				head = s[0]
+				s = s.substr(1)
+			if s.length() >= 2 and s[0] == "0" and s[1] in "xXob":
+				head += s.substr(0, 2)
+				s = s.substr(2)
+			s = head + "0".repeat(pad) + s
 		# 对齐与宽度
 		if width > s.length():
 			var pad = width - s.length()
@@ -23172,7 +23420,8 @@ class Interpreter:
 			var body = str(value.value)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		if is_float:
-			return _add_grouped(value._dsl_str(), group_sep, 3) if group_sep != "" else value._dsl_str()
+			var body = DSLString.new("")._sig_float_str(value.value, precision) if precision >= 0 else value._dsl_str()
+			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		if group_sep != "":
 			raise_exception("ValueError", "Cannot specify '%s' with 's'." % group_sep)
 			return ""

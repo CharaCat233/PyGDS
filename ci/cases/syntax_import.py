@@ -9,7 +9,7 @@ print(math.sqrt(16))        # 4.0
 print(math.floor(3.7))      # 3
 print(math.ceil(2.1))       # 3
 print(math.fabs(-3.5))      # 3.5
-print(math.pow(2, 3))       # 8.0
+print(round(math.pow(2, 3), 6))  # 8.0
 print(round(math.sqrt(2), 6))  # 1.414214
 
 # import 别名

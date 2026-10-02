@@ -34,3 +34,14 @@ try:
     print(f[1])
 except IndexError as ex:
     print('IE:', ex)
+
+# 仅实现 __getitem__ 的对象支持 in (P1-70): 回退旧式迭代协议逐元素比对
+class GetItemOnly:
+    def __getitem__(self, i):
+        if i > 2:
+            raise IndexError
+        return ["x", "y", "z"][i]
+
+g = GetItemOnly()
+print("y" in g, "w" in g)
+print(list(g))
