@@ -894,7 +894,7 @@ Arguments are evaluated in source order; duplicate keywords (including against `
 
 ### import and Built-in Modules
 
-Supports `import` / `from-import` of built-in modules (`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator`):
+Supports `import` / `from-import` of built-in modules (`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys`):
 
 ```python
 import math
@@ -1539,6 +1539,30 @@ print("Round 2:", output2)   # Round 2: 2
 
 ---
 
+## Object Lifecycle and Reclamation
+
+PyGDS interpreter objects (`DSLObject` and all of its subclasses, scope environments, iterators, etc.) are based on `RefCounted`, and the object graph contains reference cycles (e.g. global environment → user class → method function → closure environment), so reference counting alone cannot free them after a run finishes. PyGDS solves this with an object registry plus cycle-breaking reclamation:
+
+- Every `run()` creates an `Interpreter` that registers all interpreter-side objects created during that run
+- `cleanup()` clears the reference fields of every registered object and empties the process-level static caches (builtin class registry, method descriptors, intern pools, etc.); reference counts then drop to zero and everything is released transitively
+- Freeing the node (calling `free()` on the instance) triggers reclamation automatically via `NOTIFICATION_PREDELETE`, so no manual call is required
+
+```gdscript
+var dsl = PyGDS.new()
+dsl.write_dsl_script("print('hello')")
+dsl.run()
+print(dsl.print_output)
+
+# Long-lived hosts should reclaim proactively after each script run
+# (especially when switching between cases): breaks reference cycles and
+# clears static caches, eliminating ObjectDB leaks and memory build-up
+dsl.cleanup()
+```
+
+> **Note**: after `cleanup()` the interpreter can no longer resume suspended execution; call `write_dsl_script` before running again. The static caches (method descriptors, intern pools, etc.) are rebuilt lazily on the next `run()`, so per-case reclamation overhead is negligible
+
+---
+
 ## Suspension System
 
 PyGDS provides a suspension mechanism that allows DSL scripts to pause during execution and wait for external conditions to be met before resuming. This is very useful in game development, for example, waiting for an animation to finish, waiting for player input, or implementing delay logic.
@@ -1713,6 +1737,13 @@ print(clamp(150, 0, 100))  # 100
 ```
 
 The ASTs of preset code and user code are concatenated after parsing and then executed together, so variables/functions/classes with the same name will be overridden by later definitions, consistent with Python semantics.
+
+## complex / bytearray / memoryview and open()
+
+- **complex**: `1j` literals and `complex(re, im)` / `complex(str)` construction; arithmetic, comparison, `abs` / `conjugate` align with CPython; integer powers are exact, non-integer powers use the polar path (libm — prefer `round(..., N)` for cross-platform comparison)
+- **bytearray**: mutable byte sequence with index/slice assignment and `append` / `extend` / `insert` / `pop` / `remove` / `reverse` etc.; unhashable (cannot be dict keys or set members)
+- **memoryview**: one-dimensional B-format view; bytes-backed views are read-only while bytearray-backed views write through; operations after `release()` raise
+- **open(path, mode)**: file object based on the host FileAccess; relative paths resolve against the project root (`res://`); supports `r` / `w` / `a` / `rb` / `wb` / `ab` with `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close`; text writes flush immediately
 
 ## Limitations and Notes
 

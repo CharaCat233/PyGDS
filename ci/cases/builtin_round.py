@@ -49,6 +49,6 @@ print(round(-0.000000001, 10))
 try:
     round("a")
 except TypeError as e:
-    print("TE:", type(e).__name__)
+    print("TE:", e)
 
 print("done")

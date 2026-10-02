@@ -146,7 +146,7 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | Dict merge | ✅ Full | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}` (Python 3.9+) |
 | `str` `%` formatting | ✅ Full | `"%s: %d" % (x, y)` (printf style) |
 | `str.format` | ✅ Full | `"{:.2f} {:>8}".format(x, s)`, with positional/keyword arguments and format specifiers |
-| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator/time; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter) |
+| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator/time/sys; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter/index, collections has Counter/defaultdict/namedtuple/deque/OrderedDict, sys provides version_info/maxsize/byteorder/platform/argv/intern/exit, time provides sleep/time/time_ns/monotonic/perf_counter) |
 | `set` | ✅ Full | Literal `{1, 2}`, constructor, set operations and methods |
 | `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
 | `bytes` type | ✅ Full | `b"xy"` literals and the `bytes()` constructor (zero-filled integer / iterable / string encoding / copy); method family `decode` / `hex` / `upper` / `lower` / `title` / `strip` family / `split` / `replace` / `find` / `index` / `count` / `startswith` / `endswith` / `join` / `center` / `ljust` / `rjust`; indexing/iteration yield integers, plus slicing, repetition and `in`, strictly distinct from `str` |
@@ -160,9 +160,13 @@ The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds 
 | `__name__` / `__file__` | ✅ Full | `__name__` is always `"__main__"` (reassignable), the entry guard works; `__file__` defaults to an empty string and the host injects it via `set_script_path()` before `run()` |
 | Generic type parameters and `type` aliases | ✅ Syntax accepted | `class C[T]` / `def f[T](x)` / `type X = int` (PEP 695) are accepted as syntax with type semantics ignored; alias names are not bound to values |
 | Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators (including `time.sleep()` inside nested generators), full `send` / `throw` delegation through `yield from` (PEP 380, sub-generator catches first), and closures persisting across `yield` |
-| Decorators | ✅ Full | Arbitrary callable-expression decorators (self-written / parameterised factories / stacked, applied to functions, methods and classes), plus the five built-in forms `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) |
-| `with` Statement | ❌ Not Supported | — |
-| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator/time) |
+| Decorators | ✅ Full | Arbitrary callable-expression decorators (self-written / parameterised factories / stacked, applied to functions, methods and classes), plus the five built-in forms `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) ; functional `staticmethod(f)` / `classmethod(f)` / `property(fget, fset, fdel)` are also available |
+| Complex type & `1j` literals | ✅ Full | Construction (numeric/string/two orders)/arithmetic (exact integer powers, polar for non-integer)/comparison/dict keys (`1+0j` shares key with `1`)/`abs` / `conjugate`; ordering and int conversion raise per CPython |
+| `bytearray` | ✅ Full | Construction (length/bytes/int iterable/`str`+encoding), mutation (index & slice assignment, append/extend/insert/pop/remove/reverse/clear/copy), bytes interop; unhashable |
+| `memoryview` | ✅ Pragmatic subset | One-dimensional B-format views: len/index/slice/iteration/`tobytes` / `hex` / `cast("B")` / `release`; bytes-backed views are read-only, bytearray-backed write through |
+| `open()` file I/O | ✅ Pragmatic subset | Text/binary modes (`r`/`w`/`a`/`rb`/`wb`/`ab`), read/readline/readlines/write/writelines/close/seek/tell/flush and line iteration; paths follow the host FileAccess (relative paths resolve against the project root); `FileNotFoundError` / `UnsupportedOperation` are registered |
+| `with` statement | ❌ Not Supported | — |
+| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator/time/sys) |
 
 > **⚠️ Breaking Change (v0.3.0)**: Generator expressions `(x for x in iterable)` have changed from "eagerly evaluated to a list" to "lazy generator object".
 > Code that directly subscripts/`len()`s or calls list methods on a generator expression result will fail — convert with `list(g)` / `tuple(g)` first
@@ -195,7 +199,7 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3
 | ID | Issue | Details |
 | :--- | :--- | :--- |
 | P1-7 | `with` statement unsupported | Not implemented by design for now |
-| P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time) |
+| P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time / sys) |
 | P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`). As reserved words, misuse of `async` / `await` now raises `SyntaxError` matching CPython |
 
 ### P2 — Edge Differences
@@ -203,10 +207,10 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3
 | ID | Issue | Details |
 | :--- | :--- | :--- |
 | P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
-| P2-2 | Some syntax-error messages differ | Messages for misuse of `async` / `await` / `return` / `break` / `continue` and for trailing redundant tokens are aligned; the unclosed-bracket message was aligned in **v0.5.0-alpha.6** (`'(' was never closed`). Wording and line-number formatting of other parse-time errors may still differ (e.g. a missing colon, an unterminated string) |
 | P2-4 | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match |
-| P2-50 | Deep recursion hitting `RecursionError` prints per-frame `Stack underflow! (Engine Bug)` engine logs (~531 per run; log noise only, output and verdicts correct) | v0.7.0-alpha.7 audit |
-| P2-51 | `ObjectDB instances leaked at exit` warnings (`DSLObject` is a plain `Object` with no per-case lifecycle reclamation) plus the correlated `resources still in use` | v0.7.0-alpha.7 audit |
+| P2-52 | Deep recursion combined with deep expressions can reach the engine's VM call-stack hard limit (2048 GDScript frames); the engine hard-aborts the call chain with `Stack overflow` and PyGDS silently loses the remaining output (CPython either completes or raises a catchable `RecursionError`) | Discovered while measuring P2-50 in alpha.9; PyGDS's `MAX_CALL_DEPTH=256` only bounds call depth, the GDScript frame depth of expression evaluation / parsing is not bounded by it |
+
+P2-2 (parse-error messages and function repr) and P2-3 (operator error messages) were fixed by the **v0.7.0-alpha.9** message-alignment effort (missing colon, unterminated strings, `min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` texts, the `print >> x` migration hint, function and bound-method repr); P2-50 (`Stack underflow` log noise) is eliminated by the project setting `debug/settings/gdscript/max_call_stack=2047` (set it in host projects too, see P2-52); P2-51 (`ObjectDB` leaks at exit and `resources still in use`) was fixed in **v0.7.0-alpha.9** via the object registry + cycle-breaking reclamation (`cleanup()` API)
 
 P2-45 (re-checked as a false positive), P2-46 (`%#o` and f-string `#` prefix layout), P2-47 (`%c` str argument), P2-48 (`.N` significant-digit semantics) and P2-49 (`casefold` full folding) uncovered by the v0.7.0-alpha.7 audit were fixed in v0.7.0-alpha.8
 

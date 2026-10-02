@@ -152,6 +152,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_ellipsis.py](../../ci/cases/syntax_ellipsis.py)
 
+### syntax_expected_colon
+
+- Responsibility: Parse error text alignment for a missing colon (CPython: `expected ':'`)
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_expected_colon.py](../../ci/cases/syntax_expected_colon.py)
+
 ### syntax_escape
 
 - Responsibility: `str`/`bytes` escape sequence decoding and `\N` named escapes
@@ -578,6 +584,18 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_error`
 - Source: [ci/cases/syntax_unpack_pep448_err.py](../../ci/cases/syntax_unpack_pep448_err.py)
 
+### syntax_unterminated_string
+
+- Responsibility: Parse error text alignment for an unterminated single-quoted string (detected-at is the start line)
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_unterminated_string.py](../../ci/cases/syntax_unterminated_string.py)
+
+### syntax_unterminated_triple
+
+- Responsibility: Parse error text alignment for an unterminated triple-quoted string (detected-at is the scan-end line)
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_unterminated_triple.py](../../ci/cases/syntax_unterminated_triple.py)
+
 ### syntax_unpack_star
 
 - Responsibility: `*` unpacking in list/tuple/set literals
@@ -766,6 +784,34 @@ Functions in the built-in namespace: print/len/isinstance/getattr/iter/min/max/s
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_abs_minmax.py](../../ci/cases/builtin_abs_minmax.py)
 
+### builtin_error_text
+
+- Responsibility: min/max/round/math error texts, `print>>` hint and function repr alignment
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_error_text.py](../../ci/cases/builtin_error_text.py)
+
+### builtin_ascii
+
+- Responsibility: `ascii()` non-ASCII escaping and repr forms of various types
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_ascii.py](../../ci/cases/builtin_ascii.py)
+
+### builtin_open
+
+- Responsibility: `open()` text/binary read-write, line iteration, seek and error texts
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_open.py](../../ci/cases/builtin_open.py)
+
+Binary read/write operate on `bytes`; text reads use a lazy buffer; the binary comparison segment writes via `wb` to avoid CPython's text-mode newline translation on disk
+
+### builtin_wrappers
+
+- Responsibility: functional `staticmethod` / `classmethod` / `property` and `operator.index`
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_wrappers.py](../../ci/cases/builtin_wrappers.py)
+
+A functional property assigned in a class body gets its attribute name via the class-creation hook (CPython `__set_name__` semantics); `property.fget` / `fset` are introspectable; `operator.index` routes through the `__index__` protocol (including user classes) with CPython texts for float/str
+
 ### builtin_any_all
 
 - Responsibility: `any`/`all` across truthiness combinations and empty containers
@@ -913,6 +959,30 @@ Construction, operator semantics (e.g. floor-division rounding on negatives) and
 - Responsibility: `bytes` `%` formatting placeholders and alignment/padding
 - Comparison: `same_output`
 - Source: [ci/cases/type_bytes_format.py](../../ci/cases/type_bytes_format.py)
+
+### type_bytearray
+
+- Responsibility: bytearray construction, mutation, arithmetic, slice assignment and bytes interop
+- Comparison: `same_output`
+- Source: [ci/cases/type_bytearray.py](../../ci/cases/type_bytearray.py)
+
+bytearray is unhashable (dict keys raise `unhashable type: 'bytearray'`); `bytes + bytearray` yields bytes while `bytearray + bytes` yields bytearray; the mutable subclass overrides the repr prefix and the type factory, inheriting all read-only methods (upper/decode/hex etc.) which return bytearray
+
+### type_complex
+
+- Responsibility: complex type and `1j` literals — construction, arithmetic, comparison, dict keys
+- Comparison: `same_output`
+- Source: [ci/cases/type_complex.py](../../ci/cases/type_complex.py)
+
+`1+0j` shares key and hash with `1`; ordering raises `'<' not supported...`; complex power uses exact repeated multiplication for integer exponents and the libm polar path for non-integer ones (including `**0.5`) — compare with `round(..., N)` (ci.md rule 4)
+
+### type_memoryview
+
+- Responsibility: memoryview construction, indexing, slicing, read-only vs writable passthrough, tobytes/cast/release
+- Comparison: `same_output`
+- Source: [ci/cases/type_memoryview.py](../../ci/cases/type_memoryview.py)
+
+Pragmatic support covers one-dimensional B-format views only; bytes-backed views are read-only (assignment raises `cannot modify read-only memory`) while bytearray-backed views write through; operations after release raise `operation forbidden on released memoryview object`
 
 ### type_bytes_methods
 
@@ -1151,6 +1221,30 @@ Construction, operator semantics (e.g. floor-division rounding on negatives) and
 ## Standard Library Modules (`module_*`)
 
 The nine built-in modules (math/random/statistics/functools/itertools/collections/string/operator/time). A single function with enough behavior of its own is split into a sub-file (e.g. `module_math_sqrt`).
+
+### module_collections_deque
+
+- Responsibility: collections.deque two-ended operations, maxlen, rotate, indexing and comparison
+- Comparison: `same_output`
+- Source: [ci/cases/module_collections_deque.py](../../ci/cases/module_collections_deque.py)
+
+`maxlen` overflow silently drops from the opposite end; slicing is unsupported (`sequence index must be integer, not 'slice'`); `pop`/`popleft` on an empty deque raise `pop from an empty deque`; failed `remove`/`index` raise `x is not in deque` (value repr)
+
+### module_collections_ordereddict
+
+- Responsibility: collections.OrderedDict construction, order-sensitive equality, move_to_end, popitem
+- Comparison: `same_output`
+- Source: [ci/cases/module_collections_ordereddict.py](../../ci/cases/module_collections_ordereddict.py)
+
+Equality between two OrderedDicts is key-order sensitive, while comparison against a plain dict falls back to order-insensitive dict equality (CPython semantics); `popitem(last=False)` pops the first pair and an empty dict raises `dictionary is empty`
+
+### module_sys
+
+- Responsibility: sys module basics (maxsize/version_info/byteorder/platform/intern/exit)
+- Comparison: `same_output`
+- Source: [ci/cases/module_sys.py](../../ci/cases/module_sys.py)
+
+`version`/`version_info` are pinned to the aligned CPython 3.12 form (the platform value maps to the host OS, compared via membership); `sys.exit` raises `SystemExit` (a BaseException subclass); uncaught, PyGDS has no process-exit semantics and enters the error state
 
 ### module_collections
 

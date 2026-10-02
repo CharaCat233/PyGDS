@@ -27,10 +27,14 @@ except TypeError as e:
 try:
     min([])
 except ValueError as e:
-    print("VE:", type(e).__name__)
+    print("VE:", e)
 try:
     max()
 except TypeError as e:
-    print("TE2:", type(e).__name__)
+    print("TE2:", e)
+try:
+    min(1)
+except TypeError as e:
+    print("TE3:", e)
 
 print("done")

@@ -8,6 +8,10 @@
 
 config_version=5
 
+[debug]
+
+settings/gdscript/max_call_stack=2047
+
 [application]
 
 config/name="PyGDS"

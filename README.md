@@ -146,7 +146,7 @@ dsl.run()
 | 字典合并 | ✅ 完整 | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}`（Python 3.9+） |
 | `str` `%` 格式化 | ✅ 完整 | `"%s: %d" % (x, y)`（printf 风格） |
 | `str.format` | ✅ 完整 | `"{:.2f} {:>8}".format(x, s)`，含位置/关键字参数与格式说明符 |
-| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator/time；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter，time 提供 sleep/time/time_ns/monotonic/perf_counter） |
+| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator/time/sys；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter/index，collections 含 Counter/defaultdict/namedtuple/deque/OrderedDict，sys 提供 version_info/maxsize/byteorder/platform/argv/intern/exit，time 提供 sleep/time/time_ns/monotonic/perf_counter） |
 | `set` | ✅ 完整 | 字面量 `{1, 2}`、构造、集合运算与方法 |
 | `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
 | `bytes` 类型 | ✅ 完整 | `b"xy"` 字面量与 `bytes()` 构造（整数零填充 / 可迭代 / 字符串编码 / 拷贝）；方法族 `decode` / `hex` / `upper` / `lower` / `title` / `strip` 家族 / `split` / `replace` / `find` / `index` / `count` / `startswith` / `endswith` / `join` / `center` / `ljust` / `rjust`；索引/迭代产出整数、切片、重复、`in`，与 `str` 严格区分 |
@@ -160,9 +160,13 @@ dsl.run()
 | `__name__` / `__file__` | ✅ 完整 | `__name__` 恒为 `"__main__"`（可重新赋值），入口守卫可用；`__file__` 默认空串，宿主经 `set_script_path()` 在 `run()` 前注入 |
 | 泛型类型参数与 `type` 别名 | ✅ 语法接受 | `class C[T]` / `def f[T](x)` / `type X = int`（PEP 695）按语法接受并忽略类型语义；别名名不绑定到值 |
 | 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套（含嵌套生成器内 `time.sleep()`）、`yield from` 的 `send` / `throw` 完整委托（PEP 380，子生成器优先捕获）、闭包跨 `yield` 保持 |
-| 装饰器 | ✅ 完整 | 任意可调用表达式装饰器（自写 / 带参工厂 / 堆叠，应用于函数、方法与类），加 `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter）五种内建形式 |
+| 装饰器 | ✅ 完整 | 任意可调用表达式装饰器（自写 / 带参工厂 / 堆叠，应用于函数、方法与类），加 `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter）五种内建形式；函数式 `staticmethod(f)` / `classmethod(f)` / `property(fget, fset, fdel)` 同样可用 |
+| 复数与 `1j` 字面量 | ✅ 完整 | 构造（数值/字符串/双序）/算术（整指数精确幂、非整指数极坐标）/比较/字典键（`1+0j` 与 `1` 同键）/`abs` / `conjugate`；序比较与整型转换按 CPython 报错 |
+| `bytearray` | ✅ 完整 | 构造（长度/bytes/整数可迭代/`str`+编码）、可变操作（下标与切片赋值、append/extend/insert/pop/remove/reverse/clear/copy）、与 bytes 互转；不可哈希 |
+| `memoryview` | ✅ 务实子集 | 一维 B 格式视图：len/下标/切片/迭代/`tobytes` / `hex` / `cast("B")` / `release`；bytes 底层只读、bytearray 底层可写透传 |
+| `open()` 文件 I/O | ✅ 务实子集 | 文本/二进制两态（`r`/`w`/`a`/`rb`/`wb`/`ab`），read/readline/readlines/write/writelines/close/seek/tell/flush 与行迭代；路径随宿主 FileAccess（相对路径按工程根解析）；`FileNotFoundError` / `UnsupportedOperation` 已注册 |
 | `with` 语句 | ❌ 不支持 | — |
-| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator/time） |
+| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator/time/sys） |
 
 > **⚠️ 破坏性变更（v0.3.0）**：生成器表达式 `(x for x in iterable)` 的语义已从「急切求值为列表」改为「惰性生成器对象」
 > 旧代码若直接对生成器表达式结果做下标/`len()`/列表方法会报错，需先 `list(g)` / `tuple(g)` 转换
@@ -195,7 +199,7 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
 | P1-7 | `with` 语句不支持 | 按既定范围当前不实现 |
-| P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time） |
+| P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time / sys） |
 | P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
 
 ### P2 — 边缘差异
@@ -203,10 +207,10 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
-| P2-2 | 部分语法错误文案不同 | `async` / `await` / `return` / `break` / `continue` 的误用文案与「语句尾部冗余 Token」已对齐；括号未闭合的文案已在 **v0.5.0-alpha.6** 对齐（`'(' was never closed`）。其余解析期错误的措辞与行号格式仍可能不同（如缺冒号、未结束字符串） |
 | P2-4 | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致 |
-| P2-50 | 深递归触发 `RecursionError` 后帧回卷打印大量 `Stack underflow! (Engine Bug)` 引擎日志（每次 ~531 条；仅日志噪音，输出与判定正确） | v0.7.0-alpha.7 审计发现 |
-| P2-51 | 退出时 ObjectDB 实例泄漏告警（`DSLObject` 为裸 `Object`，无逐用例回收）及连带 `resources still in use` | v0.7.0-alpha.7 审计发现 |
+| P2-52 | 深递归叠加深表达式可能触及引擎 VM 调用栈硬上限（2048 帧 GDScript 帧），引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`） | alpha.9 测量 P2-50 时发现；PyGDS 的 `MAX_CALL_DEPTH=256` 只约束调用深度，表达式求值/解析的 GDScript 帧深不受其约束 |
+
+P2-2（解析期错误文案与函数 repr）与 P2-3（运算符错误文案）已随 **v0.7.0-alpha.9** 的文案对齐专项修复（缺冒号、未结束字符串、`min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` 文案、`print >> x` 迁移提示、函数与绑定方法 repr）；P2-50（`Stack underflow` 日志噪音）已通过项目设置 `debug/settings/gdscript/max_call_stack=2047` 消除（宿主工程同设即可，见 P2-52 说明）；P2-51（退出时 ObjectDB 泄漏与 `resources still in use`）已随 **v0.7.0-alpha.9** 的对象登记表 + 断环回收（`cleanup()` API）修复
 
 v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-string `#` 前缀布局）、P2-47（`%c` str 实参）、P2-48（`.N` 有效数字语义）、P2-49（`casefold` 完整折叠）已随 v0.7.0-alpha.8 修复
 

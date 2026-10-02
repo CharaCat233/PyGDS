@@ -26,3 +26,6 @@ Thumbs.db
 
 # Test Folder
 /tests/
+
+# PyGDS open() 用例数据文件 (builtin_open 用例读写, PyGDS 无删除能力故残留)
+ci_open_case_data*.tmp

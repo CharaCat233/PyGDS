@@ -893,7 +893,7 @@ f(**{"a": 1}, b=2, **{"c": 3})   # {} {'a': 1, 'b': 2, 'c': 3}
 
 ### import 与内置模块
 
-支持 `import` / `from-import` 导入内置模块（`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator`）：
+支持 `import` / `from-import` 导入内置模块（`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys`）：
 
 ```python
 import math
@@ -1537,6 +1537,29 @@ print("Round 2:", output2)   # Round 2: 2
 
 ---
 
+## 对象生命周期与回收
+
+PyGDS 的解释器对象（`DSLObject` 及其全部子类、作用域环境、迭代器等）基于 `RefCounted`，对象图内存在引用环（如全局环境 → 用户类 → 方法函数 → 闭包环境），仅靠引用计数无法在 run 结束后释放。PyGDS 通过「对象登记表 + 断环回收」解决：
+
+- 每次 `run()` 创建的 `Interpreter` 会登记本 run 创建的全部解释器侧对象
+- `cleanup()` 逐一断开登记对象的引用字段并清空进程级静态缓存（内置类注册表、方法描述符、驻留池等），引用计数随之归零、级联释放
+- 释放节点（对实例调用 `free()`）时会经 `NOTIFICATION_PREDELETE` 自动触发回收，无需手动干预
+
+```gdscript
+var dsl = PyGDS.new()
+dsl.write_dsl_script("print('hello')")
+dsl.run()
+print(dsl.print_output)
+
+# 长驻宿主建议在每轮脚本结束后主动回收（逐用例切换场景尤然）:
+# 打断引用环并清空静态缓存, 消除 ObjectDB 泄漏与内存累积
+dsl.cleanup()
+```
+
+> **注意**：`cleanup()` 之后本解释器不可再恢复挂起执行；重新执行须先 `write_dsl_script`。静态缓存（方法描述符、驻留池等）会在下次 `run()` 时惰性重建，逐用例清理的开销可忽略
+
+---
+
 ## 挂起系统
 
 PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复执行。这在游戏开发中非常有用，例如等待动画播放完毕、等待玩家输入、或实现延时逻辑
@@ -1711,6 +1734,13 @@ print(clamp(150, 0, 100))  # 100
 ```
 
 预设代码和用户代码的 AST 在解析后拼接执行，因此同名变量/函数/类会被后续定义覆盖，符合 Python 语义
+
+## complex / bytearray / memoryview 与 open()
+
+- **complex**：`1j` 字面量与 `complex(re, im)` / `complex(str)` 构造，四则运算、比较、`abs` / `conjugate` 与 CPython 对齐；整指数幂精确，非整指数走极坐标（libm 路径，跨平台比对建议 `round(..., N)`）
+- **bytearray**：可变字节序列，支持下标/切片赋值与 `append` / `extend` / `insert` / `pop` / `remove` / `reverse` 等；不可哈希（不能作字典键/集合元素）
+- **memoryview**：一维 B 格式视图，bytes 底层只读、bytearray 底层可写透传；`release()` 后操作报错
+- **open(path, mode)**：基于宿主 FileAccess 的文件对象，相对路径按工程根（`res://`）解析；支持 `r` / `w` / `a` / `rb` / `wb` / `ab` 与 `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close`；文本写即时落盘
 
 ## 限制与注意事项
 

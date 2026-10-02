@@ -63,14 +63,20 @@ except ValueError as e:
 try:
     math.factorial(-1)
 except ValueError as e:
-    print("FVE:", type(e).__name__)
+    print("FVE:", e)
 try:
     math.comb(3, -1)
 except ValueError as e:
-    print("CVE:", type(e).__name__)
+    print("CVE:", e)
 try:
     math.perm(3, -1)
 except ValueError as e:
-    print("PVE:", type(e).__name__)
+    print("PVE:", e)
+try:
+    math.comb(-1, 3)
+except ValueError as e:
+    print("CVE2:", e)
+print(math.comb(3, 5))
+print(math.perm(5, 7))
 
 print("done")

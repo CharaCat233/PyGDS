@@ -2,6 +2,58 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.9] - 2026-10-02
+
+本版完成 alpha.8 交接的三项任务：P2-50（深递归 `Stack underflow` 引擎日志噪音）、P2-51（退出时 ObjectDB 实例泄漏）与文案对齐专项（P2-2 / P2-3 解禁 + 降级断言升级），并按「务实全集」范围修复 P1-32（内建函数缺口）与 P1-56（复数字面量解析期拒绝）。测量先行定位了 P2-50 的真实机理（引擎调用栈记账上限而非回卷方式），P2-51 修复过程中发现并修复 GDScript `_init` 链式调用缺口，另新发现 P2-52（引擎 VM 硬上限的静默截断）记录入清单。`eval` / `exec` / `compile`、`globals` / `locals` / `vars`、`aiter` / `anext` 维持暂缓（分别与挂起重放机制、异步既定边界冲突，理由见已知问题清单）
+
+### 新增
+
+- **P2-50 消除手段**：本仓库 `project.godot` 设 `debug/settings/gdscript/max_call_stack=2047`（CI 与本地共用），宿主工程同设即可
+- **cleanup() 公开 API（P2-51）**：长驻宿主在 run 结束 / 用例切换时主动回收解释器对象图与静态缓存（中英 usage.md 新增「对象生命周期与回收」章节）；释放节点时经 PREDELETE 自动触发，向后兼容
+- **complex 类型与 `1j` 字面量（P1-56 / P1-32）**：词法层识别 `1j` / `1.5j` / `1e3j` 虚数字面量（`TokenType.IMAGINARY`）；新增 `DSLComplex`（实部/虚部/conjugate，与 int/float/bool 混算自动升格，整指数幂走精确重复乘法、非整指数走极坐标）；`complex()` 支持数值/字符串（含括号、双序、`"j"` 等形态）构造；等值复数与对应实数同字典键同哈希（`1+0j` 与 `1` 同键）；序比较/整型转换/divmod 按 CPython 报错
+- **bytearray（P1-32）**：新增 `DSLByteArray`（继承 `DSLBytes`，覆写类型工厂使全部只读方法返回 bytearray）；构造支持长度/字节串/整数可迭代/`str`+编码；可变语义（下标与切片赋值、`append` / `extend` / `insert` / `pop` / `remove` / `reverse` / `clear` / `copy`）；不可哈希（字典键报 `unhashable type: 'bytearray'`）；`bytes + bytearray` 得 bytes、反向得 bytearray（CPython 同语义）
+- **memoryview（P1-32）**：务实支持 B 格式一维视图——len/下标/切片/迭代/`tobytes` / `hex` / `cast("B")` / `release` 与 `readonly` / `obj` / `nbytes` / `itemsize` / `format` / `shape` 等属性；bytes 底层只读（赋值报 `cannot modify read-only memory`），bytearray 底层赋值透传；`bytes(mv)` / `bytearray(mv)` 互转
+- **collections.deque（P1-32）**：双向端 append/appendleft/pop/popleft/extend/extendleft、rotate、maxlen（溢出静默挤出一端）、索引赋值、clear/copy/count/index/remove/reverse；不支持切片（CPython 同文案）；`collections.deque` 升格为类型对象（`type()` / `isinstance` 可用）
+- **collections.OrderedDict（P1-32）**：继承 dict 全部行为；`move_to_end(key, last=True)`、`popitem(last=True)`（空字典报 `'dictionary is empty'`）、repr 为 `OrderedDict({...})` 形态（空为 `OrderedDict()`）；OrderedDict 间相等按键序敏感、与普通 dict 比较键序无关（CPython 同语义）
+- **sys 模块（P1-32）**：`version` / `version_info`（对齐 CPython 3.12 形态）/ `maxsize` / `byteorder` / `platform`（按宿主 OS 映射）/ `argv` / `executable` / `path` / `intern` / `exit`；`sys.exit` 抛 `SystemExit`（BaseException 子类，未捕获时按既定模型进入错误终态，CPython 为静默退出进程）
+- **open()（P1-32）**：文件对象务实子集——文本/二进制两态（`r` / `w` / `a` / `rb` / `wb` / `ab`），`read` / `readline` / `readlines` / `write` / `writelines` / `close` / `seek` / `tell` / `flush` / `readable` / `writable`，行迭代，`name` / `mode` / `closed` 属性；路径语义随宿主 FileAccess（相对路径按工程根解析）；新增 `FileNotFoundError` / `UnsupportedOperation` 异常类
+- **轻量内建（P1-32）**：`ascii()`（非 ASCII 按码点转义）；函数式 `staticmethod` / `classmethod` / `property`（类体内赋值经类创建钩子补全属性名，`property.fget` / `fset` / `fdel` 可内省，`getter` / `setter` / `deleter` 返回新副本）；`operator.index`（`__index__` 协议入口）
+
+### 修复
+
+- **P2-50 `Stack underflow` 日志噪音**：实测定位机理——每个 DSL 递归层消耗约 6~7 条 GDScript 调用帧，越过引擎记账上限（`debug/settings/gdscript/max_call_stack`，默认 1024）后 `enter_function` 不再入栈而 `exit_function` 照常出栈，逐帧打印下溢（与回卷方式无关，迭代式回卷无效）。消除后 `--filter=syntax_flow_scan` 由 531 条降为 0，输出与判定不变
+- **P2-51 ObjectDB 实例泄漏**：归因修正——对象本就是 `RefCounted`，泄漏主体是引用环（环境 ↔ 类 ↔ 方法闭包，生成器 ↔ 迭代器）与进程级静态缓存。实现「对象登记表 + 断环回收」：解释器登记本 run 创建的全部解释器侧对象，`cleanup()` 逐对象清空引用字段打断引用环，并清空全部静态缓存；双端运行器退出泄漏 ~15 万 → **0**，挂起 demo 同样归零，`1 resources still in use` 消失
+- **GDScript `_init` 链式调用缺口（P2-51 连带发现）**：GDScript 子类定义 `_init` 时父类 `_init` **不会**被隐式调用，27 个未显式 `super._init()` 的 DSL 类此前从未进入登记表（泄漏残余 2055 个的来源）且 `_object_id` 从未分配；补齐后全量零泄漏，`id()` 对这些类恢复唯一性
+- **文案对齐专项（P2-2 / P2-3）**：以下站点全部按 CPython 3.12 对齐（`%` 引擎与解析器各自独立副本逐一对齐）
+  - 缺冒号：19 处 `Expected ':'` 统一为 CPython 小写形态 `expected ':'`
+  - 未结束字符串：单引号 `unterminated string literal (detected at line N)`（N 为起始行）与三引号 `unterminated triple-quoted string literal (detected at line N)`（N 为扫描终止行，文件末尾换行不计入）
+  - `min` / `max`：空序列 `min() iterable argument is empty`、无参 `max expected at least 1 argument, got 0`、非迭代实参 `'int' object is not iterable`
+  - `round("a")`：`type str doesn't define __round__ method`
+  - `math.factorial(-1)`：`factorial() not defined for negative values`（非整数实参同步对齐 `'float' object cannot be interpreted as an integer`）
+  - `math.comb` / `math.perm`：n / k 负值文案拆分对齐（`n must be a non-negative integer` / `k must be a non-negative integer`），并按 CPython 语义将 `k > n` 从报错改为返回 `0`（连带修复 `math.comb(3, 5)` 类行为分歧）
+  - `print >> x`：补 CPython 迁移提示 `Did you mean "print(<message>, file=<output_stream>)"?`（问号在引号外）
+  - 函数对象 repr：`<function Child.greet at 0x...>`（补限定名与地址）；绑定方法 repr：`<bound method Child.greet of <Child object at 0x...>>`（补限定名与完整实例 repr）
+  - `sorted([1, 'a'])` 操作数顺序经实测与 CPython 一致（升序 `'str' and 'int'`、reverse `'int' and 'str'`），原记录的顺序差异不存在，无需修复
+- **类属性访问走描述符协议（P1-32 连带发现）**：`DSLClass._dsl_getattribute` 的 `class_attrs` 分支此前原样返回属性值，函数式 `classmethod` / `property` 经类体赋值落进 `class_attrs` 后 `cls` 绑定丢失（报 `UnboundLocalError`）；现按 CPython `type.__getattribute__` 语义以 `(null, cls)` 调用 `__get__`
+- **方法包装调用的接收者错误转换（P1-32 连带发现）**：`_dispatch_call` 对 `DSLMethodWrapper` 补接收者 `last_error` 转换，此前错误被吞、调用静默返回 `None`
+- **`dict` 兜底 unhashable 文案**：`unhashable type: X` 补引号对齐 CPython（`unhashable type: 'X'`）
+
+### 修复过程发现并记录
+
+- **P2-52（新，不建议投入）**：引擎 VM 调用栈硬上限（2048 帧）会绕过 PyGDS 的 RecursionError 协作回卷直接中止调用链，深递归叠加深表达式的脚本**静默丢失后续输出**；防御需在全部递归入口加解释器侧深度计数，属架构级改动。运行器已加 CASE-ERR 检测（`state == RUNNING` 即引擎硬中止），防止此类脚本被误判为输出分歧
+
+### 测试
+
+- 新增 `builtin_error_text` / `syntax_expected_colon` / `syntax_unterminated_string` / `syntax_unterminated_triple`（解析期文案，`same_error`）、`builtin_ascii` / `builtin_wrappers` / `builtin_open` / `type_complex` / `type_bytearray` / `type_memoryview` / `module_collections_deque` / `module_collections_ordereddict` / `module_sys` 共 13 例
+- 断言升级：`builtin_abs_minmax` / `builtin_round` / `module_math` 的类名断言恢复完整消息断言（并补 `min(1)`、`math.comb(-1, 3)`、`k > n` 返回 0 等锁定）；`syntax_operator_matrix` 补 `print >> 1` 提示断言
+- 全量回归 **290/290** 通过；挂起套件 24/24 通过；lint_cases / lint_md / lint_gd 全部 0 问题；双端运行器与挂起 demo 退出 ObjectDB 泄漏为 **0**、无 `resources still in use`
+
+### 文档
+
+- README（中英）兼容矩阵与已知问题章节：P2-2 / P2-3 / P2-50 / P2-51 移出未修复表并注明修复方式，新增 P2-52；内置模块清单加 sys，新增 complex / bytearray / memoryview / open() 四行能力，装饰器行补函数式形态；已知问题清单同步（未修复 22 → 18 条）
+- usage（中英）新增「对象生命周期与回收」与 complex / bytearray / memoryview / open() 小节，模块清单加 sys
+- 已知问题清单：P1-32 改写为残余子项（eval 系 / 作用域字典 / aiter / anext 暂缓理由）、P1-56 移除、P2-50 / P2-51 处置更新、P2-52 新增
+
 ## [0.7.0-alpha.8] - 2026-10-02
 
 本版修复 v0.7.0-alpha.7 全项目审计新发现的问题中的 5 条：两条 P0（`nonlocal` 绑定搜索死循环、跨容器相等语义）与三条 P1（增强赋值运算符缺口、dict 视图集合运算、旧式迭代的 `in` 判定），并同步补充双端回归用例

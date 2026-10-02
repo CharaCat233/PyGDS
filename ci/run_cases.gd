@@ -167,6 +167,11 @@ func _run_case(case_name: String, python_cmd: String) -> void:
 		dsl.run()
 	if pump >= MAX_PUMP:
 		printerr("  [WARN] %s: 挂起恢复超过 %d 次, 可能存在循环挂起" % [case_name, MAX_PUMP])
+	if dsl.state == dsl.State.RUNNING:
+		# run() 未走到终态判定即返回: 引擎 VM 调用栈上限 ("Stack overflow") 会硬中止
+		# GDScript 调用链, interpret 的终态判定整体被跳过; 视作用例环境错误而非双端差异
+		_fail(case_name, "CASE-ERR", "解释器未达终态 (疑似引擎 VM 调用栈硬中止, 见已知问题清单 P2-52)")
+		return
 	# 错误信号 = State.ERROR: 解析期错误在 write_dsl_script 后由 run() 置位
 	# 运行期未捕获异常在顶层 fatal_error 确认时会清掉 report.has_error,
 	# 但 report.last_error 保留完整消息, 两种路径都用它取错误文本

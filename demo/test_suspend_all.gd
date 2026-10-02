@@ -140,6 +140,11 @@ func _init() -> void:
 
 func _start_next_test():
 	if _test_idx >= _test_queue.size():
+		# 释放最后一个用例的实例: free 触发 PyGDS 的对象图回收 (P2-51),
+		# 否则最后一个 run 的解释器对象在退出时报 ObjectDB 泄漏
+		if _dsl != null:
+			_dsl.free()
+			_dsl = null
 		print("")
 		print("=".repeat(60))
 		print("Results: %d passed, %d failed" % [_passed, _failed])

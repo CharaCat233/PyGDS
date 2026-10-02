@@ -152,6 +152,12 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_ellipsis.py](../../ci/cases/syntax_ellipsis.py)
 
+### syntax_expected_colon
+
+- 职责: 缺冒号的解析错误文案对齐 (CPython: `expected ':'`)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_expected_colon.py](../../ci/cases/syntax_expected_colon.py)
+
 ### syntax_escape
 
 - 职责: `str`/`bytes` 转义序列解码与 `\N` 命名转义
@@ -578,6 +584,18 @@
 - 比对: `same_error`
 - 源文件: [ci/cases/syntax_unpack_pep448_err.py](../../ci/cases/syntax_unpack_pep448_err.py)
 
+### syntax_unterminated_string
+
+- 职责: 单引号未结束字符串的解析错误文案对齐 (detected at 为起始行)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_unterminated_string.py](../../ci/cases/syntax_unterminated_string.py)
+
+### syntax_unterminated_triple
+
+- 职责: 三引号未结束字符串的解析错误文案对齐 (detected at 为扫描终止行)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_unterminated_triple.py](../../ci/cases/syntax_unterminated_triple.py)
+
 ### syntax_unpack_star
 
 - 职责: 列表/元组/集合字面量 `*` 解包
@@ -766,6 +784,34 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_abs_minmax.py](../../ci/cases/builtin_abs_minmax.py)
 
+### builtin_error_text
+
+- 职责: min/max/round/math 错误文案、print>>提示与函数 repr 对齐
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_error_text.py](../../ci/cases/builtin_error_text.py)
+
+### builtin_ascii
+
+- 职责: `ascii()` 的非 ASCII 转义与各类型 repr 形态
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_ascii.py](../../ci/cases/builtin_ascii.py)
+
+### builtin_open
+
+- 职责: `open()` 的文本/二进制读写、行迭代、seek 与异常文案
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_open.py](../../ci/cases/builtin_open.py)
+
+二进制读/写以 `bytes` 为单位, 文本读采用惰性缓冲, 二进制比较段使用 `wb` 写入以规避 CPython 文本模式写盘的换行翻译差异
+
+### builtin_wrappers
+
+- 职责: 函数式 `staticmethod` / `classmethod` / `property` 与 `operator.index`
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_wrappers.py](../../ci/cases/builtin_wrappers.py)
+
+函数式 property 在类体内赋值时经类创建钩子补全属性名 (CPython `__set_name__` 语义), `property.fget` / `fset` 可内省, `operator.index` 走 `__index__` 协议 (含用户类) 并对 float/str 报 CPython 文案
+
 ### builtin_any_all
 
 - 职责: `any`/`all` 对各真值组合与空容器的判定
@@ -913,6 +959,30 @@
 - 职责: `bytes` `%` 格式化占位符与对齐填充
 - 比对: `same_output`
 - 源文件: [ci/cases/type_bytes_format.py](../../ci/cases/type_bytes_format.py)
+
+### type_bytearray
+
+- 职责: bytearray 的构造/可变操作/算术/切片赋值与 bytes 互转
+- 比对: `same_output`
+- 源文件: [ci/cases/type_bytearray.py](../../ci/cases/type_bytearray.py)
+
+bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + bytearray` 得 bytes 而 `bytearray + bytes` 得 bytearray, 可变子类覆写 repr 前缀与方法工厂, 只读方法 (upper/decode/hex 等) 全量继承且返回 bytearray
+
+### type_complex
+
+- 职责: complex 类型与 `1j` 字面量的构造/算术/比较/字典键
+- 比对: `same_output`
+- 源文件: [ci/cases/type_complex.py](../../ci/cases/type_complex.py)
+
+`1+0j` 与 `1` 为同键同哈希, 序比较报 `'<' not supported...`, 复数幂的整数指数走精确重复乘法, 非整数指数 (含 `**0.5`) 为 libm 极坐标路径, 比对须 `round(..., N)` (ci.md 规则 4)
+
+### type_memoryview
+
+- 职责: memoryview 的构造/下标/切片/只读与可写透传/tobytes/cast/release
+- 比对: `same_output`
+- 源文件: [ci/cases/type_memoryview.py](../../ci/cases/type_memoryview.py)
+
+务实仅支持 B 格式一维视图, bytes 底层只读 (赋值报 `cannot modify read-only memory`), bytearray 底层可写透传, 释放后操作报 `operation forbidden on released memoryview object`
 
 ### type_bytes_methods
 
@@ -1151,6 +1221,30 @@
 ## 标准库模块（module_*）
 
 PyGDS 内置的九个标准库模块（math/random/statistics/functools/itertools/collections/string/operator/time）。单一函数行为多到值得独立时拆出子文件（如 `module_math_sqrt`）。
+
+### module_collections_deque
+
+- 职责: collections.deque 的双向端操作/maxlen/rotate/索引与比较
+- 比对: `same_output`
+- 源文件: [ci/cases/module_collections_deque.py](../../ci/cases/module_collections_deque.py)
+
+`maxlen` 溢出静默挤出一端, 不支持切片 (`sequence index must be integer, not 'slice'`), `pop`/`popleft` 空队列报 `pop from an empty deque`, `remove`/`index` 未命中报 `x is not in deque` (值 repr)
+
+### module_collections_ordereddict
+
+- 职责: collections.OrderedDict 的构造/顺序敏感相等/move_to_end/popitem
+- 比对: `same_output`
+- 源文件: [ci/cases/module_collections_ordereddict.py](../../ci/cases/module_collections_ordereddict.py)
+
+OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序无关 (CPython 同语义), `popitem(last=False)` 弹出首个键值对, 空字典报 `dictionary is empty`
+
+### module_sys
+
+- 职责: sys 模块基础面 (maxsize/version_info/byteorder/platform/intern/exit)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_sys.py](../../ci/cases/module_sys.py)
+
+`version`/`version_info` 固定为对齐目标 CPython 3.12 的形态 (platform 值随宿主 OS 映射, 比对用成员判定), `sys.exit` 抛 `SystemExit` (BaseException 子类), 未捕获时 PyGDS 无进程退出语义, 进入错误终态
 
 ### module_collections
 

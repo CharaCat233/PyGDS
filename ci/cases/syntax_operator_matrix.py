@@ -135,3 +135,9 @@ print(mod_kind("%s", {1}))
 print(mod_kind("%s", ()))
 print(mod_kind("%s", (1,)))
 print(mod_kind("%(a)s", {1: 2}))
+
+# print >> x 的 CPython 迁移提示文案
+try:
+    print >> 1
+except TypeError as e:
+    print("hint:", e)

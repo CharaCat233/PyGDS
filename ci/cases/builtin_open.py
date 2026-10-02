@@ -1,0 +1,80 @@
+# duty: open() 的文本/二进制读写/行迭代/seek 与异常文案
+# 比对: same_output
+
+fh = open("ci_open_case_data.tmp", "w")
+print(fh.writable(), fh.readable())
+fh.write("line1\n")
+fh.write("line2\n")
+fh.close()
+print(fh.closed)
+fh = open("ci_open_case_data.tmp")
+print(fh.read())
+fh.close()
+fh = open("ci_open_case_data.tmp")
+print(fh.readline())
+print(fh.readline())
+print(fh.readline())
+fh.close()
+fh = open("ci_open_case_data.tmp")
+print(fh.readlines())
+fh.close()
+fh = open("ci_open_case_data.tmp")
+print(list(fh))
+fh.close()
+fh = open("ci_open_case_data.tmp")
+print(fh.seek(0), fh.readline())
+fh.close()
+lines = []
+fh = open("ci_open_case_data.tmp")
+for line in fh:
+    lines.append(line.strip())
+fh.close()
+print(lines, len(lines))
+fh = open("ci_open_case_data.tmp", "a")
+fh.write("line3\n")
+fh.close()
+fh = open("ci_open_case_data.tmp")
+print(fh.readline(), fh.readline(), fh.readline())
+fh.close()
+fw = open("ci_open_case_data2.tmp", "wb")
+fw.writelines([b"x\n", b"y\n"])
+fw.close()
+fr = open("ci_open_case_data2.tmp", "rb")
+print(fr.read())
+fr.close()
+fb = open("ci_open_case_data2.tmp", "rb")
+data = fb.read()
+print(type(data).__name__, data)
+try:
+    fb.write(b"z")
+except Exception as e:
+    print("WB:", type(e).__name__)
+fb.close()
+mvb = bytearray(b"hi")
+fb2 = open("ci_open_case_data3.tmp", "wb")
+fb2.write(mvb)
+fb2.close()
+fb3 = open("ci_open_case_data3.tmp", "rb")
+print(fb3.read())
+fb3.close()
+try:
+    open("_pgds_nonexistent_xyz.tmp")
+except FileNotFoundError as e:
+    print("FNF:", e)
+try:
+    open("ci_open_case_data.tmp", "q")
+except ValueError as e:
+    print("VM:", e)
+try:
+    fh = open("ci_open_case_data.tmp")
+    fh.write("x")
+    fh.close()
+except Exception as e:
+    print("RO:", type(e).__name__)
+try:
+    fh = open("ci_open_case_data.tmp")
+    fh.close()
+    fh.read()
+except ValueError as e:
+    print("CL:", e)
+print(fh.name, fh.mode)
