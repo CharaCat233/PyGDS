@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.3] - 2026-10-03
+
+本版为 v0.8.0-alpha 实现过程中的问题收尾：修复 alpha.1 修复期登记的 P2-53 / P2-54 / P2-55 三条既有差异。类对象 repr 对齐（`repr(任何类)` 为 `<class 'X'>` 形态）；`SyntaxError` 注册为运行期异常类并按 CPython 对齐 `nonlocal` 无绑定文案；函数绑定错误文案补 `__qualname__` 限定名（方法 `Class.method()`、嵌套函数 `outer.<locals>.inner()`，顶层与 lambda 维持原名）。实现期连带给绑定错误的 `takes` 形态补齐 CPython 的单复数与 keyword-only 括注规则
+
+### 修复
+
+- **类对象 repr（P2-53）**：`repr()` / `%r` / f-string `!r` / 容器内类对象此前经 `_py_repr` 与基类 `magic_repr` 兜底输出 `<type object>`，现与 str 一致输出 `<class 'X'>`（`DSLCoroutine` 等自带 repr 的对象不受影响）；`repr(type)` / `repr(type(5))` / `repr(type(lambda: 1))` 等 type 系形态一并对齐
+- **SyntaxError 运行期注册（P2-54）**：`_define_exception("SyntaxError")` 注册为 Exception 子类，此前运行期 `raise_exception("SyntaxError", ...)` 站点经 `raise_exception_typed` 的 `globals.get_val` 查表未命中、报告通道首胜保留 `NameError: name 'SyntaxError' is not defined` 的退化文案，现按正常异常报告；`nonlocal` 无绑定的两处站点文案对齐 CPython（`no binding for nonlocal 'x' found`，其中 NonlocalStmt 执行处原缺 `found` 尾缀）；`except SyntaxError` 可捕获
+- **绑定错误限定名（P2-55）**：绑定错误站点（缺位参 / 多位参 / 意外关键字 / 多值 / 缺 keyword-only / 仅位置传参）此前一律用函数原名，现按 CPython `__qualname__` 形态限定——方法为 `Pair.__init__()` / `Method.m()`（staticmethod / classmethod 同），嵌套函数为 `outer.<locals>.inner()`（解释器新增 `_current_function` 跟踪，def 执行时补 `<locals>` 链，类体内 def 仍由类创建钩子补 `Class.method`），顶层函数与 lambda（`<lambda>()`）维持原名
+- **`takes` 形态对齐（P2-55 连带）**：多位参超出时给定数一侧此前多带 `positional arguments` 短语（`but 3 positional arguments were given`），现按 CPython 区分——无 keyword-only 括注时为 `but N were given`（单数 `but 1 was given`），有括注时才带短语
+
+### 测试
+
+- 全量回归 **308/309** 通过（1 例既定边界跳过；新增 3 例：`type_class_repr` / `class_binding_errors` / `syntax_nonlocal_unbound`）；挂起套件 24/24 通过；lint_cases / lint_md / lint_gd 全部 0 问题；引擎 `SCRIPT ERROR` 保持 0；ObjectDB 零泄漏维持
+
 ## [0.8.0-alpha.2] - 2026-10-03
 
 本版实现 v0.8.0 第二阶段主任务 P1-9：异步（方案 C：协程对象模拟）。`async def` 调用返回协程对象（体不执行），`await` 以 yield from 委托机制同步驱动可等待对象至完成；`async for` / `async with` 分别走 `__aiter__`/`__anext__` 与 `__aenter__`/`__aexit__` 协议，`aiter` / `anext` 内建随本阶段并入（P1-32 暂缓清单相应划账）；脚本收尾对未启动协程发 never-awaited 警告。协程复用生成器栈切换机制，体内 sleep 挂起经语句重放续延，多协程交替驱动互不串扰。既定边界：`async def` 内 `yield` 报 SyntaxError（CPython 3.12 为合法 async generator）、推导式内 await 维持不支持、`import asyncio` 仍不支持。实现中发现并修复直驱 send/throw 的挂起传播缺口（裸生成器同样受益）

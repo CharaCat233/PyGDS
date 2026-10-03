@@ -446,6 +446,12 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_name_main.py](../../ci/cases/syntax_name_main.py)
 
+### syntax_nonlocal_unbound
+
+- 职责: `nonlocal` 无绑定错误文案 (CPython 编译期 / PyGDS 调用时运行期, 消息对齐)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_nonlocal_unbound.py](../../ci/cases/syntax_nonlocal_unbound.py)
+
 ### syntax_number_literal
 
 - 职责: 进制/下划线/科学计数法字面量
@@ -1040,6 +1046,12 @@
 
 bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + bytearray` 得 bytes 而 `bytearray + bytes` 得 bytearray, 可变子类覆写 repr 前缀与方法工厂, 只读方法 (upper/decode/hex 等) 全量继承且返回 bytearray
 
+### type_class_repr
+
+- 职责: 类对象 repr 与 str 同为 `<class 'X'>` 形态 (容器元素与格式化路径一并覆盖)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_class_repr.py](../../ci/cases/type_class_repr.py)
+
 ### type_complex
 
 - 职责: complex 类型与 `1j` 字面量的构造/算术/比较/字典键
@@ -1465,6 +1477,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: 类定义、类变量与类方法/静态方法
 - 比对: `same_output`
 - 源文件: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
+
+### class_binding_errors
+
+- 职责: 函数绑定错误文案的限定名 (方法 `Class.name`, 嵌套 `outer.<locals>.inner`, 顶层与 lambda 原名)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_binding_errors.py](../../ci/cases/class_binding_errors.py)
 
 ### class_context_protocol
 

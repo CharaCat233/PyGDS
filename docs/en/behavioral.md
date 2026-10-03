@@ -446,6 +446,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_name_main.py](../../ci/cases/syntax_name_main.py)
 
+### syntax_nonlocal_unbound
+
+- Duty: `nonlocal` without binding message (compile-time in CPython, runtime at call in PyGDS, text aligned)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_nonlocal_unbound.py](../../ci/cases/syntax_nonlocal_unbound.py)
+
 ### syntax_number_literal
 
 - Responsibility: Numeric literals: bases, underscores, scientific notation
@@ -1040,6 +1046,12 @@ Construction, operator semantics (e.g. floor-division rounding on negatives) and
 
 bytearray is unhashable (dict keys raise `unhashable type: 'bytearray'`); `bytes + bytearray` yields bytes while `bytearray + bytes` yields bytearray; the mutable subclass overrides the repr prefix and the type factory, inheriting all read-only methods (upper/decode/hex etc.) which return bytearray
 
+### type_class_repr
+
+- Duty: class-object repr matches str as `<class 'X'>` (covering container elements and formatting paths)
+- Compare: `same_output`
+- Source: [ci/cases/type_class_repr.py](../../ci/cases/type_class_repr.py)
+
 ### type_complex
 
 - Responsibility: complex type and `1j` literals — construction, arithmetic, comparison, dict keys
@@ -1465,6 +1477,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: Class definitions, class variables and class/static methods
 - Comparison: `same_output`
 - Source: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
+
+### class_binding_errors
+
+- Duty: qualified names in function binding-error messages (methods as `Class.name`, nested as `outer.<locals>.inner`, plain and lambda unqualified)
+- Compare: `same_output`
+- Source: [ci/cases/class_binding_errors.py](../../ci/cases/class_binding_errors.py)
 
 ### class_context_protocol
 

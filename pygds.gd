@@ -3654,6 +3654,9 @@ class DSLObject:
 			return o._dsl_str()
 		if o is DSLList or o is DSLTuple or o is DSLDict or o is DSLSet or o is DSLFrozenSet:
 			return o._dsl_str()
+		if o is DSLClass:
+			# 类对象 repr 与 str 同为 <class 'X'> 形态 (P2-53)
+			return o._dsl_str()
 		return "<" + o._type_name() + " object>"
 
 	## Python 风格的字符串 repr 转义 (静态方法) [br]
@@ -12792,6 +12795,10 @@ class DSLClass extends DSLObject:
 	var module_prefix: String = ""
 	
 	func _dsl_str(): return "<class '%s%s'>" % [module_prefix, name]
+
+	## 类对象 repr: 与 str 同为 <class 'X'> 形态 (P2-53, CPython 对齐)
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
 	
 	## 类调用 (实例化) [br]
 	## 先调用 __new__ 创建实例, 再调用 __init__ 初始化 [br]
@@ -14872,6 +14879,7 @@ class DSLFunctionGenerator extends DSLObject:
 		var caller_reason = ip._suspend_reason
 		var caller_expr_eval = ip._expr_evaluated
 		var caller_gen = ip._current_generator
+		var caller_function = ip._current_function
 		# 首次启动且带注入异常 (throw 到未启动生成器): 在函数体开头注入抛出语句
 		if not _started and _throw_pending:
 			_started = true
@@ -14891,6 +14899,7 @@ class DSLFunctionGenerator extends DSLObject:
 		ip._suspend_reason = Interpreter.SuspendReason.NONE
 		ip._expr_evaluated = false
 		ip._current_generator = self
+		ip._current_function = function
 		# 恢复执行函数体 (帧查找按 statements/env 身份匹配)
 		var res = ip.exec_block(body, local_env)
 		# 处理执行结果
@@ -14943,6 +14952,7 @@ class DSLFunctionGenerator extends DSLObject:
 			ip._suspend_reason = caller_reason
 		ip._expr_evaluated = caller_expr_eval
 		ip._current_generator = caller_gen
+		ip._current_function = caller_function
 		return step_result
 
 	## 每条语句开始时准备子表达式记忆 [br]
@@ -19178,6 +19188,8 @@ class Interpreter:
 	var _current_class: DSLClass = null
 	## 当前正在执行的方法的 self/cls (super() 定位)
 	var _current_self: DSLObject = null
+	## 当前正在执行的函数 (嵌套 def 的 __qualname__ 前缀用, P2-55)
+	var _current_function: DSLFunction = null
 	## 内置模块注册表, Key 为模块名
 	var modules: Dictionary[String, DSLModule] = {}
 	## random 模块的伪随机数生成器状态
@@ -20167,6 +20179,7 @@ class Interpreter:
 		_define_exception("ZeroDivisionError", "ArithmeticError")
 		_define_exception("StopIteration")
 		_define_exception("StopAsyncIteration")
+		_define_exception("SyntaxError")
 		_define_exception("GeneratorExit", "BaseException")
 		_define_exception("AssertionError")
 		_define_exception("EOFError")
@@ -23542,6 +23555,12 @@ class Interpreter:
 		if stmt is FunctionStmt:
 			var func_obj = DSLFunction.new(stmt, environment)
 			func_obj._cls_interp = self
+			# 嵌套 def 的限定名 (CPython __qualname__): outer.<locals>.inner 链 (P2-55)
+			# 类体内的 def 由类创建钩子补 Class.method 形态, 此处跳过
+			if not environment.is_class_scope and _current_function != null:
+				var ef = _current_function
+				var prefix = ef.qualname if ef.qualname != "" else ef.declaration.name
+				func_obj.qualname = prefix + ".<locals>." + stmt.name
 			environment.define(stmt.name, func_obj)
 			if func_obj is DSLFunction:
 				for p in stmt.params:
@@ -23605,7 +23624,7 @@ class Interpreter:
 						break
 					env = env.enclosing
 				if not (env and env != globals):
-					raise_exception("SyntaxError", "no binding for nonlocal '%s'" % name)
+					raise_exception("SyntaxError", "no binding for nonlocal '%s' found" % name)
 					return ExecResult.RAISE
 			return ExecResult.NORMAL
 		
@@ -26629,6 +26648,9 @@ class Interpreter:
 		var call_node = _current_call_node
 		function._cls_interp = self
 		var decl = function.declaration
+		# 绑定错误文案的显示名: 方法/嵌套函数用 __qualname__ 限定 (Class.method /
+		# outer.<locals>.inner), 顶层函数与 lambda 用原名 (P2-55, CPython 对齐)
+		var disp_name = function.qualname if function.qualname != "" else decl.name
 		var params = decl.params
 		var local = DSLEnvironment.new(report, function.closure)
 		local.function_locals = _get_local_names(decl)
@@ -26655,18 +26677,22 @@ class Interpreter:
 			max_pos += 1
 			
 		if not has_args and args.size() > max_pos:
-			var msg = "%s() takes " % decl.name
+			var msg = "%s() takes " % disp_name
 			if min_pos == max_pos:
 				msg += "%d positional argument" % max_pos if max_pos == 1 else "%d positional arguments" % max_pos
 			else:
 				msg += "from %d to %d positional arguments" % [min_pos, max_pos]
-			msg += " but %d positional argument" % args.size() if args.size() == 1 else " but %d positional arguments" % args.size()
+			# CPython 形态: 无 keyword-only 括注时给不出 "positional arguments" 短语,
+			# 动词单复数随个数 (but 1 was given / but N were given)
 			if kw_args.size() > 0:
+				msg += " but %d positional argument" % args.size() if args.size() == 1 else " but %d positional arguments" % args.size()
 				msg += " (and %d keyword-only argument" % kw_args.size()
 				if kw_args.size() > 1:
 					msg += "s"
 				msg += ")"
-			msg += " were given"
+				msg += " were given"
+			else:
+				msg += " but %d was given" % args.size() if args.size() == 1 else " but %d were given" % args.size()
 			raise_exception("TypeError", msg)
 			return null
 			
@@ -26677,7 +26703,7 @@ class Interpreter:
 			if p.is_kwargs:
 				break
 			if p.is_keyword_only:
-				raise_exception("TypeError", "%s() takes %d positional arguments but %d were given" % [decl.name, max_pos, args.size()])
+				raise_exception("TypeError", "%s() takes %d positional arguments but %d were given" % [disp_name, max_pos, args.size()])
 				return null
 			if p.is_args:
 				var rest = DSLTuple.new()
@@ -26713,7 +26739,7 @@ class Interpreter:
 							matched = true
 					else:
 						if local.values.has(p.name):
-							raise_exception("TypeError", "%s() got multiple values for argument '%s'" % [decl.name, p.name])
+							raise_exception("TypeError", "%s() got multiple values for argument '%s'" % [disp_name, p.name])
 							return null
 						local.define(p.name, kw_val)
 						matched = true
@@ -26727,7 +26753,7 @@ class Interpreter:
 					kwargs_dict._dsl_setitem(DSLString.new(kw_name), kw_val)
 					local.define(kwargs_param.name, kwargs_dict)
 				else:
-					raise_exception("TypeError", "%s() got an unexpected keyword argument '%s'" % [decl.name, kw_name])
+					raise_exception("TypeError", "%s() got an unexpected keyword argument '%s'" % [disp_name, kw_name])
 					return null
 					
 		if pos_only_kw_names.size() > 0:
@@ -26736,7 +26762,7 @@ class Interpreter:
 				if i > 0:
 					names_str += ", "
 				names_str += pos_only_kw_names[i]
-			raise_exception("TypeError", "%s() got some positional-only arguments passed as keyword arguments: '%s'" % [decl.name, names_str])
+			raise_exception("TypeError", "%s() got some positional-only arguments passed as keyword arguments: '%s'" % [disp_name, names_str])
 			return null
 			
 		var missing_pos = []
@@ -26766,7 +26792,7 @@ class Interpreter:
 					missing_pos.append(p.name)
 					
 		if missing_pos.size() > 0:
-			var msg = "%s() missing %d required positional argument" % [decl.name, missing_pos.size()]
+			var msg = "%s() missing %d required positional argument" % [disp_name, missing_pos.size()]
 			if missing_pos.size() > 1:
 				msg += "s"
 			msg += ": "
@@ -26781,7 +26807,7 @@ class Interpreter:
 			return null
 			
 		if missing_kw.size() > 0:
-			var msg = "%s() missing %d required keyword-only argument" % [decl.name, missing_kw.size()]
+			var msg = "%s() missing %d required keyword-only argument" % [disp_name, missing_kw.size()]
 			if missing_kw.size() > 1:
 				msg += "s"
 			msg += ": "
@@ -26885,7 +26911,9 @@ class Interpreter:
 		# 记录当前方法上下文 (super() 定位), 嵌套调用时保存并恢复
 		var saved_class = _current_class
 		var saved_self = _current_self
+		var saved_function = _current_function
 		_current_class = function._defining_class
+		_current_function = function
 		# 普通方法 / 类方法 / property 的 getter / setter / deleter 首参为 self, 供零参 super() 定位
 		# 静态方法 (2) 与顶层函数没有 self
 		if args.size() > 0 and function.method_type != 2:
@@ -26905,6 +26933,7 @@ class Interpreter:
 		environment = prev_env
 		_current_class = saved_class
 		_current_self = saved_self
+		_current_function = saved_function
 		
 		if res == ExecResult.SUSPENDED:
 			# 压入函数调用栈帧
