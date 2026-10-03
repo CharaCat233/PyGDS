@@ -190,10 +190,7 @@ func _run_case(case_name: String, python_cmd: String) -> void:
 	var line_check: bool = meta.get("lines", "") == "same"
 	var verdict := _judge(mode, cp_errored, cp_error, pg_errored, pg_error, cp_stdout, pg_stdout, line_check, parsed.get("stderr", ""))
 	if verdict["ok"]:
-		if mode == "diverge":
-			print("  [PASS] %s (diverge)" % case_name)
-		else:
-			print("  [PASS] %s" % case_name)
+		# PASS 用例不逐条输出 (常态输出只保留失败条目与汇总)
 		passed_count += 1
 	else:
 		_fail(case_name, verdict["kind"], verdict["detail"])

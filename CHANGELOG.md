@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.7.0-alpha.10] - 2026-10-03
+
+本版修复 dict 视图集合运算触发引擎 `SCRIPT ERROR` 的日志噪音（P1-69 连带发现），并精简双端运行器的常态输出
+
+### 修复
+
+- **dict 视图集合运算的引擎日志噪音（P1-69 连带发现）**：`_view_set_op` 以 `has_method("_view_elements")` 识别可集合化的右操作数，而基类 `_view_elements` 钩子使该判定对所有 DSL 对象恒真——`ks & 1` 等非法右参会以 `nil` 进入 `_set_from_elements` 触发引擎 `SCRIPT ERROR`（判定结果仍正确，纯日志噪音）；现改用显式 `_is_setlike_view()` 谓词（keys / items 视图为 true，基类与 values 视图为 false）
+
+### 变更
+
+- **运行器输出精简**：cases 用例的 PASS 不再逐条输出，常态输出仅保留失败条目与最终汇总（挂起套件 `demo/test_suspend_all.gd` 的逐测试 PASS 输出不变）
+
+### 测试
+
+- 全量回归 **290/290** 通过；挂起套件 24/24 通过；lint_cases / lint_md / lint_gd 全部 0 问题；ObjectDB 零泄漏维持
+
 ## [0.7.0-alpha.9] - 2026-10-02
 
 本版完成 alpha.8 交接的三项任务：P2-50（深递归 `Stack underflow` 引擎日志噪音）、P2-51（退出时 ObjectDB 实例泄漏）与文案对齐专项（P2-2 / P2-3 解禁 + 降级断言升级），并按「务实全集」范围修复 P1-32（内建函数缺口）与 P1-56（复数字面量解析期拒绝）。测量先行定位了 P2-50 的真实机理（引擎调用栈记账上限而非回卷方式），P2-51 修复过程中发现并修复 GDScript `_init` 链式调用缺口，另新发现 P2-52（引擎 VM 硬上限的静默截断）记录入清单。`eval` / `exec` / `compile`、`globals` / `locals` / `vars`、`aiter` / `anext` 维持暂缓（分别与挂起重放机制、异步既定边界冲突，理由见已知问题清单）

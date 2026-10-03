@@ -2992,7 +2992,7 @@ class DSLObject:
 		var other_set: DSLSet = null
 		if other_unwrapped is DSLSet:
 			other_set = other_unwrapped
-		elif other_unwrapped != null and other_unwrapped.has_method("_view_elements"):
+		elif other_unwrapped != null and other_unwrapped._is_setlike_view():
 			other_set = _set_from_elements(other_unwrapped._view_elements())
 		if other_set == null:
 			_arithmetic_type_error(op, other)
@@ -3012,6 +3012,12 @@ class DSLObject:
 	## 视图元素集: 非视图对象返回 null (dict 视图类覆写, P1-69)
 	func _view_elements():
 		return null
+
+	## 是否为支持集合运算的 set-like 视图 (keys/items 为 true; [br]
+	## 基类与 values 视图为 false —— values 非 set-like, 且基类钩子返回 null, [br]
+	## 不能以 has_method 区分, 否则任意右参都会以 nil 进入 _set_from_elements)
+	func _is_setlike_view() -> bool:
+		return false
 
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var target = args[1] if args.size() > 1 else null
@@ -8678,6 +8684,10 @@ class DSLDictKeys extends DSLObject:
 			out.append(it.next())
 		return out
 
+	## keys / items 视图 set-like (P1-69)
+	func _is_setlike_view() -> bool:
+		return true
+
 	func magic_and(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "&")
 
@@ -8874,6 +8884,10 @@ class DSLDictItems extends DSLObject:
 		while it.has_next():
 			out.append(it.next())
 		return out
+
+	## keys / items 视图 set-like (P1-69)
+	func _is_setlike_view() -> bool:
+		return true
 
 	func magic_and(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return _view_set_op(_view_elements(), args[1] if args.size() > 1 else null, "&")
