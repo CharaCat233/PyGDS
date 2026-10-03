@@ -1277,6 +1277,69 @@ except KeyError as e2:
 
 因果值不是异常实例（或异常类 / `None`）时报 `TypeError: exception causes must derive from BaseException`。注意：隐式 `__context__` 链（捕获后自动串联的「During handling...」链）与未捕获输出的链式回溯打印未实现，`__cause__` 字段本身可用
 
+### 异步（async / await，方案 C 协程对象模拟）
+
+`async def` 调用返回**协程对象**（函数体不执行，repr 为 `<coroutine object 限定名 at 0x...>` 形态），经同步方式驱动，无事件循环。协程的驱动协议与生成器同形：`send(value)` 驱动至完成并以 `StopIteration.value` 交付返回值，`throw(exc)` 在挂起位置注入异常，`close()` 注入 `GeneratorExit`（未启动则静默结束）。协程特有文案按 CPython 对齐：耗尽后重用报 `RuntimeError: cannot reuse already awaited coroutine`，首发传非 None 报 `TypeError: can't send non-None value to a just-started coroutine`
+
+`await x` 仅在 async 函数体内合法（否则解析期报 CPython 同文案 SyntaxError）：x 为协程时同步驱动至完成并取其返回值；x 实现 `__await__` 时委托驱动（产出值经 `send` 外抛，return 值为 await 结果）；其余报 `TypeError: object X can't be used in 'await' expression`（裸生成器不可 await，CPython 3.12 同），`__await__` 返回非迭代器报 `TypeError: __await__() returned non-iterator of type 'X'`
+
+`async for` 要求 `__aiter__` / `__anext__` 协议（每步调用 `__anext__` 得协程并 await 驱动，`StopAsyncIteration` 结束循环）；`async with` 要求 `__aenter__` / `__aexit__` 协议（调用结果经 await 驱动，退出真值抑制在途异常），两者在 async 函数体之外报解析期错误。`aiter(x)` 调用 `__aiter__`；`anext(it[, default])` 无默认值直接返回 `__anext__()` 协程，带默认值时把 `StopAsyncIteration` 转为默认值
+
+```python
+async def add(a, b):
+    return a + b
+
+
+async def outer():
+    x = await add(1, 2)
+    y = await add(x, 10)
+    return y
+
+
+coro = outer()
+try:
+    coro.send(None)
+except StopIteration as e:
+    print(e.value)        # 13
+
+coro2 = outer()
+print(coro2)              # <coroutine object outer at 0x...>
+coro2.close()             # 未启动即结束, 收尾不再发警告
+
+
+class AIter:
+    def __init__(self, n):
+        self.n = n
+        self.i = 0
+    def __aiter__(self):
+        return self
+    async def __anext__(self):
+        if self.i >= self.n:
+            raise StopAsyncIteration
+        self.i += 1
+        return self.i
+
+
+async def afor():
+    out = []
+    async for x in AIter(3):
+        out.append(x)
+    return out
+
+
+coro = afor()
+try:
+    coro.send(None)
+except StopIteration as e:
+    print(e.value)        # [1, 2, 3]
+```
+
+> **与挂起系统交互**：协程体内 / `__anext__` / `__aenter__` / `__aexit__` 内的 `time.sleep`（及主动挂起 API）均可正常挂起推进，重放不重复执行副作用，多个协程交替驱动互不串扰
+
+> **never-awaited 警告**：脚本收尾时对创建后从未启动的协程经 print 通道发 `RuntimeWarning: coroutine 'x' was never awaited`（CPython 在 GC 时经 stderr 发，通道与时点为既定差异）；已启动的协程不发
+
+> **既定边界**：`async def` 体内 `yield` 报 `SyntaxError`（CPython 3.12 为合法 async generator，PyGDS 拒绝）；推导式内 await 维持不支持；`import asyncio` 不可用；`asyncio.run` 等事件循环入口不存在，异步场景继续以挂起系统替代
+
 ### 自定义类与魔法方法
 
 ```python

@@ -38,6 +38,18 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_assign_aug.py](../../ci/cases/syntax_assign_aug.py)
 
+### syntax_async_await_chain
+
+- 职责: `await` 求值语义 (协程嵌套同步驱动, 用户 `__await__` 委托, 不可等待与非法迭代器文案)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_async_await_chain.py](../../ci/cases/syntax_async_await_chain.py)
+
+### syntax_async_def
+
+- 职责: `async def` 协程对象生命周期 (创建不执行, send/throw/close, 耗尽重用与首发非 None 文案)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_async_def.py](../../ci/cases/syntax_async_def.py)
+
 ### syntax_async_for_outside
 
 - 职责: 顶层 `async for` 触发解析期错误
@@ -50,6 +62,12 @@
 - 比对: `same_error`
 - 源文件: [ci/cases/syntax_async_name_reserved.py](../../ci/cases/syntax_async_name_reserved.py)
 
+### syntax_async_never_awaited
+
+- 职责: never-awaited 警告 (未启动协程, CPython GC 时点 / PyGDS 收尾时点为既定差异)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_async_never_awaited.py](../../ci/cases/syntax_async_never_awaited.py)
+
 ### syntax_async_with_outside
 
 - 职责: 顶层 `async with` 触发解析期错误
@@ -61,6 +79,12 @@
 - 职责: 增强赋值运算符求值
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_augassign.py](../../ci/cases/syntax_augassign.py)
+
+### syntax_async_yield
+
+- 职责: `async def` 体内 yield 为 PyGDS 既定边界 (CPython 3.12 为合法 async generator)
+- 比对: `same_error` (跳过: 单边报错无法双端判定, 见用例头注)
+- 源文件: [ci/cases/syntax_async_yield.py](../../ci/cases/syntax_async_yield.py)
 
 ### syntax_await_nonasync_fn
 
@@ -1430,6 +1454,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 
 类定义、继承与 MRO、`super()`、property/描述符、用户类实现的魔法方法协议（`__getitem__`/`__hash__`/`__int__` 等）。用户类实现协议测的是类系统本身，与内建类型行为区分。
 
+### class_async_protocol
+
+- 职责: 用户类异步协议 (`__aiter__`/`__anext__`/`__aenter__`/`__aexit__`, async for/with 驱动) 与 `aiter`/`anext` 内建
+- 比对: `same_output`
+- 源文件: [ci/cases/class_async_protocol.py](../../ci/cases/class_async_protocol.py)
+
 ### class_basic
 
 - 职责: 类定义、类变量与类方法/静态方法
@@ -1785,6 +1815,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 ## 挂起系统（suspend_*）
 
 PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的语句重放语义）。CPython 侧以阻塞式 sleep 为行为参照，双端最终产出一致的完整输出。
+
+### suspend_async_replay
+
+- 职责: 协程体内挂起的重放 (await 链 / async for / async with 内 sleep, 多协程交替驱动)
+- 比对: `same_output`
+- 源文件: [ci/cases/suspend_async_replay.py](../../ci/cases/suspend_async_replay.py)
 
 ### suspend_call_replay
 

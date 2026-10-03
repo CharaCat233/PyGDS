@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.2] - 2026-10-03
+
+本版实现 v0.8.0 第二阶段主任务 P1-9：异步（方案 C：协程对象模拟）。`async def` 调用返回协程对象（体不执行），`await` 以 yield from 委托机制同步驱动可等待对象至完成；`async for` / `async with` 分别走 `__aiter__`/`__anext__` 与 `__aenter__`/`__aexit__` 协议，`aiter` / `anext` 内建随本阶段并入（P1-32 暂缓清单相应划账）；脚本收尾对未启动协程发 never-awaited 警告。协程复用生成器栈切换机制，体内 sleep 挂起经语句重放续延，多协程交替驱动互不串扰。既定边界：`async def` 内 `yield` 报 SyntaxError（CPython 3.12 为合法 async generator）、推导式内 await 维持不支持、`import asyncio` 仍不支持。实现中发现并修复直驱 send/throw 的挂起传播缺口（裸生成器同样受益）
+
+### 新增
+
+- **async def 协程对象（P1-9）**：调用返回协程对象（复用生成器栈切换机制），repr 为 `<coroutine object 限定名 at 0x...>`（方法协程带类名限定，地址经运行器归一化对齐）；`send` 驱动至完成并以 `StopIteration.value` 交付返回值，`throw` 按生成器语义注入（体内捕获并 return 后以 `StopIteration` 收尾），`close` 注入 `GeneratorExit`（未启动则静默结束）；协程特有文案按 CPython 对齐：耗尽后重用报 `RuntimeError: cannot reuse already awaited coroutine`、首发非 None 报 `TypeError: can't send non-None value to a just-started coroutine`、不暴露 `__next__`
+- **await 求值**：以 yield from 委托机制驱动（与 `yield from` 共用推进核心，状态按 AwaitExpr 节点保存，挂起重放按其续延）；协程嵌套同步驱动，用户 `__await__` 的产出外抛、return 值为 await 结果；不可等待报 `TypeError: object X can't be used in 'await' expression`，`__await__` 非迭代器报 `TypeError: __await__() returned non-iterator of type 'X'`（裸生成器不可 await，CPython 3.12 同）
+- **async for / async with**：`async for` 走 `__aiter__`/`__anext__` 协议（每步调用 `__anext__` 得协程并 await 驱动，`StopAsyncIteration` 结束循环），`async with` 走 `__aenter__`/`__aexit__` 协议（调用结果经 await 驱动，退出真值抑制在途异常，多管理器嵌套展开与 P1-7 同语义）；协议缺失文案按 CPython 3.12 对齐（`'async for' requires an object with __aiter__ method, got X` / `'async for' received an object from __aiter__ that does not implement __anext__: X` / asynchronous context manager protocol 及退出侧 missed 后缀 / 非可等待结果 `received an object from __aenter__ that does not implement __await__: X`）；两者仅限 async 函数体内（解析期校验，模块级或同步函数内报 CPython 同文案 SyntaxError）
+- **aiter / anext 内建（P1-32 暂缓清单划账）**：`aiter(x)` 调用 `__aiter__`（缺失报 `'X' object is not an async iterable`）；`anext(it[, default])` 无默认值直接返回 `__anext__()` 协程（CPython 同形），带默认值返回惰性包装（await 时才发起调用，`StopAsyncIteration` 转为默认值，repr 为 `<anext_awaitable object at 0x...>`），缺失报 `'X' object is not an async iterator`
+- **never-awaited 警告**：脚本收尾（正常完成或致命错误）对创建后从未启动的协程经 print 通道发 `RuntimeWarning: coroutine '限定名' was never awaited`（CPython 在 GC 时经 stderr 发，通道与时点均为既定差异）；已启动协程不发；memo 丢弃的重放副本不登记不发
+- **StopAsyncIteration 异常类**：注册为 Exception 子类（async for 终止与用户抛捕均可用）
+
+### 修复
+
+- **直驱 send/throw 的挂起传播缺口（实现中发现）**：`g.send()` / `g.throw()` 驱动的体发起程序挂起（sleep）时，`_dispatch_call` 因 `_needs_replay` 未置位而返回 None，消费语句被误判完成（pc 越过不再重放），挂起的体无人续驱、后续语句在挂起态下求值错乱；补 `_propagate_step_suspend`（与迭代器消费路径的 `_propagate_suspend` 同语义），直驱路径挂起同样交语句重放接管（裸生成器与协程一并受益；`close` 的 P2-37 既定行序差异不受影响）
+
+### 测试
+
+- 全量回归 **305/306** 通过（新增 6 例：`syntax_async_def` / `syntax_async_await_chain` / `class_async_protocol` / `suspend_async_replay` / `syntax_async_never_awaited` 五例 `same_output` 与 `syntax_async_yield` 既定边界跳过例）；挂起套件 24/24 通过；lint_cases / lint_md / lint_gd 全部 0 问题；引擎 `SCRIPT ERROR` 保持 0；ObjectDB 零泄漏维持
+
 ## [0.8.0-alpha.1] - 2026-10-03
 
 本版实现 v0.8.0 第一阶段主任务 P1-7：`with` 语句与上下文管理器协议。词法新增 `WITH` 保留字，解析支持单管理器与逗号分隔多管理器（语义等价嵌套 with）及 `as` 目标（复用赋值目标机制），执行器按 try/finally 脱糖实现进入 / 体 / 逆序退出三段推进。挂起重放经 resume_info 进入标记保证体挂起后不重复执行 `__enter__`，退出中挂起按进度续延并与 P0-22 在途异常暂存配合；文件对象补齐协议。实现中发现并修复 `_walk_yield_stmt` 未覆盖 WithStmt 导致的生成器标记缺口。既定形态：`__exit__` 的 tb 参数恒传 `None`（PyGDS 无 traceback 对象，CPython 传真实 traceback）。括号化多管理器（3.10 语法）与 `contextlib` 随后评估

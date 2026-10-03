@@ -1279,6 +1279,69 @@ except KeyError as e2:
 
 A cause that is not an exception instance (or exception class / `None`) raises `TypeError: exception causes must derive from BaseException`. Note: the implicit `__context__` chain (the automatic "During handling..." chain) and chained traceback printing for uncaught errors are not implemented; the `__cause__` field itself is available
 
+### Asynchrony (async / await, option-C coroutine emulation)
+
+Calling an `async def` function returns a **coroutine object** (the body is not executed; repr is `<coroutine object qualname at 0x...>`). Coroutines are driven synchronously, without an event loop. The driving protocol mirrors generators: `send(value)` drives to completion and delivers the return value as `StopIteration.value`, `throw(exc)` injects at the suspension point, and `close()` injects `GeneratorExit` (silently finishing unstarted coroutines). Coroutine-specific messages match CPython: reusing an exhausted coroutine raises `RuntimeError: cannot reuse already awaited coroutine`, and a non-None first send raises `TypeError: can't send non-None value to a just-started coroutine`
+
+`await x` is only legal inside async function bodies (otherwise a parse-time SyntaxError matching CPython): for a coroutine, x is driven to completion and its return value becomes the await result; for an object implementing `__await__`, the await delegates (yielded values surface through `send`, the return value is the result); anything else raises `TypeError: object X can't be used in 'await' expression` (bare generators are not awaitable, same as CPython 3.12), and a non-iterator `__await__` result raises `TypeError: __await__() returned non-iterator of type 'X'`
+
+`async for` requires the `__aiter__` / `__anext__` protocol (each step calls `__anext__`, awaits the resulting coroutine, and `StopAsyncIteration` ends the loop); `async with` requires `__aenter__` / `__aexit__` (results are awaited, a truthy exit suppresses the in-flight exception); both raise parse errors outside async function bodies. `aiter(x)` calls `__aiter__`; `anext(it[, default])` returns the `__anext__()` coroutine directly without a default, or lazily converts `StopAsyncIteration` to the default with one
+
+```python
+async def add(a, b):
+    return a + b
+
+
+async def outer():
+    x = await add(1, 2)
+    y = await add(x, 10)
+    return y
+
+
+coro = outer()
+try:
+    coro.send(None)
+except StopIteration as e:
+    print(e.value)        # 13
+
+coro2 = outer()
+print(coro2)              # <coroutine object outer at 0x...>
+coro2.close()             # ends unstarted; no never-awaited warning afterwards
+
+
+class AIter:
+    def __init__(self, n):
+        self.n = n
+        self.i = 0
+    def __aiter__(self):
+        return self
+    async def __anext__(self):
+        if self.i >= self.n:
+            raise StopAsyncIteration
+        self.i += 1
+        return self.i
+
+
+async def afor():
+    out = []
+    async for x in AIter(3):
+        out.append(x)
+    return out
+
+
+coro = afor()
+try:
+    coro.send(None)
+except StopIteration as e:
+    print(e.value)        # [1, 2, 3]
+```
+
+> **Interaction with the suspension system**: `time.sleep` (and active suspension APIs) inside coroutine bodies / `__anext__` / `__aenter__` / `__aexit__` suspend and resume normally, replays never repeat side effects, and interleaved driving of several coroutines stays independent
+
+> **never-awaited warning**: at script end, coroutines created but never started get `RuntimeWarning: coroutine 'x' was never awaited` on the print channel (CPython emits at GC time on stderr — an established difference in channel and timing); started coroutines are never reported
+
+> **Established boundaries**: `yield` inside an `async def` body raises `SyntaxError` (CPython 3.12 allows async generators; PyGDS rejects it); await inside comprehensions remains unsupported; `import asyncio` is unavailable; no event-loop entries such as `asyncio.run` exist, async scenarios are still replaced by the suspension system
+
 ### Custom Classes and Magic Methods
 
 ```python

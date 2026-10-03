@@ -146,7 +146,7 @@ dsl.run()
 | `dict` 视图 | ✅ 完整 | `keys()` / `values()` 可迭代且有 `len` 与 `in` |
 | `match`/`case` 模式匹配 | ✅ 完整 | 软关键字；字面量 / 捕获 / 通配 / 序列（含星号与无括号序列）/ 映射（含 `**rest`）/ 类（`__match_args__` 与内建类型单位置绑定）/ 或 / `as` / 守卫 / 嵌套全部支持，编译期检查与 CPython 对齐 |
 | 多继承 | ✅ 完整 | `class C(A, B):` 沿 C3 线性化（MRO）查找，`__mro__` / `mro()` 可查看；MRO 冲突、重复基类与布局冲突按 CPython 报 `TypeError`；`super()`（零参与双参）沿 MRO 协作，菱形继承的 `__init__` 链逐类恰好一次 |
-| `async`/`await` | ❌ 不支持 | 仅作为保留关键字识别：`await` 的位置与 `async for` / `async with` / `async` 误用会按 CPython 报对应 `SyntaxError` |
+| `async`/`await` | ✅ 务实子集 | 方案 C 协程对象模拟（由同步方式驱动，无事件循环）：`async def` 调用返回协程对象（send/throw/close，repr 带限定名），`await coro` 同步驱动并取返回值，用户 `__await__` 委托；`async for` / `async with` 走 `__aiter__`/`__anext__`/`__aenter__`/`__aexit__` 协议；`aiter` / `anext` 内建可用；未启动协程收尾发 never-awaited 警告。既定边界：`async def` 内 `yield` 报 SyntaxError（CPython 3.12 为 async generator）、推导式内 await 不支持、`import asyncio` 不可用，异步场景继续以挂起系统替代 |
 | `raise ... from` 异常链 | ✅ 完整 | `__cause__` 与 `__suppress_context__` 字段可读，`from None` 置抑制标记，裸异常类与 `from` 异常类自动无参实例化；隐式 `__context__` 链与未捕获输出的链式回溯打印未实现 |
 | `__name__` / `__file__` | ✅ 完整 | `__name__` 恒为 `"__main__"`（可重新赋值），入口守卫可用；`__file__` 默认空串，宿主经 `set_script_path()` 在 `run()` 前注入 |
 | 泛型类型参数与 `type` 别名 | ✅ 语法接受 | `class C[T]` / `def f[T](x)` / `type X = int`（PEP 695）按语法接受并忽略类型语义；别名名不绑定到值 |
@@ -187,13 +187,12 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 
 ### P1 — 明确报错或功能缺失
 
-下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**；P1-33（`raise ... from` 异常链）、P1-34（任意装饰器与带参装饰器）、P1-35（`__name__`）、P1-39（泛型类型参数语法）已在 v0.6.0-alpha.3 修复；P1-40（f-string 同引号嵌套，PEP 701）已在 v0.6.0-alpha.4 修复；P1-42（类的多继承）已在 v0.6.0-alpha.5 修复；P0-14（`and` / `or` 短路）、P0-15（增强赋值静默终止）、P0-16（`del` 括号元组目标）、P1-36（`...` 字面量）、P1-37（`collections.namedtuple`）、P1-44（反射运算符）、P1-45（类体作用域）、P1-46（property 内 `super()`）、P1-47（用户自定义描述符）、P1-48（`min` / `max` 的 `default`）、P1-49（`__getitem__` 旧式迭代）已在 v0.6.0-alpha.6 修复；P1-7（`with` 语句与上下文管理器协议，含挂起重放的进入标记）已在 v0.8.0-alpha.1 实现，`contextlib` 与括号化多管理器随后评估，详见 `CHANGELOG` 的对应版本节
+下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**；P1-33（`raise ... from` 异常链）、P1-34（任意装饰器与带参装饰器）、P1-35（`__name__`）、P1-39（泛型类型参数语法）已在 v0.6.0-alpha.3 修复；P1-40（f-string 同引号嵌套，PEP 701）已在 v0.6.0-alpha.4 修复；P1-42（类的多继承）已在 v0.6.0-alpha.5 修复；P0-14（`and` / `or` 短路）、P0-15（增强赋值静默终止）、P0-16（`del` 括号元组目标）、P1-36（`...` 字面量）、P1-37（`collections.namedtuple`）、P1-44（反射运算符）、P1-45（类体作用域）、P1-46（property 内 `super()`）、P1-47（用户自定义描述符）、P1-48（`min` / `max` 的 `default`）、P1-49（`__getitem__` 旧式迭代）已在 v0.6.0-alpha.6 修复；P1-7（`with` 语句与上下文管理器协议，含挂起重放的进入标记）已在 v0.8.0-alpha.1 实现，`contextlib` 与括号化多管理器随后评估；P1-9（`async` / `await`，方案 C 协程对象模拟，含 `aiter` / `anext` 内建）已在 v0.8.0-alpha.2 实现并附既定边界（`async def` 内 `yield` 拒绝、推导式内 await 不支持、`import asyncio` 不可用），详见 `CHANGELOG` 的对应版本节
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
 | P1-8 | 用户文件 `import` 不支持 | 经评估暂缓：当前嵌入式单文件场景内无实现价值（非难度问题）；共享代码请使用 `set_preset_script` 与 API 注册。仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time / sys） |
-| P1-9 | `async` / `await` 不支持 | v0.8.0 排期（第二阶段主任务，方案 C：协程对象模拟——`await coro` 以 `yield from` 语义同步驱动；`async with` 依赖的 P1-7 已落地；`import asyncio` 仍不支持，异步场景以挂起系统替代）。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
-| P1-32 | 内建函数缺口残余 | `eval` / `exec` / `compile`（动态求值，与挂起重放机制纠缠）、`globals` / `locals` / `vars`（作用域字典，与单解释器模型冲突）暂不投入；`aiter` / `anext` 随 v0.8.0 异步任务实现 |
+| P1-32 | 内建函数缺口残余 | `eval` / `exec` / `compile`（动态求值，与挂起重放机制纠缠）、`globals` / `locals` / `vars`（作用域字典，与单解释器模型冲突）暂不投入；`aiter` / `anext` 已随 v0.8.0-alpha.2 的异步任务实现 |
 | P1-38 | `metaclass=` 参数不支持 | 类头的元类关键字参数在解析期报语法错误（CPython 语法合法），暂不投入 |
 | P1-41 | `except*` 异常组与 `ExceptionGroup` | 需独立的异常组子系统（拆分、子组匹配与传播），无 asyncio / TaskGroup 生态，暂不投入；书写 `except*` 明确报 `SyntaxError` |
 

@@ -38,6 +38,18 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_assign_aug.py](../../ci/cases/syntax_assign_aug.py)
 
+### syntax_async_await_chain
+
+- Duty: `await` evaluation semantics (nested synchronous coroutine driving, user `__await__` delegation, non-awaitable and invalid-iterator messages)
+- Compare: `same_output`
+- Source: [ci/cases/syntax_async_await_chain.py](../../ci/cases/syntax_async_await_chain.py)
+
+### syntax_async_def
+
+- Duty: `async def` coroutine-object lifecycle (created unstarted, send/throw/close, reuse and non-None first-send messages)
+- Compare: `same_output`
+- Source: [ci/cases/syntax_async_def.py](../../ci/cases/syntax_async_def.py)
+
 ### syntax_async_for_outside
 
 - Responsibility: Top-level `async for` raises a parse error
@@ -50,6 +62,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_error`
 - Source: [ci/cases/syntax_async_name_reserved.py](../../ci/cases/syntax_async_name_reserved.py)
 
+### syntax_async_never_awaited
+
+- Duty: never-awaited warning (unstarted coroutines; CPython emits at GC, PyGDS at script end — an established shape difference)
+- Compare: `same_output`
+- Source: [ci/cases/syntax_async_never_awaited.py](../../ci/cases/syntax_async_never_awaited.py)
+
 ### syntax_async_with_outside
 
 - Responsibility: Top-level `async with` raises a parse error
@@ -61,6 +79,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Responsibility: Augmented assignment operator evaluation
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_augassign.py](../../ci/cases/syntax_augassign.py)
+
+### syntax_async_yield
+
+- Duty: `yield` inside `async def` is a PyGDS boundary (CPython 3.12 allows it as an async generator)
+- Compare: `same_error` (skipped: one-sided error cannot be dual-judged, see the case header)
+- Source: [ci/cases/syntax_async_yield.py](../../ci/cases/syntax_async_yield.py)
 
 ### syntax_await_nonasync_fn
 
@@ -1430,6 +1454,12 @@ Equality between two OrderedDicts is key-order sensitive, while comparison again
 
 Class definitions, inheritance and the MRO, `super()`, property/descriptors, and magic-method protocols implemented on user classes (`__getitem__`/`__hash__`/`__int__` etc.). Protocols implemented by user classes test the class system itself, distinct from built-in type behavior.
 
+### class_async_protocol
+
+- Duty: user-class async protocols (`__aiter__`/`__anext__`/`__aenter__`/`__aexit__`, async for/with driving) and the `aiter`/`anext` builtins
+- Compare: `same_output`
+- Source: [ci/cases/class_async_protocol.py](../../ci/cases/class_async_protocol.py)
+
 ### class_basic
 
 - Responsibility: Class definitions, class variables and class/static methods
@@ -1785,6 +1815,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 ## Suspension System (`suspend_*`)
 
 PyGDS-specific suspend/resume mechanics (statement replay after a `time.sleep`-triggered SLEEPING suspend). The CPython side serves as the behavioral reference with blocking sleeps; both ends must produce the same complete output.
+
+### suspend_async_replay
+
+- Duty: suspension and replay inside coroutine bodies (sleep in await chains / async for / async with, interleaved multi-coroutine driving)
+- Compare: `same_output`
+- Source: [ci/cases/suspend_async_replay.py](../../ci/cases/suspend_async_replay.py)
 
 ### suspend_call_replay
 

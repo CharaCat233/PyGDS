@@ -1964,6 +1964,8 @@ class ForStmt extends Stmt:
 	var targets: Array
 	## 目标是否为元组形态 (多目标或尾随逗号): 迭代元素须解包一层再绑定
 	var tuple_target: bool = false
+	## 是否为 async for (P1-9: 迭代走 __aiter__ / __anext__ 协议)
+	var is_async: bool = false
 	## 迭代对象表达式
 	var iterable: Expr
 	## 循环体语句列表
@@ -1993,6 +1995,8 @@ class FunctionStmt extends Stmt:
 	var method_type: int = 0
 	## 是否为生成器函数 (函数体含 yield, 定义时由解析器检测)
 	var is_generator: bool = false
+	## 是否为 async def (P1-9: 调用返回协程对象, 体不执行; 与 is_generator 互斥)
+	var is_async: bool = false
 	## 任意装饰器表达式数组 (源码顺序, 最外层在前; @classmethod 等内建形式不存于此, 走 method_type)
 	var decorators: Array = []
 	## 函数体局部名集合 (惰性收集: 名 -> true)
@@ -2314,6 +2318,8 @@ class WithStmt extends Stmt:
 	var items: Array
 	## with 体语句列表
 	var body: Array
+	## 是否为 async with (P1-9: 协议走 __aenter__ / __aexit__, 调用结果经 await 驱动)
+	var is_async: bool = false
 	## 构造 with 语句 [br]
 	## [param p_items] 管理器项数组 [br]
 	## [param p_body] 体语句列表
@@ -15020,6 +15026,18 @@ class DSLFunctionGenerator extends DSLObject:
 			sv = _none()
 		return sv
 
+	## 步内程序挂起的解释器传播 (直驱路径 send/throw 共用, P1-9) [br]
+	## 与迭代器消费路径的 _propagate_suspend 同一语义: 置挂起与重放标记, [br]
+	## 使消费语句整体挂起并由重放机制接管续跑 (生成器 / 协程均适用); [br]
+	## 缺失时直驱调用以 None 收尾, 语句被误判完成, 后续语句在挂起态下求值错乱
+	func _propagate_step_suspend() -> void:
+		if interp == null:
+			return
+		interp._needs_replay = true
+		interp._suspended = true
+		interp._suspend_reason = Interpreter.SuspendReason.SLEEPING
+		interp._is_waiting = false
+
 	## 生成器方法: send(value) [br]
 	## 恢复执行并把 value 注入为挂起 yield 表达式的结果 (next() 注入 None) [br]
 	## [param args] [value] [br]
@@ -15044,8 +15062,9 @@ class DSLFunctionGenerator extends DSLObject:
 		if res == 3:
 			return null
 		if res == 4:
-			# 步内发起程序挂起 (sleep 等): 原样交上层传播, 不得伪造 StopIteration
+			# 步内发起程序挂起 (sleep 等): 置重放标记交语句重放机制接管, 不得伪造 StopIteration
 			# (否则在途异常被 LastException 改写, 挂起恢复轮无法匹配原异常)
+			_propagate_step_suspend()
 			return null
 		interp.raise_stop_iteration_value(_result_value)
 		return null
@@ -15071,7 +15090,8 @@ class DSLFunctionGenerator extends DSLObject:
 		if res == 3:
 			return null
 		if res == 4:
-			# 步内发起程序挂起: 原样交上层传播, 不得伪造 StopIteration (同 send)
+			# 步内发起程序挂起: 置重放标记交语句重放机制接管, 不得伪造 StopIteration (同 send)
+			_propagate_step_suspend()
 			return null
 		interp.raise_stop_iteration_value(_result_value)
 		return null
@@ -15155,6 +15175,90 @@ class DSLFunctionGenerator extends DSLObject:
 				return first
 		interp.raise_exception("TypeError", "thrown value is not an exception")
 		return null
+
+## 协程对象 (P1-9 方案 C: 协程对象模拟) [br]
+## 继承生成器机制复用栈切换驱动 / send / throw / close 与挂起重放; [br]
+## 与生成器的差异: 类型名为 coroutine, repr 带地址 (经运行器归一化对齐 CPython), [br]
+## 耗尽后再 send / throw 报 RuntimeError 而非 StopIteration, 不暴露 __next__; [br]
+## 登记由调用点的 memo 保留分支完成 (被丢弃的重放副本不登记), 脚本收尾时 [br]
+## 对未启动者发 never-awaited 警告
+class DSLCoroutine extends DSLFunctionGenerator:
+	## 限定名 (repr 与警告用, 方法协程为 Class.method 形态)
+	var _qualname: String = ""
+
+	## 构造协程对象 [br]
+	## [param p_interp] 解释器引用 [br]
+	## [param p_func] 协程函数对象 [br]
+	## [param p_env] 参数绑定后的局部环境
+	func _init(p_interp: Interpreter, p_func: DSLFunction, p_env: DSLEnvironment):
+		super._init(p_interp, p_func, p_env)
+		_qualname = p_func.qualname if p_func.qualname != "" else p_func.declaration.name
+
+	func _type_name() -> String:
+		return "coroutine"
+
+	func _dsl_str() -> String:
+		return "<coroutine object %s at 0x%x>" % [_qualname, _object_id]
+
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new("<coroutine object %s at 0x%x>" % [_qualname, _object_id])
+
+	func _dsl_getattribute(name: String) -> DSLObject:
+		# 协程无 __next__ (CPython 同): 基类生成器映射会提供它, 此处按未知属性处理
+		if name == "__next__":
+			last_error = "AttributeError: 'coroutine' object has no attribute '__next__'"
+			return null
+		return super._dsl_getattribute(name)
+
+	## send(value): 耗尽后重用报 RuntimeError (CPython 协程语义, 与生成器的 StopIteration 不同)
+	func _dsl_send(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			interp.raise_exception("TypeError", "send() takes exactly one argument (%d given)" % args.size())
+			return null
+		if _finished:
+			interp.raise_exception("RuntimeError", "cannot reuse already awaited coroutine")
+			return null
+		if not _started and not (args[0] is DSLNone):
+			interp.raise_exception("TypeError", "can't send non-None value to a just-started coroutine")
+			return null
+		return super._dsl_send(args, _kwargs)
+
+	## throw(...): 耗尽后重用报 RuntimeError (同 send)
+	func _dsl_throw(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if _finished:
+			interp.raise_exception("RuntimeError", "cannot reuse already awaited coroutine")
+			return null
+		return super._dsl_throw(args, _kwargs)
+
+## anext(it, default) 的可等待包装 (P1-9) [br]
+## CPython 在 await 时才调用 __anext__, 故本对象惰性持有迭代器与默认值, [br]
+## repr 为 <anext_awaitable object at 0x...> 形态
+class DSLANextAwaitable extends DSLObject:
+	## 异步迭代器 (await 时对其调用 __anext__)
+	var iterator: DSLObject = null
+	## StopAsyncIteration 时返回的默认值 (仅 has_default 为真时生效)
+	var default_value: DSLObject = null
+	## 是否携带默认值
+	var has_default: bool = false
+
+	## 构造 anext 可等待包装 [br]
+	## [param p_iter] 异步迭代器 [br]
+	## [param p_default] 默认值 [br]
+	## [param p_has_default] 是否携带默认值
+	func _init(p_iter: DSLObject, p_default: DSLObject, p_has_default: bool):
+		super._init()
+		iterator = p_iter
+		default_value = p_default
+		has_default = p_has_default
+
+	func _type_name() -> String:
+		return "anext_awaitable"
+
+	func _dsl_str() -> String:
+		return "<anext_awaitable object at 0x%x>" % _object_id
+
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new("<anext_awaitable object at 0x%x>" % _object_id)
 
 ## 变量作用域环境, 管理变量的定义, 读写和作用域链 [br]
 ## 支持 global/nonlocal 声明, 通过 enclosing 链实现嵌套作用域
@@ -15502,21 +15606,30 @@ class Parser:
 			return match_statement()
 		return expression_statement()
 		
-	## 处理 async 开头的语句 [br]
-	## PyGDS 不支持 async/await (按既定范围以挂起系统替代) [br]
-	## 此处按 CPython 的语法规则给出 SyntaxError, 而非让 async 落入标识符解析后报 NameError [br]
-	## [returns] 始终返回 null (该位置必然报错)
+	## 处理 async 开头的语句 (P1-9) [br]
+	## async def / async for / async with 三种形态解析并打 is_async 标记, [br]
+	## 上下文合法性 (须在 async 函数体内) 由解析期 yield/await 遍历统一校验; [br]
+	## async 用作变量名等其余形态按 CPython 报通用语法错误 [br]
+	## [returns] 解析出的语句节点, 出错时返回 null
 	func async_declaration():
-		if check(TokenType.DEF):
-			# CPython 中 async def 合法, PyGDS 明确不支持: 给出明确的降级报错
-			report.error("SyntaxError: 'async def' is not supported")
-			return null
-		if check(TokenType.FOR):
-			report.error("SyntaxError: 'async for' outside async function")
-			return null
-		if check(TokenType.WITH):
-			report.error("SyntaxError: 'async with' outside async function")
-			return null
+		if match_types([TokenType.DEF]):
+			var func_stmt = function_declaration()
+			if func_stmt == null:
+				return null
+			func_stmt.is_async = true
+			return func_stmt
+		if match_types([TokenType.FOR]):
+			var for_stmt = for_statement()
+			if for_stmt == null:
+				return null
+			for_stmt.is_async = true
+			return for_stmt
+		if match_types([TokenType.WITH]):
+			var with_stmt = with_statement()
+			if with_stmt == null:
+				return null
+			with_stmt.is_async = true
+			return with_stmt
 		# async 用作变量名/类型标注等: CPython 报通用语法错误
 		report.error("SyntaxError: invalid syntax")
 		return null
@@ -15576,6 +15689,21 @@ class Parser:
 			_expect_statement_end()
 			skip_newlines()
 		
+		if match_types([TokenType.ASYNC]):
+			if not match_types([TokenType.DEF]):
+				report.error("SyntaxError: invalid syntax")
+				return null
+			var async_func_stmt = function_declaration()
+			if async_func_stmt == null:
+				return null
+			async_func_stmt.is_async = true
+			async_func_stmt.method_type = method_type
+			async_func_stmt.decorators = decorators
+			if property_name != "":
+				async_func_stmt.set_meta("_property_name", property_name)
+			if saw_builtin:
+				async_func_stmt.set_meta("_builtin_below", decorators.size() - builtin_seen_at)
+			return async_func_stmt
 		if match_types([TokenType.DEF]):
 			var func_stmt = function_declaration()
 			if func_stmt == null:
@@ -17315,9 +17443,13 @@ class Parser:
 	## 编译期检测 yield 用法 (在解析完成后遍历整棵 AST) [br]
 	## 规则: 函数外 yield 报 SyntaxError, 推导式内直接 yield 报 SyntaxError, [br]
 	## 函数体含 yield 时标记 FunctionStmt.is_generator, lambda 体直接含 yield 时标记为生成器 lambda [br]
+	## 同时校验 async 上下文 (P1-9): await / async for / async with 须在 async 函数体内, [br]
+	## async def 体内的 yield 按 PyGDS 既定边界拒绝 (CPython 3.12 为合法 async generator) [br]
 	## [param stmts] 语句数组 [br]
 	## [param scope] 0=模块/类体(非函数), 1=函数体, 2=lambda 体 [br]
 	## [returns] 本作用域内是否含直接 yield
+	var _walk_async: bool = false
+
 	func _walk_yield_stmt(stmts: Array, scope: int, loop_depth: int = 0) -> bool:
 		var found = false
 		for stmt in stmts:
@@ -17325,13 +17457,19 @@ class Parser:
 			if report.has_error:
 				return found
 			if stmt is FunctionStmt:
+				var prev_async = _walk_async
+				_walk_async = stmt.is_async
 				stmt.is_generator = _walk_yield_stmt(stmt.body, 1)
+				_walk_async = prev_async
 				for p in stmt.params:
 					if p.default_value != null:
 						_walk_yield_expr(p.default_value, scope, "")
 			elif stmt is ClassStmt:
-				# 类体是独立作用域: 外层循环不使其中的 break/continue 合法
+				# 类体是独立作用域: 外层循环不使其中的 break/continue 合法, 也不是 async 上下文
+				var prev_cls_async = _walk_async
+				_walk_async = false
 				_walk_yield_stmt(stmt.body, 0)
+				_walk_async = prev_cls_async
 			elif stmt is ExpressionStmt:
 				if _walk_yield_expr(stmt.expression, scope, ""):
 					found = true
@@ -17350,6 +17488,8 @@ class Parser:
 				if _walk_yield_stmt(stmt.body, scope, loop_depth + 1):
 					found = true
 			elif stmt is ForStmt:
+				if stmt.is_async and not _walk_async:
+					report.error("SyntaxError: 'async for' outside async function")
 				_walk_yield_expr(stmt.iterable, scope, "")
 				if _walk_yield_stmt(stmt.body, scope, loop_depth + 1):
 					found = true
@@ -17375,6 +17515,8 @@ class Parser:
 				if _walk_yield_stmt(stmt.finally_body, scope, loop_depth):
 					found = true
 			elif stmt is WithStmt:
+				if stmt.is_async and not _walk_async:
+					report.error("SyntaxError: 'async with' outside async function")
 				for item in stmt.items:
 					if _walk_yield_expr(item.context_expr, scope, ""):
 						found = true
@@ -17430,29 +17572,36 @@ class Parser:
 			if scope == 0:
 				report.error("SyntaxError: 'yield' outside function")
 				return false
+			if _walk_async:
+				# PyGDS 既定边界: async def 体内不支持 yield (CPython 3.12 为合法 async generator)
+				report.error("SyntaxError: 'yield' inside async function")
+				return false
 			if expr.value != null:
 				_walk_yield_expr(expr.value, scope, comp_ctx)
 			if expr.from_expr != null:
 				_walk_yield_expr(expr.from_expr, scope, comp_ctx)
 			return true
 		if expr is AwaitExpr:
-			# await 只在 async 函数内合法, PyGDS 不支持 async, 因此任何位置都报错 [br]
-			# 文案按 CPython 的三种语境区分 (推导式内另有专属文案)
+			# await 仅在 async 函数体内合法 (P1-9), 文案按 CPython 的语境区分
+			# (推导式内另有专属文案: 推导式隐式作用域维持不支持 await 的既定边界)
 			if comp_ctx != "":
 				report.error("SyntaxError: asynchronous comprehension outside of an asynchronous function")
 			elif scope == 0:
 				report.error("SyntaxError: 'await' outside function")
-			else:
+			elif not _walk_async:
 				report.error("SyntaxError: 'await' outside async function")
 			if expr.value != null:
 				_walk_yield_expr(expr.value, scope, comp_ctx)
 			return false
 		if expr is LambdaExpr:
+			var prev_lambda_async = _walk_async
+			_walk_async = false
 			if expr.body != null and _walk_yield_expr(expr.body, 2, ""):
 				expr.is_generator = true
 			for p in expr.params:
 				if p.default_value != null:
 					_walk_yield_expr(p.default_value, scope, comp_ctx)
+			_walk_async = prev_lambda_async
 			return false
 		if expr is ListComp or expr is SetComp or expr is GenComp or expr is DictComp:
 			return _walk_comp_yield(expr, scope, comp_ctx)
@@ -18953,6 +19102,8 @@ class Interpreter:
 	var exception_hierarchy: Dictionary[String, String] = {}
 	## 执行栈 (exec_block 递归层级追踪)
 	var _exec_stack: Array = []
+	## 活跃协程对象登记表 (P1-9 never-awaited 警告: 脚本收尾时对未启动者发警告)
+	var _live_coroutines: Array = []
 	## 函数调用栈
 	var _call_stack: Array = []
 	## 挂起标志位 (是否已挂起)
@@ -19068,6 +19219,7 @@ class Interpreter:
 		_owned = []
 		for obj in owned:
 			_detach(obj)
+		_live_coroutines.clear()
 		_teardown_statics()
 
 	## 登记一个新建的解释器侧对象到当前活跃解释器 (P2-51) [br]
@@ -19981,6 +20133,8 @@ class Interpreter:
 		globals.define("enumerate", _make_builtin("enumerate", Callable(self, "builtin_enumerate")))
 		globals.define("iter", _make_builtin("iter", Callable(self, "builtin_iter")))
 		globals.define("next", _make_builtin("next", Callable(self, "builtin_next")))
+		globals.define("aiter", _make_builtin("aiter", Callable(self, "builtin_aiter")))
+		globals.define("anext", _make_builtin("anext", Callable(self, "builtin_anext")))
 		globals.define("zip", _make_builtin("zip", Callable(self, "builtin_zip")))
 		globals.define("any", _make_builtin("any", Callable(self, "builtin_any")))
 		globals.define("all", _make_builtin("all", Callable(self, "builtin_all")))
@@ -20012,6 +20166,7 @@ class Interpreter:
 		_define_exception("ArithmeticError")
 		_define_exception("ZeroDivisionError", "ArithmeticError")
 		_define_exception("StopIteration")
+		_define_exception("StopAsyncIteration")
 		_define_exception("GeneratorExit", "BaseException")
 		_define_exception("AssertionError")
 		_define_exception("EOFError")
@@ -22561,6 +22716,20 @@ class Interpreter:
 			_suspend_reason = SuspendReason.NONE
 			_current_generator = null
 			_had_fatal_error = true
+		if not _suspended:
+			# 脚本收尾 (正常完成或致命错误): 对创建后从未启动的协程发 never-awaited 警告
+			# (CPython 在 GC 时发, PyGDS 在收尾时发, 记录为时点差异)
+			_emit_never_awaited_warnings()
+
+	## 脚本收尾时对未启动的协程发 RuntimeWarning (P1-9 never-awaited) [br]
+	## 已启动 (含已结束与仍挂起) 的协程不发, 与 CPython 的 GC 时点语义对齐 [br]
+	## 警告走 print 输出通道 (CPython 走 stderr, 通道与时点均为既定差异), 文案为 [br]
+	## RuntimeWarning: coroutine 'x' was never awaited
+	func _emit_never_awaited_warnings() -> void:
+		for coro in _live_coroutines:
+			if coro is DSLCoroutine and not coro._started and not coro._finished:
+				report.print_msg("RuntimeWarning: coroutine '%s' was never awaited\n" % (coro as DSLCoroutine)._qualname)
+		_live_coroutines.clear()
 		
 	## 在给定环境中执行语句块并捕获 return/break/continue 信号 [br]
 	## [param statements] 语句数组 [br]
@@ -23016,12 +23185,16 @@ class Interpreter:
 		return found
 	
 	## 判断表达式是否含 yield (递归检查子表达式) [br]
+	## await 表达式同判为可挂起构造 (P1-9): 其委托挂起同为 YIELD 形态, [br]
+	## 所在语句需要与 yield 语句相同的子表达式记忆处理 [br]
 	## [param expr] 表达式节点 [br]
 	## [returns] 含 yield 时返回 true
 	func _expr_contains_yield(expr) -> bool:
 		if expr == null:
 			return false
 		if expr is YieldExpr:
+			return true
+		if expr is AwaitExpr:
 			return true
 		for prop in expr.get_property_list():
 			if prop.usage & PROPERTY_USAGE_SCRIPT_VARIABLE == 0:
@@ -23205,6 +23378,8 @@ class Interpreter:
 			return ExecResult.NORMAL
 			
 		if stmt is ForStmt:
+			if stmt.is_async:
+				return _exec_async_for(stmt)
 			# 检查 resume_info 是否跳过迭代器重建
 			var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
 			var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
@@ -23763,7 +23938,7 @@ class Interpreter:
 
 		if stage == "exit":
 			# 恢复被挂起的退出路径: 体结果取暂存值, 从 exit_idx 续延
-			var exit_res = _exec_with_exit(entered, ri.get("exit_idx", entered.size() - 1), ri.get("pending_res", ExecResult.NORMAL), ri.get("pending_ret"))
+			var exit_res = _exec_with_exit(stmt, entered, ri.get("exit_idx", entered.size() - 1), ri.get("pending_res", ExecResult.NORMAL), ri.get("pending_ret"))
 			return exit_res
 
 		if stage == "body":
@@ -23787,7 +23962,12 @@ class Interpreter:
 				# 进入进度先落盘再调 __enter__: 该调用挂起重放时已完成的管理器不重入
 				if _exec_stack.size() > 0:
 					_exec_stack.back().resume_info = {"with_stage": "enter", "entered": entered}
-				var val = _invoke_cm_method(mgr, "__enter__", [] as Array[DSLObject])
+				var val = null
+				if stmt.is_async:
+					# async with: __aenter__ 调用结果经 await 驱动 (P1-9)
+					val = _invoke_async_cm(mgr, "__aenter__", [] as Array[DSLObject], stmt, false)
+				else:
+					val = _invoke_cm_method(mgr, "__enter__", [] as Array[DSLObject])
 				if _suspended:
 					_expr_evaluated = false
 					return ExecResult.SUSPENDED
@@ -23820,19 +24000,20 @@ class Interpreter:
 		var pending_ret = return_value if res == ExecResult.RETURN else null
 		if _exec_stack.size() > 0:
 			_exec_stack.back().resume_info = {"with_stage": "exit", "entered": entered, "exit_idx": entered.size() - 1, "pending_res": res, "pending_ret": pending_ret}
-		return _exec_with_exit(entered, entered.size() - 1, res, pending_ret)
+		return _exec_with_exit(stmt, entered, entered.size() - 1, res, pending_ret)
 
 	## with 退出路径: 逆序调用已完成进入的管理器的 __exit__ [br]
 	## 在途异常对 __exit__ 体隐身 (调用前清错误通道, P0-22 同型处理), 返回真值抑制 [br]
 	## (双通道清位, 后续外层管理器按无异常退出), 假值继续传播; __exit__ 体内新异常 [br]
 	## 取代在途异常传播 (raise 侧已记录 __context__); 挂起时暂存进度与在途异常, [br]
 	## 恢复轮按抑制 / 传播 / 新异常三分支分别处置暂存 [br]
+	## [param stmt] with 语句节点 (async with 时退出调用经 await 驱动, 并作委托状态键) [br]
 	## [param entered] 已完成进入的管理器数组, 元素为 {"mgr": 管理器, "val": 进入值} [br]
 	## [param start_idx] 起始退出索引 (挂起续延时为上次未完成的管理器) [br]
 	## [param pending_res] 体或上一轮退出后的传播结果 [br]
 	## [param pending_ret] 在途返回值 (return 穿越体时经退出路径保全) [br]
 	## [returns] 执行结果状态
-	func _exec_with_exit(entered: Array, start_idx: int, pending_res: int, pending_ret) -> ExecResult:
+	func _exec_with_exit(stmt: WithStmt, entered: Array, start_idx: int, pending_res: int, pending_ret) -> ExecResult:
 		var res = pending_res
 		var idx: int = start_idx
 		while idx >= 0:
@@ -23849,7 +24030,12 @@ class Interpreter:
 				exit_args.append(get_none())
 			var saved_has_error = report.has_error
 			report.has_error = false
-			var val = _invoke_cm_method(mgr, "__exit__", exit_args)
+			var val = null
+			if stmt.is_async:
+				# async with: __aexit__ 调用结果经 await 驱动 (P1-9)
+				val = _invoke_async_cm(mgr, "__aexit__", exit_args, stmt, true)
+			else:
+				val = _invoke_cm_method(mgr, "__exit__", exit_args)
 			if _suspended:
 				report.has_error = saved_has_error or report.has_error
 				_park_unwind_error()
@@ -23921,6 +24107,184 @@ class Interpreter:
 		if cls is DSLClass:
 			return cls
 		return DSLString.new(exc._type_name())
+
+	## 执行 async for 语句 (P1-9) [br]
+	## 迭代协议: __aiter__() 取异步迭代器, 每步调用 __anext__() 得协程并 await 驱动至完成, [br]
+	## StopAsyncIteration 结束循环; 在飞的 __anext__ 委托状态按语句节点保存在 [br]
+	## 当前协程的 _yield_from_states 中, 挂起重放按其续延 (与 yield from 同一机制) [br]
+	## [param stmt] async for 语句节点 [br]
+	## [returns] 执行结果状态
+	func _exec_async_for(stmt: ForStmt) -> ExecResult:
+		var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
+		var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
+		var iterator = null
+		var is_body_resume = false
+
+		if ri.get("type") == "async_for":
+			# 从 resume_info 恢复迭代器
+			iterator = ri.get("iterator")
+			is_body_resume = ri.get("body_resume", false)
+			if iterator == null:
+				raise_exception("RuntimeError", "cannot resume async for: iterator lost")
+				return ExecResult.RAISE
+		else:
+			var iterable = evaluate(stmt.iterable)
+			if _suspended:
+				_expr_evaluated = (iterable != null) and not _needs_replay
+				return ExecResult.SUSPENDED
+			if iterable == null or report.has_error:
+				return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+			var aiter_fn = null
+			if iterable.klass != null:
+				aiter_fn = iterable.klass._lookup_method("__aiter__")
+			if aiter_fn == null:
+				raise_exception("TypeError", "'async for' requires an object with __aiter__ method, got %s" % iterable._type_name())
+				return ExecResult.RAISE
+			iterator = iterable.klass._invoke_func(aiter_fn, [iterable] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if _suspended:
+				_expr_evaluated = false
+				return ExecResult.SUSPENDED
+			if iterator == null or report.has_error:
+				return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+			var anext_fn = null
+			if iterator.klass != null:
+				anext_fn = iterator.klass._lookup_method("__anext__")
+			if anext_fn == null:
+				raise_exception("TypeError", "'async for' received an object from __aiter__ that does not implement __anext__: %s" % iterator._type_name())
+				return ExecResult.RAISE
+
+		var first_iter = true
+		while true:
+			# 恢复被挂起的 body 时不推进迭代器 (循环变量仍是挂起迭代的值)
+			if is_body_resume and first_iter:
+				is_body_resume = false
+			else:
+				var adv_frame = _exec_stack.back() if _exec_stack.size() > 0 else null
+				if adv_frame != null and adv_frame is Dictionary:
+					adv_frame.resume_info = {"type": "async_for", "iterator": iterator, "body_resume": false}
+				var element = _await_anext(iterator, stmt)
+				if _suspended:
+					return ExecResult.SUSPENDED
+				if last_exception != null:
+					if last_exception._type_name() == "StopAsyncIteration":
+						# 子协程以 StopAsyncIteration 结束: 循环正常收尾
+						report.clear_error()
+						last_exception = null
+						break
+					return ExecResult.RAISE
+				if element == null or report.has_error:
+					return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+				var t0 = stmt.targets[0]
+				if stmt.targets.size() == 1 and not stmt.tuple_target and (t0 is Variable or t0 is SubscriptTarget or t0 is AttrTarget):
+					# 单一名字/下标/属性目标 (非元组形态): 元素直接绑定, 不解包
+					var nullflag0 = assign_target_value(t0, element, environment)
+					if nullflag0 == null:
+						return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+				else:
+					# 通用解包目标: 与解包赋值同一机制 (星形 / 嵌套 / 下标 / 属性目标, P1-59)
+					var items: Array[DSLObject] = []
+					var sub_it = element._dsl_iter()
+					if sub_it == null:
+						if last_exception != null and element.last_error != "":
+							raise_exception_from_last_error(element.last_error)
+							element.last_error = ""
+						else:
+							raise_exception("TypeError", "cannot unpack non-iterable %s object" % element._type_name())
+						return ExecResult.RAISE
+					while sub_it.has_next():
+						items.append(sub_it.next())
+						if sub_it.suspended:
+							break
+					var nullflag = assign_from_targets(stmt.targets, items, environment)
+					if nullflag == null:
+						return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+			first_iter = false
+
+			# 设置 resume_info
+			var f = _exec_stack.back() if _exec_stack.size() > 0 else null
+			if f != null and f is Dictionary:
+				f.resume_info = {"type": "async_for", "iterator": iterator, "body_resume": true}
+
+			var res = exec_block(stmt.body, environment)
+			if res == ExecResult.BREAK:
+				break
+			elif res == ExecResult.CONTINUE:
+				continue
+			elif res == ExecResult.RETURN or res == ExecResult.RAISE or res == ExecResult.ERROR or res == ExecResult.SUSPENDED:
+				return res
+		return ExecResult.NORMAL
+
+	## async for 的单步推进: 调用 __anext__() 并 await 驱动至完成 (P1-9) [br]
+	## 委托状态按语句节点保存在 _yield_from_states 中, 重放时不再重复发起调用 [br]
+	## [param iterator] 异步迭代器 [br]
+	## [param node] 委托状态键节点 (ForStmt) [br]
+	## [returns] 元素值, 挂起/出错/StopAsyncIteration 时返回 null (后两者经错误通道区分)
+	func _await_anext(iterator: DSLObject, node) -> DSLObject:
+		var gen = _current_generator
+		if gen == null:
+			raise_exception("SyntaxError", "'await' outside async function")
+			return null
+		var raw = null
+		if _find_yield_from_state(gen, node) == null:
+			var anext_fn = iterator.klass._lookup_method("__anext__")
+			# 手动调用不借用 ambient 节点参与语句级生成器记忆: 每轮迭代是全新调用,
+			# 重放清空出现序后误取回已耗尽的旧协程会重复产出 (置 null 使 memo 直通)
+			var prev_node = _current_call_node
+			_current_call_node = null
+			raw = iterator.klass._invoke_func(anext_fn, [iterator] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			_current_call_node = prev_node
+			if _suspended:
+				return null
+			if raw == null or report.has_error:
+				return null
+			raw = DSLObject._unwrap_dsl(raw)
+			var has_await = raw is DSLCoroutine or (raw.klass != null and raw.klass._lookup_method("__await__") != null)
+			if not has_await:
+				raise_exception("TypeError", "'async for' received an object from __anext__ that does not implement __await__: %s" % raw._type_name())
+				return null
+		return _await_drive(node, raw)
+
+	## async with 的协议方法调用: 调用 __aenter__ / __aexit__ 并 await 驱动结果 (P1-9) [br]
+	## 委托状态已存在 (挂起重放) 时不再重复发起调用, 直接按状态续延 [br]
+	## [param mgr] 管理器对象 [br]
+	## [param name] 协议方法名 ("__aenter__" / "__aexit__") [br]
+	## [param args] 实参 (不含接收者) [br]
+	## [param key_node] 委托状态键节点 (WithStmt) [br]
+	## [param missed_suffix] 协议缺失文案是否带 (missed ... method) 后缀 (退出侧) [br]
+	## [returns] await 后的值, 挂起/出错返回 null (错误通道已置)
+	func _invoke_async_cm(mgr: DSLObject, name: String, args: Array[DSLObject], key_node, missed_suffix: bool) -> DSLObject:
+		var method = null
+		if mgr.klass != null:
+			method = mgr.klass._lookup_method(name)
+		if method == null:
+			var suffix = ""
+			if missed_suffix:
+				suffix = " (missed %s method)" % name
+			raise_exception("TypeError", "'%s' object does not support the asynchronous context manager protocol%s" % [mgr._type_name(), suffix])
+			return null
+		if _current_generator == null:
+			raise_exception("SyntaxError", "'await' outside async function")
+			return null
+		if _find_yield_from_state(_current_generator, key_node) != null:
+			# 挂起重放: 委托在飞, 直接按状态续延
+			return _await_drive(key_node, null)
+		var full_args: Array[DSLObject] = [mgr]
+		full_args.append_array(args)
+		# 手动调用不借用 ambient 节点参与语句级生成器记忆 (与 _await_anext 同理, 防重放误取旧协程)
+		var prev_node = _current_call_node
+		_current_call_node = null
+		var raw = mgr.klass._invoke_func(method, full_args, {} as Dictionary[String, DSLObject])
+		_current_call_node = prev_node
+		if _suspended:
+			return null
+		if raw == null or report.has_error:
+			return null
+		raw = DSLObject._unwrap_dsl(raw)
+		var has_await = raw is DSLCoroutine or (raw.klass != null and raw.klass._lookup_method("__await__") != null)
+		if not has_await:
+			raise_exception("TypeError", "'async with' received an object from %s that does not implement __await__: %s" % [name, raw._type_name()])
+			return null
+		return _await_drive(key_node, raw)
 
 	## 执行 yield from 语句 (语句级执行器) [br]
 	## 子迭代器状态保存在当前帧的 resume_info 中, 恢复时从挂起点继续 [br]
@@ -24083,6 +24447,8 @@ class Interpreter:
 			return null
 		if expr is YieldExpr:
 			return _evaluate_yield(expr)
+		if expr is AwaitExpr:
+			return _eval_await(expr)
 		if expr is Literal:
 			if expr.overflow:
 				raise_exception("OverflowError", "integer literal exceeds 64-bit range")
@@ -24852,11 +25218,7 @@ class Interpreter:
 			raise_exception("SyntaxError", "'yield' outside function")
 			return null
 		# 查找已保存的子迭代器状态 (语句重执行时恢复)
-		var state = null
-		for s in gen._yield_from_states:
-			if s.expr == expr:
-				state = s
-				break
+		var state = _find_yield_from_state(gen, expr)
 		# 恢复时检查注入异常 (throw/close)
 		# 若委托已开始且子生成器可接收, 则转交转发逻辑 (PEP 380: 子生成器优先捕获)
 		# 否则在 yield from 位置就地抛出
@@ -24885,6 +25247,25 @@ class Interpreter:
 			sub_iter.windowed = false
 			state = {"expr": expr, "iter": sub_iter, "val": from_val, "started": false}
 			gen._yield_from_states.append(state)
+		return _advance_yield_from(gen, state)
+
+	## 按状态键节点查找在飞的委托状态 [br]
+	## [param gen] 所属生成器 / 协程 [br]
+	## [param node] 状态键节点 (YieldExpr / AwaitExpr / ForStmt / WithStmt) [br]
+	## [returns] 状态字典, 无在飞委托时返回 null
+	func _find_yield_from_state(gen, node):
+		for s in gen._yield_from_states:
+			if s.expr == node:
+				return s
+		return null
+
+	## 委托推进核心 (yield from 与 await 共用, PEP 380) [br]
+	## 已开始的委托把外层 send 值 / 抛出转发给子生成器; 子迭代器直连推进, [br]
+	## 产出的值经 _yielded_value 以 YIELD 挂起外抛; 子耗尽后取其 return 值 [br]
+	## [param gen] 所属生成器 / 协程 [br]
+	## [param state] 委托状态字典 (expr / iter / val / started) [br]
+	## [returns] 委托表达式的值, 挂起返回 null (_suspended 置位), 出错返回 null (错误通道已置)
+	func _advance_yield_from(gen, state) -> DSLObject:
 		var iter = state.iter
 		# 恢复 (已产出过至少一次): 把 send 值 / 抛出转发给子生成器 (PEP 380 委托语义)
 		if state.get("started", false):
@@ -24930,6 +25311,121 @@ class Interpreter:
 		if from_val is DSLFunctionGenerator and from_val._finished:
 			return from_val._result_value
 		return get_none()
+
+	## await 表达式求值 (P1-9): 以 yield from 委托机制驱动可等待对象至完成 [br]
+	## 解析期已保证 await 仅出现在协程体内, 此处状态按 AwaitExpr 节点保存 [br]
+	## [param expr] AwaitExpr 节点 [br]
+	## [returns] await 的值, 挂起返回 null (_suspended 置位), 出错返回 null (错误通道已置)
+	func _eval_await(expr: AwaitExpr) -> DSLObject:
+		var gen = _current_generator
+		if gen == null:
+			# 解析期已拦截非协程上下文的 await, 此为防御分支
+			raise_exception("SyntaxError", "'await' outside async function")
+			return null
+		var val = evaluate(expr.value)
+		if _suspended:
+			return null
+		if val == null or report.has_error:
+			return null
+		return _await_drive(expr, DSLObject._unwrap_dsl(val))
+
+	## await 驱动核心 (P1-9): 委托状态按节点保存并推进至完成 [br]
+	## 每节点同时至多一个在飞委托 (await 表达式 / async for 单步 / async with 单进入退出), [br]
+	## 挂起重放时按既有状态续延, 不重复发起委托 (否则产生未驱动协程误发警告) [br]
+	## anext 默认值形态: 子协程以 StopAsyncIteration 结束时转为默认值 [br]
+	## [param node] 状态键节点 (AwaitExpr / ForStmt / WithStmt) [br]
+	## [param val] 可等待对象 (协程 / __await__ 对象 / anext 包装), 委托已存在时可为 null [br]
+	## [returns] await 的值, 挂起返回 null (_suspended 置位), 出错返回 null (错误通道已置)
+	func _await_drive(node, val) -> DSLObject:
+		var gen = _current_generator
+		if gen == null:
+			# 解析期已保证 await 驱动仅在协程体内发生, 此为防御分支
+			raise_exception("SyntaxError", "'await' outside async function")
+			return null
+		var state = _find_yield_from_state(gen, node)
+		if gen._throw_pending:
+			var can_forward = state != null and state.get("started", false) and state.val is DSLFunctionGenerator
+			if not can_forward:
+				gen._throw_pending = false
+				var exc = gen._throw_value
+				gen._throw_value = null
+				raise_existing_exception(exc)
+				return null
+		var anext_default = null
+		if state == null:
+			var sub = null
+			if val is DSLANextAwaitable:
+				var aw = val as DSLANextAwaitable
+				anext_default = aw.default_value
+				var anext_fn = aw.iterator.klass._lookup_method("__anext__")
+				# 手动调用不借用 ambient 节点参与语句级生成器记忆 (与 _await_anext 同理)
+				var prev_node = _current_call_node
+				_current_call_node = null
+				sub = aw.iterator.klass._invoke_func(anext_fn, [aw.iterator] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				_current_call_node = prev_node
+				if _suspended:
+					return null
+				if sub == null or report.has_error:
+					return null
+			else:
+				sub = _resolve_awaitable(val)
+				if _suspended:
+					return null
+				if sub == null:
+					if report.has_error or last_exception != null:
+						return null
+					raise_exception("TypeError", "object %s can't be used in 'await' expression" % val._type_name())
+					return null
+			var sub_iter = sub._dsl_iter()
+			if sub_iter == null:
+				if sub.last_error != "":
+					raise_exception_from_last_error(sub.last_error)
+					sub.last_error = ""
+				else:
+					raise_exception_typed("TypeError", [DSLString.new("object is not iterable")] as Array[DSLObject])
+				return null
+			sub_iter.windowed = false
+			state = {"expr": node, "iter": sub_iter, "val": sub, "started": false}
+			if anext_default != null or (val is DSLANextAwaitable and (val as DSLANextAwaitable).has_default):
+				state["anext_default"] = anext_default
+			gen._yield_from_states.append(state)
+		var res = _advance_yield_from(gen, state)
+		if _suspended and not _find_yield_from_state(gen, node):
+			# 挂起时委托状态被推进核心的耗尽路径误清 (has_next 的挂起与耗尽同为 false):
+			# 把状态重新挂回, 恢复轮按同一子迭代器续延, 不重复发起委托
+			# (yield from 不受此影响: 其子生成器经节点记忆复用, 重建状态无害)
+			gen._yield_from_states.append(state)
+		if not _suspended and state.has("anext_default") and last_exception != null and last_exception._type_name() == "StopAsyncIteration":
+			# anext 默认值形态: 子协程以 StopAsyncIteration 结束, 转为默认值
+			# (异常收尾时 _advance 经耗尽路径返回的 _result_value 是垃圾值, 以错误通道为准)
+			report.clear_error()
+			last_exception = null
+			return state["anext_default"]
+		return res
+
+	## 解析可等待对象为可被委托驱动的子迭代器 (P1-9) [br]
+	## 协程直接返回自身; 其它对象查找 __await__ 协议并调用, 结果须为迭代器形态 [br]
+	## [param val] 待解析对象 (已解包) [br]
+	## [returns] 委托子对象, 不可等待或出错返回 null (调用方按语境报错)
+	func _resolve_awaitable(val) -> DSLObject:
+		if val is DSLCoroutine:
+			return val
+		var await_fn = null
+		if val.klass != null:
+			await_fn = val.klass._lookup_method("__await__")
+		if await_fn == null:
+			return null
+		var it = val.klass._invoke_func(await_fn, [val] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if _suspended:
+			return null
+		if it == null or report.has_error:
+			return null
+		it = DSLObject._unwrap_dsl(it)
+		var is_iterator = it is DSLFunctionGenerator or it is DSLIterator or (it.klass != null and it.klass._lookup_method("__next__") != null)
+		if not is_iterator:
+			raise_exception("TypeError", "__await__() returned non-iterator of type '%s'" % it._type_name())
+			return null
+		return it
 
 	## 把外层的 send 值 / 抛出异常转发给 yield from 的子生成器 [br]
 	## 对应 PEP 380 的委托: 子生成器内可捕获外层 throw 的异常, send 值送达其挂起点 [br]
@@ -26312,7 +26808,20 @@ class Interpreter:
 			if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
 				gen.cur_self = args[0]
 			return _memo_generator(_current_call_node, gen)
-			
+
+		# 协程函数 (P1-9): 参数绑定完成后不执行函数体, 立即返回协程对象
+		# (与生成器同一节点记忆机制, 语句重放取回同一实例)
+		if function.declaration.is_async:
+			var coro = DSLCoroutine.new(self, function, local)
+			coro.cur_class = function._defining_class
+			if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
+				coro.cur_self = args[0]
+			var memoed = _memo_generator(_current_call_node, coro)
+			# 只登记 memo 保留的实例: 被丢弃的重放副本永不启动, 登记会造成假 never-awaited 警告
+			if memoed is DSLCoroutine and not _live_coroutines.has(memoed):
+				_live_coroutines.append(memoed)
+			return memoed
+	
 		# 检查 _call_stack 是否有恢复信息 (嵌套函数调用挂起恢复)
 		var saved_env = null
 		var saved_pc = 0
@@ -28983,6 +29492,41 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		raise_exception("StopIteration", "")
 		return null
+
+	## aiter(obj) - 调用 __aiter__ 取异步迭代器 (P1-9)
+	func builtin_aiter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "aiter() takes exactly one argument (%d given)" % args.size())
+			return null
+		var obj = args[0]
+		var aiter_fn = null
+		if obj.klass != null:
+			aiter_fn = obj.klass._lookup_method("__aiter__")
+		if aiter_fn == null:
+			raise_exception("TypeError", "'%s' object is not an async iterable" % obj._type_name())
+			return null
+		return obj.klass._invoke_func(aiter_fn, [obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+
+	## anext(it[, default]) - 返回调用 __anext__ 的可等待对象 (P1-9) [br]
+	## 无默认值时直接返回 __anext__() 的协程 (CPython 同形); [br]
+	## 带默认值时返回惰性包装, await 时才发起调用并把 StopAsyncIteration 转为默认值
+	func builtin_anext(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1:
+			raise_exception("TypeError", "anext expected at least 1 argument, got %d" % args.size())
+			return null
+		if args.size() > 2:
+			raise_exception("TypeError", "anext expected at most 2 arguments, got %d" % args.size())
+			return null
+		var it = args[0]
+		var anext_fn = null
+		if it.klass != null:
+			anext_fn = it.klass._lookup_method("__anext__")
+		if anext_fn == null:
+			raise_exception("TypeError", "'%s' object is not an async iterator" % it._type_name())
+			return null
+		if args.size() == 2:
+			return DSLANextAwaitable.new(it, args[1], true)
+		return it.klass._invoke_func(anext_fn, [it] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 	
 	## bool(x) - 转换为布尔值
 	func builtin_bool(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
