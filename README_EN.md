@@ -72,7 +72,7 @@ warn("This is a WARN log")
 
 PyGDS offers two ways to integrate:
 
-### Option 1: Single-File Integration (recommended)
+### Single-file integration
 
 All of PyGDS's core code lives in a single file, [pygds.gd](./pygds.gd), with no external dependencies.
 
@@ -85,15 +85,6 @@ var dsl = PyGDS.new()
 dsl.write_dsl_script("print('Hello!')")
 dsl.run()
 ```
-
-### Option 2: As an Editor Plugin (optional)
-
-The bundled [addons/pygds](./addons/pygds/) provides an editor plugin that adds a **Project > Tools > Run PyGDS Script...** action to select and run `.py` scripts from your project, printing output to the editor console.
-
-1. Copy the `addons/pygds/` directory into your project (it depends on `pygds.gd` in the project root)
-2. In the Godot editor, open **Project Settings → Plugins** and enable **PyGDS**
-
-> The plugin's core is still the single-file `pygds.gd`; the editor plugin is just a development convenience.
 
 ---
 
@@ -190,7 +181,7 @@ The following lists behaviours that currently diverge from CPython or are not im
 
 ### P0 — Silent Wrong Values
 
-The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`; P1-68 (augmented assignment `&=` `^=` `<<=` `>>=`), P1-69 (set operations on dict views) and P1-70 (`in` membership on `__getitem__`-only iterables) uncovered by the v0.7.0-alpha.7 audit were fixed in v0.7.0-alpha.8. P0-13 (silent wrapping for integers beyond the int64 range) was fixed in v0.6.0-alpha.7 to raise an explicit `OverflowError`; one standing divergence remains: PyGDS `int` is a 64-bit signed integer while CPython `int` has arbitrary precision (it never overflows), so out-of-range operations raise an explicit error in PyGDS where CPython produces the exact result; full alignment would require an arbitrary-precision integer architecture (evaluated and deferred), see the integer-literals section of `docs/en/usage.md` for behavior. The v0.7.0-alpha.7 project-wide audit uncovered two new P0s (both unfixed): P0-28 (dead loop in `nonlocal` binding search — the interpreter hangs across multi-level closure chains, requiring the host process to be killed) and P0-29 (cross-container equality semantics: `[1] == (1,)` evaluates to `True`)
+The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`; P1-68 (augmented assignment `&=` `^=` `<<=` `>>=`), P1-69 (set operations on dict views) and P1-70 (`in` membership on `__getitem__`-only iterables) uncovered by the v0.7.0-alpha.7 audit were fixed in v0.7.0-alpha.8. P0-13 (silent wrapping for integers beyond the int64 range) was fixed in v0.6.0-alpha.7 to raise an explicit `OverflowError`; one standing divergence remains: PyGDS `int` is a 64-bit signed integer while CPython `int` has arbitrary precision (it never overflows), so out-of-range operations raise an explicit error in PyGDS where CPython produces the exact result; full alignment would require an arbitrary-precision integer architecture (evaluated and deferred), see the integer-literals section of `docs/en/usage.md` for behavior. The v0.7.0-alpha.7 project-wide audit uncovered two new P0s (both unfixed): P0-28 (dead loop in `nonlocal` binding search — the interpreter hangs across multi-level closure chains, requiring the host process to be killed) and P0-29 (cross-container equality semantics: `[1] == (1,)` evaluates to `True`). A known limitation (deferred by evaluation): P0-25 — class bodies only support three statement forms (methods, nested classes and class-level assignments); any other statement (expression calls, if / for / while, augmented assignment, del, try etc.) is silently ignored (CPython class bodies are full code blocks). Full alignment requires saving suspension-resume state for the class-body position and is not scheduled
 
 ### P1 — Clear Errors or Missing Features
 
@@ -198,9 +189,12 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3
 
 | ID | Issue | Details |
 | :--- | :--- | :--- |
-| P1-7 | `with` statement unsupported | Not implemented by design for now |
-| P1-8 | User-file `import` unsupported | Not implemented by design for now; only built-in modules (math / random / statistics / functools / itertools / collections / string / operator / time / sys) |
-| P1-9 | `async` / `await` unsupported | Not implemented by design for now; async scenarios use the suspend system (`time.sleep` / `request_suspend_waiting`). As reserved words, misuse of `async` / `await` now raises `SyntaxError` matching CPython |
+| P1-7 | `with` statement unsupported | Scheduled for v0.8.0 (first-phase main task; `contextlib` and parenthesized multiple managers to be evaluated afterwards) |
+| P1-8 | User-file `import` unsupported | Deferred by evaluation: no value in the current embedded single-file scenario (not a difficulty issue); share code via `set_preset_script` and API registration. Only built-in modules are supported (math / random / statistics / functools / itertools / collections / string / operator / time / sys) |
+| P1-9 | `async` / `await` unsupported | Scheduled for v0.8.0 (second-phase main task, option C: coroutine-object emulation — `await coro` drives synchronously via `yield from` semantics; `async with` depends on P1-7 landing first; `import asyncio` remains unsupported, async scenarios are replaced by the suspension system). As reserved words, misuse of `async` / `await` now raises `SyntaxError` matching CPython |
+| P1-32 | Remaining builtin gaps | `eval` / `exec` / `compile` (dynamic evaluation, entangled with the suspension replay machinery) and `globals` / `locals` / `vars` (scope dictionaries, conflicting with the single-interpreter model) are deferred; `aiter` / `anext` arrive with the v0.8.0 async task |
+| P1-38 | `metaclass=` argument not supported | The metaclass keyword argument in class headers raises a parse error (valid CPython syntax); deferred |
+| P1-41 | `except*` exception groups and `ExceptionGroup` | Requires a dedicated exception-group subsystem (splitting, subgroup matching and propagation); no asyncio / TaskGroup ecosystem, deferred; writing `except*` raises a clear `SyntaxError` |
 
 ### P2 — Edge Differences
 
@@ -208,6 +202,14 @@ Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3
 | :--- | :--- | :--- |
 | P2-1 | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) |
 | P2-4 | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match |
+| P2-16 | `@` matrix-multiply operator syntax not accepted | `1 @ 2` is valid CPython syntax (raises `TypeError` at runtime); PyGDS rejects it at parse time; no use in pure Python semantics, deferred |
+| P2-27 | Godot string↔float conversion precision edge cases | Some hard cases are not correctly rounded (e.g. the `9007199254740993.0` literal), originating from the host string parser, deferred |
+| P2-37 | `it.close()` returns before the sub-generator `finally` completes | Line-order difference only; the final output line set matches (async-continuation model of suspension resumption) |
+| P2-38 | Discarded generator objects skip `finally` cleanup | CPython relies on refcount-driven implicit `close()`; PyGDS has no host finalizer semantics, call `close()` explicitly |
+| P2-40 | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
+| P2-41 | `from __future__` alignment boundary | Mid-file imports raise in CPython but are accepted by PyGDS; CPython binds the `_Feature` object while PyGDS binds no name (no-op alignment boundary — accepted means ignored) |
+| P2-42 | Non-class star-arg base class error message | `class C(*[1])`: CPython reports the metaclass-path message (e.g. `int() takes at most 2 arguments (3 given)`), PyGDS reports `all bases must be classes` (both `TypeError`) |
+| P2-43 | `__iter__` non-iterator error message | Some shapes report `'X' object is not iterable` instead of CPython's `iter() returned non-iterator of type '...'` (the strict text conflicts with suspension replay and was reverted) |
 | P2-52 | Deep recursion combined with deep expressions can reach the engine's VM call-stack hard limit (2048 GDScript frames); the engine hard-aborts the call chain with `Stack overflow` and PyGDS silently loses the remaining output (CPython either completes or raises a catchable `RecursionError`) | Discovered while measuring P2-50 in alpha.9; PyGDS's `MAX_CALL_DEPTH=256` only bounds call depth, the GDScript frame depth of expression evaluation / parsing is not bounded by it |
 
 P2-2 (parse-error messages and function repr) and P2-3 (operator error messages) were fixed by the **v0.7.0-alpha.9** message-alignment effort (missing colon, unterminated strings, `min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` texts, the `print >> x` migration hint, function and bound-method repr); P2-50 (`Stack underflow` log noise) is eliminated by the project setting `debug/settings/gdscript/max_call_stack=2047` (set it in host projects too, see P2-52); P2-51 (`ObjectDB` leaks at exit and `resources still in use`) was fixed in **v0.7.0-alpha.9** via the object registry + cycle-breaking reclamation (`cleanup()` API)

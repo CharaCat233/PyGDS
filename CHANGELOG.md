@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [Unreleased]
+
+## [0.7.0] - 2026-10-03
+
+v0.7.0 正式版。自 v0.6.0 以来的主线：行为一致性测试体系整体重构（290 例双端实时比对）、两轮全项目审计与修复、文案对齐专项（P2-2 / P2-3）、内建函数缺口按「务实全集」补齐（P1-32 主体 / P1-56）、深递归日志噪音与 ObjectDB 泄漏的修复；编辑器插件自本版起移除，单文件 `pygds.gd` 为唯一分发形态。逐项明细见下方 alpha.5 ~ alpha.10 各节
+
+### Removed
+
+- **编辑器插件移除**：`addons/pygds/`（编辑器 `Project > Tools` 菜单的「Run PyGDS Script...」便利入口）自本版起移除，`project.godot` 不再启用插件；单文件 `pygds.gd` 是唯一分发形态，脚本执行请经宿主集成（`write_dsl_script` / `run` / API 注册）
+
 ## [0.7.0-alpha.10] - 2026-10-03
 
 本版修复 dict 视图集合运算触发引擎 `SCRIPT ERROR` 的日志噪音（P1-69 连带发现），并精简双端运行器的常态输出

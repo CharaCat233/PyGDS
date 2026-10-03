@@ -55,7 +55,6 @@ def main():
     files = sorted(
         f
         for f in glob.glob("**/*.gd", recursive=True)
-        if "addons" not in f.replace("\\", "/")
     )
     inline_multi = []
     semicolons = []

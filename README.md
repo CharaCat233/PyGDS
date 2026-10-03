@@ -72,7 +72,7 @@ warn("这是一条 WARN 日志")
 
 PyGDS 提供两种集成方式：
 
-### 方式一：单文件集成（推荐）
+### 单文件集成
 
 PyGDS 的全部核心代码位于单个文件 [pygds.gd](./pygds.gd) 中，无外部依赖
 
@@ -85,15 +85,6 @@ var dsl = PyGDS.new()
 dsl.write_dsl_script("print('Hello!')")
 dsl.run()
 ```
-
-### 方式二：作为编辑器插件（可选）
-
-项目自带的 [addons/pygds](./addons/pygds/) 提供了一个编辑器插件，在 `Project > Tools` 菜单增加「Run PyGDS Script...」动作，可直接选择并运行项目内的 `.py` 脚本，输出打印到编辑器控制台
-
-1. 将 `addons/pygds/` 目录复制到你的项目（依赖根目录的 `pygds.gd`）
-2. 在 Godot 编辑器中打开 **项目设置 → 插件**，启用 **PyGDS**
-
-> 插件的核心仍是单文件的 `pygds.gd`，编辑器插件仅为开发便利
 
 ---
 
@@ -190,7 +181,7 @@ dsl.run()
 
 ### P0 — 静默错值
 
-v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节；v0.7.0-alpha.7 审计新发现的 P1-68（增强赋值 `&=` `^=` `<<=` `>>=`）、P1-69（dict 视图集合运算）、P1-70（旧式迭代的 `in` 判定）已在 v0.7.0-alpha.8 修复。P0-13（整数超出 int64 范围静默环绕）已在 v0.6.0-alpha.7 修复为明确报 `OverflowError`；仍需注意的既定差异：PyGDS 的 `int` 为 64 位有符号整数，CPython 的 `int` 为任意精度整数（永不溢出），超出 int64 的运算 PyGDS 明确报错而 CPython 给出精确结果，彻底对齐需任意精度整数架构（经评估暂缓），行为详见 `docs/zh-CN/usage.md` 的数字字面量小节。v0.7.0-alpha.7 全项目审计新发现的两条 P0 已在 v0.7.0-alpha.8 修复：P0-28（`nonlocal` 声明的绑定搜索死循环——跨多级闭包链时解释器挂死）、P0-29（跨容器类型相等语义：`[1] == (1,)` 曾判 `True`）
+v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节；v0.7.0-alpha.7 审计新发现的 P1-68（增强赋值 `&=` `^=` `<<=` `>>=`）、P1-69（dict 视图集合运算）、P1-70（旧式迭代的 `in` 判定）已在 v0.7.0-alpha.8 修复。P0-13（整数超出 int64 范围静默环绕）已在 v0.6.0-alpha.7 修复为明确报 `OverflowError`；仍需注意的既定差异：PyGDS 的 `int` 为 64 位有符号整数，CPython 的 `int` 为任意精度整数（永不溢出），超出 int64 的运算 PyGDS 明确报错而 CPython 给出精确结果，彻底对齐需任意精度整数架构（经评估暂缓），行为详见 `docs/zh-CN/usage.md` 的数字字面量小节。v0.7.0-alpha.7 全项目审计新发现的两条 P0 已在 v0.7.0-alpha.8 修复：P0-28（`nonlocal` 声明的绑定搜索死循环——跨多级闭包链时解释器挂死）、P0-29（跨容器类型相等语义：`[1] == (1,)` 曾判 `True`）。既定限制（经评估暂缓）：P0-25——类体仅支持方法、嵌套类与类级赋值三种语句形态，其余语句（表达式调用、if / for / while、增强赋值、del、try 等）被静默忽略不执行（CPython 类体是完整代码块），完整对齐需为类体执行位置保存挂起恢复状态，暂不排期
 
 ### P1 — 明确报错或功能缺失
 
@@ -198,9 +189,12 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
-| P1-7 | `with` 语句不支持 | 按既定范围当前不实现 |
-| P1-8 | 用户文件 `import` 不支持 | 按既定范围当前不实现；仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time / sys） |
-| P1-9 | `async` / `await` 不支持 | 按既定范围当前不实现；异步场景以挂起系统（`time.sleep` / `request_suspend_waiting`）替代。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
+| P1-7 | `with` 语句不支持 | v0.8.0 排期（第一阶段主任务；`contextlib` 与括号化多管理器随后评估） |
+| P1-8 | 用户文件 `import` 不支持 | 经评估暂缓：当前嵌入式单文件场景内无实现价值（非难度问题）；共享代码请使用 `set_preset_script` 与 API 注册。仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time / sys） |
+| P1-9 | `async` / `await` 不支持 | v0.8.0 排期（第二阶段主任务，方案 C：协程对象模拟——`await coro` 以 `yield from` 语义同步驱动；`async with` 依赖 P1-7 先行；`import asyncio` 仍不支持，异步场景以挂起系统替代）。作为保留字，`async` / `await` 的误用现按 CPython 报 `SyntaxError` |
+| P1-32 | 内建函数缺口残余 | `eval` / `exec` / `compile`（动态求值，与挂起重放机制纠缠）、`globals` / `locals` / `vars`（作用域字典，与单解释器模型冲突）暂不投入；`aiter` / `anext` 随 v0.8.0 异步任务实现 |
+| P1-38 | `metaclass=` 参数不支持 | 类头的元类关键字参数在解析期报语法错误（CPython 语法合法），暂不投入 |
+| P1-41 | `except*` 异常组与 `ExceptionGroup` | 需独立的异常组子系统（拆分、子组匹配与传播），无 asyncio / TaskGroup 生态，暂不投入；书写 `except*` 明确报 `SyntaxError` |
 
 ### P2 — 边缘差异
 
@@ -208,6 +202,14 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 | :--- | :--- | :--- |
 | P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
 | P2-4 | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致 |
+| P2-16 | `@` 矩阵乘运算符语法不接受 | `1 @ 2` 在 CPython 中语法合法（运行时报 `TypeError`），PyGDS 在解析期报语法错误；纯 Python 语义下无实际用途，暂不投入 |
+| P2-27 | Godot 字符串↔浮点转换的极端精度边界 | 部分难例不做正确舍入（如 `9007199254740993.0` 字面量解析），源自宿主层字符串解析器，暂不投入 |
+| P2-37 | `it.close()` 的参数值在子生成器 `finally` 完成前返回 | 仅行序差异，最终输出行集合一致（挂起恢复的异步续做模型） |
+| P2-38 | 生成器对象被丢弃时不执行 `finally` 清理 | CPython 依赖引用计数回收时隐式 `close()`；PyGDS 无宿主 finalizer 语义，需显式 `close()` |
+| P2-40 | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
+| P2-41 | `from __future__` 的对齐边界 | 文件中部导入 CPython 报错而 PyGDS 接受；CPython 绑定 `_Feature` 对象而 PyGDS 不绑定名字（no-op 对齐的边界，接受即忽略） |
+| P2-42 | 类创建的非类星参基类错误文案 | `class C(*[1])` CPython 报元类路径文案（如 `int() takes at most 2 arguments (3 given)`），PyGDS 报 `all bases must be classes`（双方均为 `TypeError`） |
+| P2-43 | `__iter__` 返回非迭代对象的错误文案 | 部分形态报 `'X' object is not iterable` 而非 CPython 的 `iter() returned non-iterator of type '...'`（严格文案与挂起重放机制冲突，已回退） |
 | P2-52 | 深递归叠加深表达式可能触及引擎 VM 调用栈硬上限（2048 帧 GDScript 帧），引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`） | alpha.9 测量 P2-50 时发现；PyGDS 的 `MAX_CALL_DEPTH=256` 只约束调用深度，表达式求值/解析的 GDScript 帧深不受其约束 |
 
 P2-2（解析期错误文案与函数 repr）与 P2-3（运算符错误文案）已随 **v0.7.0-alpha.9** 的文案对齐专项修复（缺冒号、未结束字符串、`min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` 文案、`print >> x` 迁移提示、函数与绑定方法 repr）；P2-50（`Stack underflow` 日志噪音）已通过项目设置 `debug/settings/gdscript/max_call_stack=2047` 消除（宿主工程同设即可，见 P2-52 说明）；P2-51（退出时 ObjectDB 泄漏与 `resources still in use`）已随 **v0.7.0-alpha.9** 的对象登记表 + 断环回收（`cleanup()` API）修复

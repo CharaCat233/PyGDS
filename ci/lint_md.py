@@ -60,7 +60,6 @@ def main():
     files = sorted(
         f
         for f in glob.glob("**/*.md", recursive=True)
-        if "addons" not in f.replace("\\", "/")
     )
     wrap_issues = []
     fence_issues = []
