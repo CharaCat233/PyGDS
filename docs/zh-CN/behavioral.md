@@ -56,6 +56,18 @@
 - 比对: `same_error`
 - 源文件: [ci/cases/syntax_async_for_outside.py](../../ci/cases/syntax_async_for_outside.py)
 
+### syntax_async_gen
+
+- 职责: 异步生成器驱动协议 (asend / athrow / aclose, 手动 `__anext__`, 关闭后耗尽)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_async_gen.py](../../ci/cases/syntax_async_gen.py)
+
+### syntax_async_gen_return
+
+- 职责: async generator 体内带值 `return` 触发解析错误 (CPython 同文案)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_async_gen_return.py](../../ci/cases/syntax_async_gen_return.py)
+
 ### syntax_async_name_reserved
 
 - 职责: `async` 用作变量名触发解析期错误
@@ -82,9 +94,15 @@
 
 ### syntax_async_yield
 
-- 职责: `async def` 体内 yield 为 PyGDS 既定边界 (CPython 3.12 为合法 async generator)
-- 比对: `same_error` (跳过: 单边报错无法双端判定, 见用例头注)
+- 职责: `async def` 内 `yield` 合法化为异步生成器 (类型, repr, async for, 裸 return, 产出值不自动 await)
+- 比对: `same_output`
 - 源文件: [ci/cases/syntax_async_yield.py](../../ci/cases/syntax_async_yield.py)
+
+### syntax_async_yieldfrom
+
+- 职责: async 函数体内 `yield from` 触发解析错误 (CPython 同文案)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_async_yieldfrom.py](../../ci/cases/syntax_async_yieldfrom.py)
 
 ### syntax_await_nonasync_fn
 
@@ -175,6 +193,18 @@
 - 职责: `...` 字面量、真值、默认值与注解位置
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_ellipsis.py](../../ci/cases/syntax_ellipsis.py)
+
+### syntax_except_star_mixed
+
+- 职责: `except` 与 `except*` 混用于同一 try 触发解析错误 (CPython 同文案)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_except_star_mixed.py](../../ci/cases/syntax_except_star_mixed.py)
+
+### syntax_except_star_bare
+
+- 职责: 裸 `except*:` 缺异常类型触发解析错误 (CPython 同文案)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_except_star_bare.py](../../ci/cases/syntax_except_star_bare.py)
 
 ### syntax_expected_colon
 
@@ -673,6 +703,12 @@
 - 职责: 赋值表达式以下标为目标触发解析错误
 - 比对: `same_error`
 - 源文件: [ci/cases/syntax_walrus_subscript.py](../../ci/cases/syntax_walrus_subscript.py)
+
+### syntax_with_parenthesized
+
+- 职责: 括号化管理器列表 (3.10) 与元组歧义回退 (右括号后随 as / 嵌套元组)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_with_parenthesized.py](../../ci/cases/syntax_with_parenthesized.py)
 
 ### syntax_while_else
 
@@ -1716,6 +1752,18 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_gen_propagate.py](../../ci/cases/exception_gen_propagate.py)
 
+### exception_group
+
+- 职责: `ExceptionGroup` 与 `BaseExceptionGroup` (构造校验, 属性, str/repr, subgroup/split)
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_group.py](../../ci/cases/exception_group.py)
+
+### exception_except_star
+
+- 职责: `except*` 语义 (子组匹配与形态, 自动包装, 多子句消费余量, else/finally, 处理器异常)
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_except_star.py](../../ci/cases/exception_except_star.py)
+
 ### exception_hierarchy
 
 - 职责: 内置异常继承捕获与捕获后状态隔离
@@ -1905,4 +1953,3 @@ PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的�
 - 职责: `with` 体与 `__exit__` 内挂起的重放 (进入标记不重复执行, P0-22 暂存叠加)
 - 比对: `same_output`
 - 源文件: [ci/cases/suspend_with_replay.py](../../ci/cases/suspend_with_replay.py)
-

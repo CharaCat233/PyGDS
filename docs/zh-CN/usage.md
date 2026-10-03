@@ -1213,6 +1213,21 @@ finally:
 
 > **与挂起系统交互**：`try` 体、`except` 处理器与 `finally` 体内的 `time.sleep`（及主动挂起 API）均可正常挂起推进。try 体已抛出异常、`finally` 体内挂起时，恢复后进行中的异常照常传播，外层 `except` 可正常捕获（未捕获则按普通错误终止）；`finally` 中的 `return` / `break` / `continue` 仍按 Python 语义丢弃在途异常，`finally` 抛出的新异常按异常链语义取代在途异常
 
+### 异常组与 except*（PEP 654）
+
+`ExceptionGroup(msg, exceptions)` / `BaseExceptionGroup(msg, exceptions)` 将多个异常打包为一个异常（`exceptions` 为成员元组，`message` 为消息；构造校验按 CPython：空序列 / 非异常成员报 `ValueError`，`ExceptionGroup` 含 `BaseException` 直系成员或消息非 str 报 `TypeError`）。`except* 类型 as e:` 按子组匹配：裸异常自动包装（消息为空串，`BaseException` 直系成员用 `BaseExceptionGroup`）；命中的子组绑定到 `as` 名（恒为组形态），子句正常完成后该子组被吞掉并对余量继续后续子句；全部子句完成后的余量以组形态继续传播，裸异常未命中时传播原异常。`subgroup(filter)` / `split(filter)` 提供编程式拆分（无匹配返回 `None`）
+
+```python
+try:
+    raise ExceptionGroup("g", [ValueError("v"), TypeError("t")])
+except* TypeError as e:
+    print(len(e.exceptions))   # 1
+except* ValueError as e:
+    print(str(e))              # g (1 sub-exception)
+```
+
+> `except` 与 `except*` 不得混用于同一 `try`；裸 `except*:` 非法。既定简化：嵌套组内层不经递归匹配
+
 ### with 语句
 
 `with` 用于上下文管理器协议：进入时调用管理器的 `__enter__`（返回值绑定到 `as` 目标），体结束后逆序调用 `__exit__(exc_type, exc, tb)`。逗号分隔的多管理器等价于嵌套 `with`（进入按序，退出逆序）。无异常时三个实参均为 `None`；有异常时 `__exit__` 收到异常类、异常实例与 `None`（PyGDS 无 traceback 对象，tb 恒为 `None`，既定形态）。`__exit__` 返回真值抑制在途异常（外层管理器转为无异常退出），假值继续传播；`return` / `break` / `continue` 穿越体同样触发退出。协议缺失报 `TypeError: 'X' object does not support the context manager protocol`（退出侧缺 `__exit__` 带 `(missed __exit__ method)` 后缀）。文件对象（`open()` 返回值）实现协议：进入返回自身，退出关闭
@@ -1251,7 +1266,7 @@ print(f.closed)               # True
 
 > **与挂起系统交互**：`with` 体、`__enter__` 与 `__exit__` 体内的 `time.sleep`（及主动挂起 API）均可正常挂起推进。体挂起重放后不重复执行 `__enter__`（进入标记），异常在途时 `__exit__` 挂起照常恢复并按返回值决定抑制或传播。生成器体中的 `with` 可跨 `yield` 保持进入状态，`close()` 注入的 `GeneratorExit` 同样经过退出路径
 
-> **暂不支持**：括号化多管理器列表（`with (a as b, c as d):`，Python 3.10 语法）与 `contextlib` 模块
+> **暂不支持**：`contextlib` 模块（P1-71）。括号化管理器列表（3.10）已支持：`with (a as b, c as d):` 按管理器列表解析（无 `as` 的 `with (a, b):` 亦为列表），右括号后随 `as` 时回退为元组表达式
 
 ### raise ... from 异常链
 
@@ -1338,7 +1353,9 @@ except StopIteration as e:
 
 > **never-awaited 警告**：脚本收尾时对创建后从未启动的协程经 print 通道发 `RuntimeWarning: coroutine 'x' was never awaited`（CPython 在 GC 时经 stderr 发，通道与时点为既定差异）；已启动的协程不发
 
-> **既定边界**：`async def` 体内 `yield` 报 `SyntaxError`（CPython 3.12 为合法 async generator，PyGDS 拒绝）；推导式内 await 维持不支持；`import asyncio` 不可用；`asyncio.run` 等事件循环入口不存在，异步场景继续以挂起系统替代
+异步生成器（PEP 525）：`async def` 体内 `yield` 合法，调用返回 `async_generator` 对象；`__aiter__` 返回自身，`__anext__` / `asend` / `athrow` / `aclose` 返回步可等待对象，await 时驱动一步（产出值即元素，不被自动 await）；带值 `return` 与 `yield from` 报 `SyntaxError`（CPython 同文案）
+
+> **既定边界**：`yield from` 在 async 函数体内与推导式内 await 维持不支持；`import asyncio` 不可用；`asyncio.run` 等事件循环入口不存在，异步场景继续以挂起系统替代
 
 ### 自定义类与魔法方法
 

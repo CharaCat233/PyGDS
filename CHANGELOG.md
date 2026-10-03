@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.4] - 2026-10-03
+
+本版完成 v0.8.0-alpha 的三项遗留能力并登记一项暂缓：括号化管理器列表（3.10 语法）、async generator（解除 alpha.2 的「async def 内 yield 拒绝」既定边界）与异常组完整运行时（P1-41，`except*` / `ExceptionGroup` / `BaseExceptionGroup`）；`contextlib` 经评估登记为暂不投入（P1-71）。实现期发现并修复 except 处理器体挂起后 `last_exception` 未清的既有缺口
+
+### 新增
+
+- **括号化管理器列表（3.10）**：`with (a as b, c as d):` 按管理器列表解析（无 `as` 的 `with (a, b):` 亦为列表而非元组，CPython 同），支持尾随逗号；右括号后随 `as` / 冒号缺失时回退普通括号表达式（`with (a, b) as t:` 的元组语义与 CPython 一致）；`async with` 同样支持
+- **async generator（PEP 525）**：`async def` 体内 `yield` 合法化，调用返回 `async_generator` 对象（repr 带限定名与地址）；`__aiter__` 返回自身，`__anext__` / `asend` / `athrow` / `aclose` 返回步可等待对象（`async_generator_asend` / `async_generator_athrow` 形态），await 时驱动底层生成器一步（产出值即元素，不被自动 await）；`async for` 与 `aiter` / `anext` 内建直接支持；带值 `return` 与 `yield from` 按 CPython 报 SyntaxError；同步迭代按 CPython 报 `'async_generator' object is not iterable`
+- **异常组（P1-41 / PEP 654）**：注册 `BaseExceptionGroup`（BaseException 子类）与 `ExceptionGroup`（BaseExceptionGroup 与 Exception 双继承，`except Exception` 可捕获）并注册 `KeyboardInterrupt`；构造校验文案按 CPython 对齐（空序列 / 非异常成员报 ValueError、BaseException 成员入 ExceptionGroup 与非 str 消息报 TypeError）；`exceptions` / `message` 属性与 `str`（`msg (N sub-exception(s))`）/ repr 组形态；`subgroup` / `split`（无匹配返回 None）；`except*` 语义完整——裸异常自动包装（消息空串，BaseException 直系用 BaseExceptionGroup）、逐子句消费余量、余量以组形态传播（裸异常未命中传播原异常）、`as` 名子句后删除、与 else / finally 组合；既定简化：嵌套组内层不经递归匹配
+- **contextlib 暂不投入（P1-71）**：纯工具性封装，用户类直接实现协议可等价替代；`import contextlib` 报 `ImportError`，登记入已知问题清单
+
+### 修复
+
+- **except 处理器体挂起后 `last_exception` 未清（既有缺口，async generator 用例实测发现）**：处理器体挂起经 resume 正常完成后，被捕获异常残留在 `last_exception`（fresh 路径有清除而 resume 路径缺失）；补齐后与 fresh 路径及 CPython 语义一致
+
+### 测试
+
+- 全量回归 **317/317** 通过（新增 8 例：`syntax_with_parenthesized` / `syntax_async_gen` / `syntax_async_yield`（原跳过例转正）/ `exception_group` / `exception_except_star` 五例 `same_output` 与 `syntax_except_star_bare` / `syntax_except_star_mixed` / `syntax_async_gen_return` / `syntax_async_yieldfrom` 四例 `same_error`）；挂起套件 24/24 通过；lint_cases / lint_md / lint_gd 全部 0 问题；引擎 `SCRIPT ERROR` 保持 0；ObjectDB 零泄漏维持
+
 ## [0.8.0-alpha.3] - 2026-10-03
 
 本版为 v0.8.0-alpha 实现过程中的问题收尾：修复 alpha.1 修复期登记的 P2-53 / P2-54 / P2-55 三条既有差异。类对象 repr 对齐（`repr(任何类)` 为 `<class 'X'>` 形态）；`SyntaxError` 注册为运行期异常类并按 CPython 对齐 `nonlocal` 无绑定文案；函数绑定错误文案补 `__qualname__` 限定名（方法 `Class.method()`、嵌套函数 `outer.<locals>.inner()`，顶层与 lambda 维持原名）。实现期连带给绑定错误的 `takes` 形态补齐 CPython 的单复数与 keyword-only 括注规则

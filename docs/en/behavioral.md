@@ -56,6 +56,18 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_error`
 - Source: [ci/cases/syntax_async_for_outside.py](../../ci/cases/syntax_async_for_outside.py)
 
+### syntax_async_gen
+
+- Duty: async generator driving protocol (asend / athrow / aclose, manual `__anext__`, exhaustion after close)
+- Compare: `same_output`
+- Source: [ci/cases/syntax_async_gen.py](../../ci/cases/syntax_async_gen.py)
+
+### syntax_async_gen_return
+
+- Duty: `return` with a value inside an async generator raises a parse error (CPython message)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_async_gen_return.py](../../ci/cases/syntax_async_gen_return.py)
+
 ### syntax_async_name_reserved
 
 - Responsibility: `async` used as a variable name raises a parse error
@@ -82,9 +94,15 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 
 ### syntax_async_yield
 
-- Duty: `yield` inside `async def` is a PyGDS boundary (CPython 3.12 allows it as an async generator)
-- Compare: `same_error` (skipped: one-sided error cannot be dual-judged, see the case header)
+- Duty: `yield` inside `async def` legalized as an async generator (type, repr, async for, bare return, yielded values not auto-awaited)
+- Compare: `same_output`
 - Source: [ci/cases/syntax_async_yield.py](../../ci/cases/syntax_async_yield.py)
+
+### syntax_async_yieldfrom
+
+- Duty: `yield from` inside an async function raises a parse error (CPython message)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_async_yieldfrom.py](../../ci/cases/syntax_async_yieldfrom.py)
 
 ### syntax_await_nonasync_fn
 
@@ -175,6 +193,18 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Responsibility: `...` literal, truthiness, default values and annotation positions
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_ellipsis.py](../../ci/cases/syntax_ellipsis.py)
+
+### syntax_except_star_mixed
+
+- Duty: mixing `except` and `except*` on one try raises a parse error (CPython message)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_except_star_mixed.py](../../ci/cases/syntax_except_star_mixed.py)
+
+### syntax_except_star_bare
+
+- Duty: bare `except*:` without exception types raises a parse error (CPython message)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_except_star_bare.py](../../ci/cases/syntax_except_star_bare.py)
 
 ### syntax_expected_colon
 
@@ -673,6 +703,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Responsibility: Assignment expression with a subscript target raises a parse error
 - Comparison: `same_error`
 - Source: [ci/cases/syntax_walrus_subscript.py](../../ci/cases/syntax_walrus_subscript.py)
+
+### syntax_with_parenthesized
+
+- Duty: parenthesized manager lists (3.10) and tuple-ambiguity fallback (as after the closing paren / nested tuples)
+- Compare: `same_output`
+- Source: [ci/cases/syntax_with_parenthesized.py](../../ci/cases/syntax_with_parenthesized.py)
 
 ### syntax_while_else
 
@@ -1716,6 +1752,18 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Comparison: `same_output`
 - Source: [ci/cases/exception_gen_propagate.py](../../ci/cases/exception_gen_propagate.py)
 
+### exception_group
+
+- Duty: `ExceptionGroup` and `BaseExceptionGroup` (construction validation, attributes, str/repr, subgroup/split)
+- Compare: `same_output`
+- Source: [ci/cases/exception_group.py](../../ci/cases/exception_group.py)
+
+### exception_except_star
+
+- Duty: `except*` semantics (subgroup matching and shape, auto-wrapping, multi-clause remainder consumption, else/finally, handler exceptions)
+- Compare: `same_output`
+- Source: [ci/cases/exception_except_star.py](../../ci/cases/exception_except_star.py)
+
 ### exception_hierarchy
 
 - Responsibility: Built-in exception inheritance catching and post-catch state isolation
@@ -1905,4 +1953,3 @@ PyGDS-specific suspend/resume mechanics (statement replay after a `time.sleep`-t
 - Duty: suspension and replay of the `with` body and `__exit__` (enter marker prevents re-entry, P0-22 parking stack-up)
 - Compare: `same_output`
 - Source: [ci/cases/suspend_with_replay.py](../../ci/cases/suspend_with_replay.py)
-

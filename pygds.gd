@@ -2336,14 +2336,18 @@ class ExceptClause:
 	var as_name: String
 	## except 分支语句列表
 	var body: Array
+	## 是否为 except* 子句 (异常组语义, PEP 654)
+	var starred: bool = false
 	## 构造 except 子句 [br]
 	## [param exc] 异常类型表达式, 可为 null [br]
 	## [param as_n] as 绑定变量名 [br]
-	## [param b] except 分支语句列表
-	func _init(exc, as_n, b):
+	## [param b] except 分支语句列表 [br]
+	## [param p_starred] 是否为 except* 子句
+	func _init(exc, as_n, b, p_starred = false):
 		exception_type = exc
 		as_name = as_n
 		body = b
+		starred = p_starred
 
 ## raise 语句 [br]
 ## 抛出异常, 可选携带异常表达式, 无表达式时表示重新抛出当前异常 (re-raise), [br]
@@ -15270,6 +15274,132 @@ class DSLANextAwaitable extends DSLObject:
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new("<anext_awaitable object at 0x%x>" % _object_id)
 
+## 异步生成器对象 (v0.8.0-alpha.4, 方案 C) [br]
+## 继承生成器机制持有底层执行状态; 不支持同步迭代, 协议为 [br]
+## __aiter__ (返回自身) / __anext__ / asend / athrow / aclose, [br]
+## 后四者返回步可等待对象 (DSLAGenStep), await 时驱动底层生成器一步
+class DSLAsyncGenerator extends DSLFunctionGenerator:
+	## 限定名 (repr 用)
+	var _qualname: String = ""
+
+	## 构造异步生成器对象 [br]
+	## [param p_interp] 解释器引用 [br]
+	## [param p_func] 异步生成器函数对象 [br]
+	## [param p_env] 参数绑定后的局部环境
+	func _init(p_interp: Interpreter, p_func: DSLFunction, p_env: DSLEnvironment):
+		super._init(p_interp, p_func, p_env)
+		_qualname = p_func.qualname if p_func.qualname != "" else p_func.declaration.name
+
+	func _type_name() -> String:
+		return "async_generator"
+
+	func _dsl_str() -> String:
+		return "<async_generator object %s at 0x%x>" % [_qualname, _object_id]
+
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new("<async_generator object %s at 0x%x>" % [_qualname, _object_id])
+
+	func _dsl_getattribute(name: String) -> DSLObject:
+		match name:
+			"__aiter__":
+				return DSLBuiltinFunction.new(name, Callable(self, "_dsl_aiter"))
+			"__anext__":
+				return DSLBuiltinFunction.new(name, Callable(self, "_dsl_anext"))
+			"asend":
+				return DSLBuiltinFunction.new(name, Callable(self, "_dsl_asend"))
+			"athrow":
+				return DSLBuiltinFunction.new(name, Callable(self, "_dsl_athrow"))
+			"aclose":
+				return DSLBuiltinFunction.new(name, Callable(self, "_dsl_aclose"))
+		return super._dsl_getattribute(name)
+
+	## __aiter__: 返回自身 (CPython 同)
+	func _dsl_aiter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return self
+
+	## __anext__(): 返回单步可等待对象
+	func _dsl_anext(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 0:
+			interp.raise_exception("TypeError", "__anext__() takes exactly 1 argument (%d given)" % (args.size() + 1))
+			return null
+		return _make_step("anext", null, null)
+
+	## asend(value): 返回注入 value 的单步可等待对象
+	func _dsl_asend(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			interp.raise_exception("TypeError", "asend() takes exactly one argument (%d given)" % args.size())
+			return null
+		return _make_step("send", args[0], null)
+
+	## athrow(exc[, value]): 返回在挂起点注入异常的单步可等待对象
+	func _dsl_athrow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() == 0:
+			interp.raise_exception("TypeError", "athrow() missing 1 required positional argument: 'exc'")
+			return null
+		var exc = _throw_arg_to_exception(args)
+		if exc == null:
+			return null
+		return _make_step("throw", null, exc)
+
+	## aclose(): 返回注入 GeneratorExit 的单步可等待对象
+	func _dsl_aclose(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var exc_class = interp.globals.get_val_safe("GeneratorExit")
+		var exc = null
+		if exc_class is DSLClass:
+			exc = exc_class.magic_call([], {})
+		else:
+			exc = DSLException.new("", "GeneratorExit")
+		return _make_step("close", null, exc)
+
+	## 构造单步可等待对象 [br]
+	## [param mode] 驱动模式 ("anext" / "send" / "throw" / "close") [br]
+	## [param send_val] send 注入值 (send 模式) [br]
+	## [param throw_exc] 注入异常 (throw / close 模式) [br]
+	## [returns] 步可等待对象
+	func _make_step(mode: String, send_val: DSLObject, throw_exc) -> DSLAsyncGenStep:
+		return DSLAsyncGenStep.new(self, mode, send_val, throw_exc)
+
+	## 异步生成器不支持同步迭代 (CPython 同文案)
+	func _dsl_iter() -> DSLIterator:
+		last_error = "TypeError: 'async_generator' object is not iterable"
+		return null
+
+## 异步生成器的单步可等待对象 (v0.8.0-alpha.4) [br]
+## CPython 形态: __anext__ / asend 为 async_generator_asend 对象, [br]
+## athrow / aclose 为 async_generator_athrow 对象; await 时驱动底层生成器一步
+class DSLAsyncGenStep extends DSLObject:
+	## 所属异步生成器
+	var agen: DSLAsyncGenerator = null
+	## 驱动模式 ("anext" / "send" / "throw" / "close")
+	var mode: String = "anext"
+	## send 注入值 (send 模式)
+	var send_val: DSLObject = null
+	## 注入异常 (throw / close 模式)
+	var throw_exc = null
+
+	## 构造单步可等待对象 [br]
+	## [param p_agen] 所属异步生成器 [br]
+	## [param p_mode] 驱动模式 [br]
+	## [param p_send] send 注入值 [br]
+	## [param p_exc] 注入异常
+	func _init(p_agen: DSLAsyncGenerator, p_mode: String, p_send: DSLObject, p_exc):
+		super._init()
+		agen = p_agen
+		mode = p_mode
+		send_val = p_send
+		throw_exc = p_exc
+
+	func _type_name() -> String:
+		if mode == "throw" or mode == "close":
+			return "async_generator_athrow"
+		return "async_generator_asend"
+
+	func _dsl_str() -> String:
+		return "<%s object at 0x%x>" % [_type_name(), _object_id]
+
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new("<%s object at 0x%x>" % [_type_name(), _object_id])
+
 ## 变量作用域环境, 管理变量的定义, 读写和作用域链 [br]
 ## 支持 global/nonlocal 声明, 通过 enclosing 链实现嵌套作用域
 class DSLEnvironment:
@@ -16863,6 +16993,23 @@ class Parser:
 	## 括号化多管理器 (3.10 语法) 暂不支持, 随 contextlib 阶段评估 [br]
 	## [returns] 解析出的 WithStmt 节点, 出错时返回 null
 	func with_statement():
+		# 括号化管理器列表 (3.10 语法): with (item[, item...][,]) 紧跟冒号时优先按
+		# 管理器列表解析 (覆盖 with (a, b): 无 as 形态, CPython 同); 失败则回退游标,
+		# 按普通括号表达式解析 (with (a) as b / with (a, b) as t 等)
+		if check(TokenType.LPAREN):
+			var saved_current = current
+			var paren_items = _try_paren_with_items()
+			if paren_items != null:
+				var p_colon = consume(TokenType.COLON, "expected ':'")
+				if p_colon == null:
+					return null
+				var p_body = block()
+				if report.has_error:
+					return null
+				return WithStmt.new(paren_items, p_body)
+			# 回退: 游标与错误状态还原, 按表达式形态继续
+			current = saved_current
+			report.clear_error()
 		var items: Array[WithItem] = []
 		while true:
 			var expr = simple_expression()
@@ -16892,6 +17039,36 @@ class Parser:
 		if report.has_error:
 			return null
 		return WithStmt.new(items, body)
+
+	## 尝试按括号化管理器列表解析 (3.10): (item[, item...][,]) 且右括号后紧跟冒号 [br]
+	## 仅在确认非管理器列表形态 (缺右括号 / 后随非冒号 / 项解析失败) 时返回 null, [br]
+	## 此时调用方须回退游标并清除错误状态; 成功时消费至右括号为止 [br]
+	## [returns] 管理器项数组, 非管理器列表形态返回 null
+	func _try_paren_with_items():
+		advance()
+		var items: Array[WithItem] = []
+		while true:
+			if report.has_error or is_at_end():
+				return null
+			var expr = simple_expression()
+			if report.has_error or expr == null:
+				return null
+			var target = null
+			if match_types([TokenType.AS]):
+				target = parse_target()
+				if target == null or report.has_error:
+					return null
+			items.append(WithItem.new(expr, target))
+			if match_types([TokenType.COMMA]):
+				if check(TokenType.RPAREN):
+					break
+				continue
+			break
+		if not match_types([TokenType.RPAREN]):
+			return null
+		if not check(TokenType.COLON):
+			return null
+		return items
 		
 	## 解析 try/except/finally 异常处理语句 [br]
 	## 支持多个 except 子句和一个可选的 finally 子句 [br]
@@ -16905,8 +17082,19 @@ class Parser:
 			return null
 		
 		var except_clauses: Array[ExceptClause] = []
+		var saw_starred = false
+		var saw_plain = false
 		skip_newlines()
 		while match_types([TokenType.EXCEPT]):
+			var starred = match_types([TokenType.STAR])
+			if starred:
+				saw_starred = true
+			else:
+				saw_plain = true
+			if saw_starred and saw_plain:
+				# CPython 同文案: except 与 except* 不得混用于同一 try
+				report.error("SyntaxError: cannot have both 'except' and 'except*' on the same 'try'")
+				return null
 			var exc_type = null
 			var as_name = ""
 			if not check(TokenType.COLON):
@@ -16915,10 +17103,14 @@ class Parser:
 					var var_tok = consume(TokenType.IDENTIFIER, "Expected variable name after 'as'")
 					if var_tok != null:
 						as_name = var_tok.lexeme
+			if starred and exc_type == null:
+				# CPython 同文案: 裸 except* 非法
+				report.error("SyntaxError: expected one or more exception types")
+				return null
 			var colon = consume(TokenType.COLON, "expected ':'")
 			if colon == null:
 				return null
-			except_clauses.append(ExceptClause.new(exc_type, as_name, block()))
+			except_clauses.append(ExceptClause.new(exc_type, as_name, block(), starred))
 			skip_newlines()
 		
 		# else 子句: 必须在所有 except 之后、finally 之前
@@ -17471,6 +17663,9 @@ class Parser:
 				_walk_async = stmt.is_async
 				stmt.is_generator = _walk_yield_stmt(stmt.body, 1)
 				_walk_async = prev_async
+				if stmt.is_async and stmt.is_generator:
+					# async generator 体内带值 return 报 SyntaxError (CPython 同, PEP 525)
+					_walk_check_async_gen_returns(stmt.body)
 				for p in stmt.params:
 					if p.default_value != null:
 						_walk_yield_expr(p.default_value, scope, "")
@@ -17559,6 +17754,34 @@ class Parser:
 	## [param comp_ctx] 推导式上下文: ""=不在推导式内, "outer"=推导式最外层可迭代 (在函数作用域求值), [br]
 	## 其余为推导式作用域 (list/set/dict/generator), 其中的 yield 一律报错 [br]
 	## [returns] 本作用域内是否含直接 yield (嵌套函数/lambda 的 yield 不计)
+	## async generator 体内带值 return 校验 (直连作用域, 不入嵌套函数/类, PEP 525) [br]
+	## [param stmts] 函数体语句数组
+	func _walk_check_async_gen_returns(stmts: Array) -> void:
+		for st in stmts:
+			if report.has_error:
+				return
+			if st is ReturnStmt:
+				if st.value != null:
+					report.error("SyntaxError: 'return' with value in async generator")
+					return
+			elif st is IfStmt:
+				_walk_check_async_gen_returns(st.then_branch)
+				for branch in st.elif_branches:
+					_walk_check_async_gen_returns(branch[1])
+				_walk_check_async_gen_returns(st.else_branch)
+			elif st is WhileStmt or st is ForStmt:
+				_walk_check_async_gen_returns(st.body)
+			elif st is WithStmt:
+				_walk_check_async_gen_returns(st.body)
+			elif st is TryStmt:
+				_walk_check_async_gen_returns(st.try_body)
+				for clause in st.except_clauses:
+					_walk_check_async_gen_returns(clause.body)
+				_walk_check_async_gen_returns(st.finally_body)
+			elif st is MatchStmt:
+				for c in st.cases:
+					_walk_check_async_gen_returns(c.body)
+
 	func _walk_yield_expr(expr, scope: int, comp_ctx: String) -> bool:
 		if expr == null:
 			return false
@@ -17582,9 +17805,9 @@ class Parser:
 			if scope == 0:
 				report.error("SyntaxError: 'yield' outside function")
 				return false
-			if _walk_async:
-				# PyGDS 既定边界: async def 体内不支持 yield (CPython 3.12 为合法 async generator)
-				report.error("SyntaxError: 'yield' inside async function")
+			if _walk_async and expr.from_expr != null:
+				# CPython 同文案: async 函数体内禁止 yield from (PEP 525)
+				report.error("SyntaxError: 'yield from' inside async function")
 				return false
 			if expr.value != null:
 				_walk_yield_expr(expr.value, scope, comp_ctx)
@@ -19802,6 +20025,150 @@ class Interpreter:
 			return exc._is_subclass_of_klass(type_obj)
 		return false
 	
+	## 判断 try 语句是否为 except* 形态 (解析期保证全部子句同型) [br]
+	## [param stmt] try 语句节点 [br]
+	## [returns] 子句存在且首个子句为 starred 时返回 true
+	func _try_is_starred(stmt: TryStmt) -> bool:
+		return stmt.except_clauses.size() > 0 and stmt.except_clauses[0].starred
+
+	## except* 的成员匹配 (P1-41): 组逐成员按类型表达式判定, 裸异常整体判定 [br]
+	## [param exc] 在途异常 (组或裸异常) [br]
+	## [param type_expr] 子句类型表达式 [br]
+	## [returns] 命中成员数组 (组型时为成员子集, 裸异常命中时为单元素), 未命中为空
+	func _starred_match(exc, type_expr) -> Array[DSLObject]:
+		var matched: Array[DSLObject] = []
+		if _group_members(exc).size() > 0:
+			for m in _group_members(exc):
+				if _is_exception_match(m, type_expr):
+					matched.append(m)
+		elif _is_exception_match(exc, type_expr):
+			matched.append(exc)
+		return matched
+
+	## 由命中成员构造子组 (CPython 同: 恒为组, 组型与消息随来源, 裸异常来源消息为空串) [br]
+	## [param source_exc] 来源异常 (组或裸异常) [br]
+	## [param matched] 命中成员数组 (非空) [br]
+	## [returns] 子组实例
+	func _starred_build_subgroup(source_exc, matched: Array[DSLObject]) -> DSLObject:
+		var is_base := false
+		var msg := ""
+		if _group_members(source_exc).size() > 0:
+			is_base = source_exc._type_name() == "BaseExceptionGroup"
+			if source_exc.fields.has("message"):
+				msg = (source_exc.fields["message"] as DSLString).value
+		else:
+			# 裸异常自动包装: BaseException 直系用 BaseExceptionGroup (PEP 654)
+			is_base = _is_base_only_exception(source_exc)
+		return _build_group(is_base, msg, matched)
+
+	## 计算余量 (原异常减去命中成员) [br]
+	## 组来源: 剩余成员重建同型同消息组, 空则 null (全部吞掉); [br]
+	## 裸异常来源: 命中即全部吞掉 (null), 未命中时由调用方传播原异常 [br]
+	## [param source_exc] 来源异常 [br]
+	## [param matched] 已命中的成员数组 [br]
+	## [returns] 余量异常 (组或原裸异常), 全部吞掉时返回 null
+	func _starred_remainder(source_exc, matched: Array[DSLObject]):
+		if _group_members(source_exc).size() > 0:
+			var all_matched := true
+			for m in _group_members(source_exc):
+				var found := false
+				for k in matched:
+					if k == m:
+						found = true
+						break
+				if not found:
+					all_matched = false
+					break
+			if all_matched:
+				return null
+			var rest: Array[DSLObject] = []
+			for m in _group_members(source_exc):
+				var found2 := false
+				for k in matched:
+					if k == m:
+						found2 = true
+						break
+				if not found2:
+					rest.append(m)
+			var is_base = source_exc._type_name() == "BaseExceptionGroup"
+			var msg = ""
+			if source_exc.fields.has("message"):
+				msg = (source_exc.fields["message"] as DSLString).value
+			return _build_group(is_base, msg, rest)
+		return null
+
+	## except* 子句处置 (P1-41 / PEP 654) [br]
+	## 裸异常自动包装 (消息空串, BaseException 直系用 BaseExceptionGroup); [br]
+	## 逐子句求匹配子组: 命中以子组为在途异常执行处理器体 (as 名绑定并隐式删除), [br]
+	## 体正常完成即吞掉子组并对余量继续后续子句; 体新异常直达 finally (余量丢弃, [br]
+	## __context__ 链由 raise 侧记录); 全部子句完成后的余量以组形态传播, [br]
+	## 裸异常未命中任何子句时传播原裸异常 (CPython 同); [br]
+	## 处理器体挂起时 stage / except_idx / starred_exc 落盘, 恢复轮按其续延 [br]
+	## [param stmt] try 语句节点 [br]
+	## [param ri] 恢复信息 (stage == except 时含 starred_exc / except_idx) [br]
+	## [returns] NORMAL (全部吞掉) / RAISE (余量或处理器异常) / SUSPENDED
+	func _exec_try_star(stmt: TryStmt, ri: Dictionary) -> ExecResult:
+		var star_exc = null
+		var original_exc = null
+		var idx = 0
+		var resuming = ri.get("try_stage", "") == "except"
+		if resuming:
+			star_exc = ri.get("starred_exc")
+			idx = ri.get("except_idx", 0)
+		else:
+			original_exc = last_exception
+			star_exc = original_exc
+		var res = ExecResult.NORMAL
+		var swallowed_all = false
+		var ever_matched = false
+		while idx < stmt.except_clauses.size():
+			var clause = stmt.except_clauses[idx]
+			var matched = _starred_match(star_exc, clause.exception_type)
+			if matched.is_empty():
+				idx += 1
+				continue
+			ever_matched = true
+			var subgroup = _starred_build_subgroup(star_exc, matched)
+			# 以子组为在途异常执行处理器体 (通道清空使体干净运行, 裸 raise 重抛子组)
+			last_exception = subgroup
+			report.clear_error()
+			if clause.as_name != "":
+				environment.define(clause.as_name, subgroup)
+			if _exec_stack.size() > 0:
+				_exec_stack.back().resume_info = {"try_stage": "except", "except_idx": idx, "starred_exc": star_exc}
+			res = exec_block(clause.body, environment)
+			if res == ExecResult.SUSPENDED:
+				return ExecResult.SUSPENDED
+			if clause.as_name != "":
+				environment.values.erase(clause.as_name)
+			if res == ExecResult.RAISE or res == ExecResult.ERROR:
+				# 处理器新异常: 余量丢弃, 直达 finally
+				return res
+			# 体正常完成: 子组吞掉, 余量推进
+			last_exception = null
+			report.clear_error()
+			var remainder = _starred_remainder(star_exc, matched)
+			if remainder == null:
+				swallowed_all = true
+				break
+			star_exc = remainder
+			idx += 1
+		if swallowed_all:
+			last_exception = null
+			report.clear_error()
+			return ExecResult.NORMAL
+		if not ever_matched and original_exc != null and _group_members(original_exc).size() == 0:
+			# 裸异常未命中任何子句: 传播原裸异常 (CPython 同)
+			raise_existing_exception(original_exc)
+			return ExecResult.RAISE
+		if star_exc != null:
+			# 余量以组形态继续传播
+			raise_existing_exception(star_exc)
+			return ExecResult.RAISE
+		last_exception = null
+		report.clear_error()
+		return ExecResult.NORMAL
+
 	## 内置异常 __init__ 回调 [br]
 	## 从参数中提取消息并构造 DSLException 存入 wrapper._wrapped [br]
 	## [param exc_args] 异常构造函数参数, 首个为 DSLInstance wrapper [br]
@@ -19839,6 +20206,199 @@ class Interpreter:
 				return DSLObject._py_repr(pos_args[0])
 		return pos_args[0]._dsl_str()
 	
+	## 异常组 __init__ 回调 (PEP 654): 校验 message 与成员并写入组字段 [br]
+	## 成员须为异常实例 (空序列 / 非异常成员报 ValueError, ExceptionGroup 含 [br]
+	## BaseException 成员报 TypeError), 字段: args / message / exceptions / 因果链默认值
+	## [param exc_args] [wrapper, message, exceptions 序列] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLNone
+	func _exception_group_init(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var wrapper = exc_args[0]
+		if exc_args.size() != 3:
+			raise_exception("TypeError", "BaseExceptionGroup.__new__() takes exactly 2 arguments (%d given)" % (exc_args.size() - 1))
+			return null
+		var msg_obj = DSLObject._unwrap_dsl(exc_args[1])
+		if not (msg_obj is DSLString):
+			raise_exception("TypeError", "BaseExceptionGroup.__new__() argument 1 must be str, not %s" % msg_obj._type_name())
+			return null
+		var members: Array[DSLObject] = []
+		var seq = DSLObject._unwrap_dsl(exc_args[2])
+		if seq is DSLList or seq is DSLTuple:
+			for m in seq.items:
+				members.append(m)
+		else:
+			raise_exception("TypeError", "second argument (exceptions) must be a sequence")
+			return null
+		if members.is_empty():
+			raise_exception("ValueError", "second argument (exceptions) must be a non-empty sequence")
+			return null
+		var is_base := true
+		if wrapper.klass != null and (wrapper.klass as DSLClass).name == "ExceptionGroup":
+			is_base = false
+		for i in range(members.size()):
+			# 成员保持 wrapper 原样 (unwrap 会取到内层 DSLException, klass 为空无法判定谱系)
+			var m = members[i]
+			if not (m is DSLException) and not _is_registered_exception_instance(m):
+				raise_exception("ValueError", "Item %d of second argument (exceptions) is not an exception" % i)
+				return null
+			if not is_base and _is_base_only_exception(m):
+				raise_exception("TypeError", "Cannot nest BaseExceptions in an ExceptionGroup")
+				return null
+		wrapper.fields["message"] = DSLString.new(msg_obj.value)
+		wrapper.fields["exceptions"] = DSLTuple.new(members)
+		wrapper.fields["args"] = DSLTuple.new([msg_obj, exc_args[2]] as Array[DSLObject])
+		wrapper.fields["__cause__"] = _wrap(null)
+		wrapper.fields["__suppress_context__"] = _wrap(false)
+		wrapper.fields["__traceback__"] = _wrap(null)
+		wrapper.fields["__context__"] = _wrap(null)
+		return DSLNone.new()
+
+	## 判断异常实例是否为 BaseException 直系 (不在 Exception 体系内, 如 KeyboardInterrupt) [br]
+	## [param exc] 异常实例 [br]
+	## [returns] 是 BaseException 成员且非 Exception 子类时返回 true
+	func _is_base_only_exception(exc) -> bool:
+		if exc.klass == null:
+			return false
+		var has_base := false
+		var has_exc := false
+		for k in (exc.klass as DSLClass).mro:
+			if k.name == "BaseException":
+				has_base = true
+			if k.name == "Exception":
+				has_exc = true
+		return has_base and not has_exc
+
+	## 异常组 str: msg (N sub-exception(s)) 形态 (CPython 同) [br]
+	## [param exc_args] [wrapper] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLString
+	func _exception_group_str(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var wrapper = exc_args[0]
+		var msg = ""
+		var count = 0
+		if wrapper.fields.has("message"):
+			msg = (wrapper.fields["message"] as DSLString).value
+		if wrapper.fields.has("exceptions"):
+			count = (wrapper.fields["exceptions"] as DSLTuple).items.size()
+		var plural = "" if count == 1 else "s"
+		return DSLString.new("%s (%d sub-exception%s)" % [msg, count, plural])
+
+	## 异常组 repr: ExceptionGroup('msg', (成员 repr...)) 形态 [br]
+	## [param exc_args] [wrapper] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLString
+	func _exception_group_repr(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var wrapper = exc_args[0]
+		var type_name = wrapper._type_name()
+		var msg = ""
+		if wrapper.fields.has("message"):
+			msg = (wrapper.fields["message"] as DSLString).value
+		var parts: Array[String] = []
+		if wrapper.fields.has("exceptions"):
+			for m in (wrapper.fields["exceptions"] as DSLTuple).items:
+				parts.append(m.magic_repr([m] as Array[DSLObject], {} as Dictionary[String, DSLObject])._dsl_str())
+		return DSLString.new("%s('%s', (%s))" % [type_name, msg, ", ".join(parts)])
+
+	## 取异常组的成员数组 [br]
+	## [param group] 异常组实例 [br]
+	## [returns] 成员数组
+	func _group_members(group: DSLObject) -> Array[DSLObject]:
+		var out: Array[DSLObject] = []
+		if group.fields != null and group.fields.has("exceptions"):
+			for m in (group.fields["exceptions"] as DSLTuple).items:
+				out.append(m)
+		return out
+
+	## 判断异常实例是否命中组过滤器 (异常类 / 类元组 / 可调用) [br]
+	## [param member] 成员异常实例 [br]
+	## [param filter] 过滤器 [br]
+	## [returns] 命中返回 true
+	func _group_filter_match(member: DSLObject, filter) -> bool:
+		var f = DSLObject._unwrap_dsl(filter)
+		if f is DSLClass:
+			return member.fields != null and member._is_subclass_of_klass(f)
+		if f is DSLTuple:
+			for item in f.items:
+				if item is DSLClass and member.fields != null and member._is_subclass_of_klass(item):
+					return true
+			return false
+		if f != null and f._dsl_is_callable():
+			var r = _dispatch_call(f, [member] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if _suspended:
+				return false
+			return r != null and not (r is DSLNone) and r._dsl_bool()
+		return false
+
+	## 构造异常组实例 (成员已校验, 经注册类走完整初始化) [br]
+	## [param is_base] 是否为 BaseExceptionGroup 形态 [br]
+	## [param msg] 组消息 [br]
+	## [param members] 成员数组 [br]
+	## [returns] 组实例
+	func _build_group(is_base: bool, msg: String, members: Array[DSLObject]) -> DSLObject:
+		var cls = globals.get_val("BaseExceptionGroup" if is_base else "ExceptionGroup")
+		var args: Array[DSLObject] = [DSLString.new(msg), DSLTuple.new(members)]
+		# magic_call 在报告通道有错时跳过 __init__ (P0-22 同源守卫):
+		# 组构造多发生在在途异常通道非空时, 保存清空后还原
+		var saved_has_error = report.has_error
+		var saved_last_error = report.last_error
+		report.has_error = false
+		report.last_error = ""
+		var built = cls.magic_call(args, {} as Dictionary[String, DSLObject])
+		if report.has_error:
+			# 构造期校验失败 (成员异常性等): 以本次错误为准
+			return null
+		report.has_error = saved_has_error
+		report.last_error = saved_last_error
+		return built
+
+	## 异常组 subgroup(filter): 按过滤器取匹配子组 [br]
+	## 无匹配返回 None; 命中成员 (含 1 个) 仍为组, 组型与消息随原组 (CPython 同) [br]
+	## [param exc_args] [wrapper 组实例, filter] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] 子组或 None
+	func _group_subgroup(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var group = exc_args[0]
+		var is_base := true
+		if group.klass != null and (group.klass as DSLClass).name == "ExceptionGroup":
+			is_base = false
+		var msg = ""
+		if group.fields.has("message"):
+			msg = (group.fields["message"] as DSLString).value
+		var matched: Array[DSLObject] = []
+		for m in _group_members(group):
+			if _group_filter_match(m, exc_args[1]):
+				matched.append(m)
+		if matched.is_empty():
+			return get_none()
+		return _build_group(is_base, msg, matched)
+
+	## 异常组 split(filter): 返回 (匹配组, 余量) 二元组, 空侧为 None (CPython 同) [br]
+	## [param exc_args] [wrapper 组实例, filter] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLTuple(match, rest)
+	func _group_split(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var group = exc_args[0]
+		var is_base := true
+		if group.klass != null and (group.klass as DSLClass).name == "ExceptionGroup":
+			is_base = false
+		var msg = ""
+		if group.fields.has("message"):
+			msg = (group.fields["message"] as DSLString).value
+		var matched: Array[DSLObject] = []
+		var rest: Array[DSLObject] = []
+		for m in _group_members(group):
+			if _group_filter_match(m, exc_args[1]):
+				matched.append(m)
+			else:
+				rest.append(m)
+		var match_part: DSLObject = get_none()
+		if not matched.is_empty():
+			match_part = _build_group(is_base, msg, matched)
+		var rest_part: DSLObject = get_none()
+		if not rest.is_empty():
+			rest_part = _build_group(is_base, msg, rest)
+		return DSLTuple.new([match_part, rest_part] as Array[DSLObject])
+
 	## 内置 object.__init__ 回调 [br]
 	## 默认无操作, 仅返回 DSLNone [br]
 	## [param args] 初始化参数 (首项为 DSLInstance wrapper) [br]
@@ -20180,6 +20740,31 @@ class Interpreter:
 		_define_exception("StopIteration")
 		_define_exception("StopAsyncIteration")
 		_define_exception("SyntaxError")
+		# 异常组 (PEP 654): 构造校验 / str / repr / subgroup / split 为组特有形态
+		_define_exception("KeyboardInterrupt", "BaseException")
+		_define_exception("BaseExceptionGroup", "BaseException")
+		_define_exception("ExceptionGroup", "BaseExceptionGroup")
+		# CPython: ExceptionGroup(BaseExceptionGroup, Exception) 双继承,
+		# 单基注册后向 mro 补插 Exception 使 except Exception 可捕获
+		var eg_class = globals.get_val_safe("ExceptionGroup")
+		if eg_class is DSLClass:
+			var mro_fixed: Array[DSLClass] = []
+			for k in (eg_class as DSLClass).mro:
+				mro_fixed.append(k)
+				if k.name == "BaseExceptionGroup" and not mro_fixed.has(globals.get_val_safe("Exception")):
+					var exc_cls = globals.get_val_safe("Exception")
+					if exc_cls is DSLClass:
+						mro_fixed.append(exc_cls)
+			(eg_class as DSLClass).mro = mro_fixed
+		for group_cls_name in ["BaseExceptionGroup", "ExceptionGroup"]:
+			var gcls = globals.get_val_safe(group_cls_name)
+			if gcls is DSLClass:
+				var gc = gcls as DSLClass
+				gc.methods["__init__"] = DSLMethodDescriptor.new("__init__", Callable(self, "_exception_group_init"))
+				gc.methods["__str__"] = DSLWrappedDescriptor.new("__str__", Callable(self, "_exception_group_str"))
+				gc.methods["__repr__"] = DSLWrappedDescriptor.new("__repr__", Callable(self, "_exception_group_repr"))
+				gc.methods["subgroup"] = DSLWrappedDescriptor.new("subgroup", Callable(self, "_group_subgroup"))
+				gc.methods["split"] = DSLWrappedDescriptor.new("split", Callable(self, "_group_split"))
 		_define_exception("GeneratorExit", "BaseException")
 		_define_exception("AssertionError")
 		_define_exception("EOFError")
@@ -20220,6 +20805,22 @@ class Interpreter:
 		var mp_type_class = DSLClass.new("mappingproxy", obj_class, {}, self)
 		mp_type_class.klass = type_class
 		_builtin_type_classes["mappingproxy"] = mp_type_class
+		# 协程 / 异步生成器及其步可等待对象的类型类 (v0.8.0-alpha.4)
+		var coro_type_class = DSLClass.new("coroutine", obj_class, {}, self)
+		coro_type_class.klass = type_class
+		_builtin_type_classes["coroutine"] = coro_type_class
+		var agen_type_class = DSLClass.new("async_generator", obj_class, {}, self)
+		agen_type_class.klass = type_class
+		_builtin_type_classes["async_generator"] = agen_type_class
+		var agensend_type_class = DSLClass.new("async_generator_asend", obj_class, {}, self)
+		agensend_type_class.klass = type_class
+		_builtin_type_classes["async_generator_asend"] = agensend_type_class
+		var agenthrow_type_class = DSLClass.new("async_generator_athrow", obj_class, {}, self)
+		agenthrow_type_class.klass = type_class
+		_builtin_type_classes["async_generator_athrow"] = agenthrow_type_class
+		var anextaw_type_class = DSLClass.new("anext_awaitable", obj_class, {}, self)
+		anextaw_type_class.klass = type_class
+		_builtin_type_classes["anext_awaitable"] = anextaw_type_class
 
 		# klass 为空的内建值解析 __class__ 的注册表 (键为 _type_name())
 		DSLObject._builtin_class_by_name["int"] = int_class
@@ -20239,6 +20840,11 @@ class Interpreter:
 		DSLObject._builtin_class_by_name["builtin_function_or_method"] = bf_type_class
 		DSLObject._builtin_class_by_name["method"] = bm_type_class
 		DSLObject._builtin_class_by_name["mappingproxy"] = mp_type_class
+		DSLObject._builtin_class_by_name["coroutine"] = coro_type_class
+		DSLObject._builtin_class_by_name["async_generator"] = agen_type_class
+		DSLObject._builtin_class_by_name["async_generator_asend"] = agensend_type_class
+		DSLObject._builtin_class_by_name["async_generator_athrow"] = agenthrow_type_class
+		DSLObject._builtin_class_by_name["anext_awaitable"] = anextaw_type_class
 		_builtin_name_snapshot.assign(globals.values.keys())
 	
 	## 注册内置模块到模块注册表 [br]
@@ -23782,7 +24388,12 @@ class Interpreter:
 			
 			var else_raised = false
 			var handler_raised = false
-			if stage == "except":
+			if stage == "except" and _try_is_starred(stmt):
+				# except* 专用处置: 恢复被挂起的处理器体并继续余量子句 (P1-41)
+				res = _exec_try_star(stmt, ri)
+				if res == ExecResult.SUSPENDED:
+					return res
+			elif stage == "except":
 				# 恢复被挂起的 except 体 (从保存的 pc 继续)
 				if exc_idx < stmt.except_clauses.size():
 					res = exec_block(stmt.except_clauses[exc_idx].body, environment)
@@ -23791,6 +24402,9 @@ class Interpreter:
 				# 处理器体内新异常 (含裸 raise 重抛): 直达 finally, 异常随 res 传播
 				if res == ExecResult.RAISE:
 					handler_raised = true
+				else:
+					# 处理器体正常完成: 被捕获异常随之清除 (与 fresh 路径一致, CPython 同语义)
+					last_exception = null
 				# CPython: except as 名在块结束时隐式删除 (异常退出同样删除)
 				if exc_idx < stmt.except_clauses.size() and stmt.except_clauses[exc_idx].as_name != "":
 					environment.values.erase(stmt.except_clauses[exc_idx].as_name)
@@ -23840,7 +24454,12 @@ class Interpreter:
 			
 			# 处理 try 体结果 (异常分发, 首次执行与 try 体恢复后共用)
 			# else 体抛出的异常不参与本 try 的 except 匹配; 处理器体内的新异常同样不再匹配
-			if res == ExecResult.RAISE and not else_raised and not handler_raised:
+			if res == ExecResult.RAISE and not else_raised and not handler_raised and _try_is_starred(stmt):
+				# except* 专用处置 (P1-41): 自动包装 / 逐子句子组匹配 / 余量传播
+				res = _exec_try_star(stmt, ri)
+				if res == ExecResult.SUSPENDED:
+					return res
+			if res == ExecResult.RAISE and not else_raised and not handler_raised and not _try_is_starred(stmt):
 				var caught = false
 				for i in range(stmt.except_clauses.size()):
 					var clause = stmt.except_clauses[i]
@@ -24153,20 +24772,26 @@ class Interpreter:
 				return ExecResult.SUSPENDED
 			if iterable == null or report.has_error:
 				return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
-			var aiter_fn = null
-			if iterable.klass != null:
-				aiter_fn = iterable.klass._lookup_method("__aiter__")
-			if aiter_fn == null:
-				raise_exception("TypeError", "'async for' requires an object with __aiter__ method, got %s" % iterable._type_name())
-				return ExecResult.RAISE
-			iterator = iterable.klass._invoke_func(aiter_fn, [iterable] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-			if _suspended:
-				_expr_evaluated = false
-				return ExecResult.SUSPENDED
-			if iterator == null or report.has_error:
-				return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+			if iterable is DSLAsyncGenerator:
+				# 异步生成器: __aiter__ 返回自身
+				iterator = iterable
+			else:
+				var aiter_fn = null
+				if iterable.klass != null:
+					aiter_fn = iterable.klass._lookup_method("__aiter__")
+				if aiter_fn == null:
+					raise_exception("TypeError", "'async for' requires an object with __aiter__ method, got %s" % iterable._type_name())
+					return ExecResult.RAISE
+				iterator = iterable.klass._invoke_func(aiter_fn, [iterable] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if _suspended:
+					_expr_evaluated = false
+					return ExecResult.SUSPENDED
+				if iterator == null or report.has_error:
+					return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
 			var anext_fn = null
-			if iterator.klass != null:
+			if iterator is DSLAsyncGenerator:
+				anext_fn = true
+			elif iterator.klass != null:
 				anext_fn = iterator.klass._lookup_method("__anext__")
 			if anext_fn == null:
 				raise_exception("TypeError", "'async for' received an object from __aiter__ that does not implement __anext__: %s" % iterator._type_name())
@@ -24233,6 +24858,20 @@ class Interpreter:
 				return res
 		return ExecResult.NORMAL
 
+	## 调用对象的 __anext__ (v0.8.0-alpha.4): 异步生成器走内建单步, [br]
+	## 用户类走协议查找并前置接收者; 无协议返回 null 由调用方报错 [br]
+	## [param it] 异步迭代器 [br]
+	## [returns] 可等待对象 (协程 / 步可等待对象), 无协议返回 null
+	func _call_anext_method(it: DSLObject) -> DSLObject:
+		if it is DSLAsyncGenerator:
+			return (it as DSLAsyncGenerator)._dsl_anext([], {})
+		var anext_fn = null
+		if it.klass != null:
+			anext_fn = it.klass._lookup_method("__anext__")
+		if anext_fn == null:
+			return null
+		return it.klass._invoke_func(anext_fn, [it] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+
 	## async for 的单步推进: 调用 __anext__() 并 await 驱动至完成 (P1-9) [br]
 	## 委托状态按语句节点保存在 _yield_from_states 中, 重放时不再重复发起调用 [br]
 	## [param iterator] 异步迭代器 [br]
@@ -24245,19 +24884,20 @@ class Interpreter:
 			return null
 		var raw = null
 		if _find_yield_from_state(gen, node) == null:
-			var anext_fn = iterator.klass._lookup_method("__anext__")
 			# 手动调用不借用 ambient 节点参与语句级生成器记忆: 每轮迭代是全新调用,
 			# 重放清空出现序后误取回已耗尽的旧协程会重复产出 (置 null 使 memo 直通)
 			var prev_node = _current_call_node
 			_current_call_node = null
-			raw = iterator.klass._invoke_func(anext_fn, [iterator] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			raw = _call_anext_method(iterator)
 			_current_call_node = prev_node
 			if _suspended:
 				return null
 			if raw == null or report.has_error:
+				if raw == null and last_exception == null and not report.has_error:
+					raise_exception("TypeError", "'async for' received an object from __aiter__ that does not implement __anext__: %s" % iterator._type_name())
 				return null
 			raw = DSLObject._unwrap_dsl(raw)
-			var has_await = raw is DSLCoroutine or (raw.klass != null and raw.klass._lookup_method("__await__") != null)
+			var has_await = raw is DSLCoroutine or raw is DSLAsyncGenStep or (raw.klass != null and raw.klass._lookup_method("__await__") != null)
 			if not has_await:
 				raise_exception("TypeError", "'async for' received an object from __anext__ that does not implement __await__: %s" % raw._type_name())
 				return null
@@ -25371,17 +26011,22 @@ class Interpreter:
 				raise_existing_exception(exc)
 				return null
 		var anext_default = null
+		if val is DSLAsyncGenStep:
+			# 异步生成器单步可等待对象: 独立驱动路径 (产出值即 await 结果)
+			return _await_agen_step(gen, node, val)
 		if state == null:
 			var sub = null
 			if val is DSLANextAwaitable:
 				var aw = val as DSLANextAwaitable
 				anext_default = aw.default_value
-				var anext_fn = aw.iterator.klass._lookup_method("__anext__")
 				# 手动调用不借用 ambient 节点参与语句级生成器记忆 (与 _await_anext 同理)
 				var prev_node = _current_call_node
 				_current_call_node = null
-				sub = aw.iterator.klass._invoke_func(anext_fn, [aw.iterator] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				sub = _call_anext_method(aw.iterator)
 				_current_call_node = prev_node
+				if sub == null and not _suspended and not report.has_error:
+					raise_exception("TypeError", "'%s' object is not an async iterator" % aw.iterator._type_name())
+					return null
 				if _suspended:
 					return null
 				if sub == null or report.has_error:
@@ -25421,6 +26066,87 @@ class Interpreter:
 			last_exception = null
 			return state["anext_default"]
 		return res
+
+	## 异步生成器单步可等待对象的 await 驱动 (v0.8.0-alpha.4, 方案 C) [br]
+	## 经共享迭代器推进底层生成器一步: 产出值即 await 结果 (不被自动 await, [br]
+	## CPython 同); return / 耗尽 → StopAsyncIteration, 注入异常原样传播; [br]
+	## close 模式注入 GeneratorExit, 生成器再 yield 报 ignored, 收尾返回 None; [br]
+	## 体内挂起时状态按节点保留, 恢复轮续延同一迭代器不重复推进 [br]
+	## [param gen] 所属协程 (状态宿主) [br]
+	## [param node] 状态键节点 (AwaitExpr) [br]
+	## [param step] 单步可等待对象 [br]
+	## [returns] await 的值, 挂起返回 null (_suspended 置位), 出错返回 null (错误通道已置)
+	func _await_agen_step(gen, node, step: DSLAsyncGenStep) -> DSLObject:
+		var inner = step.agen
+		var state = _find_yield_from_state(gen, node)
+		if gen._throw_pending:
+			# 外层协程的 throw 注入: 委托未开始时就地抛出
+			gen._throw_pending = false
+			var pending = gen._throw_value
+			gen._throw_value = null
+			raise_existing_exception(pending)
+			return null
+		var it = null
+		if state == null:
+			# 首次驱动: 按 mode 注入后推进一步
+			match step.mode:
+				"send":
+					if inner._finished:
+						report.clear_error()
+						last_exception = null
+						raise_exception("StopAsyncIteration", "")
+						return null
+					inner._send_value = step.send_val
+				"anext":
+					inner._send_value = null
+				"throw":
+					inner._throw_pending = true
+					inner._throw_value = step.throw_exc
+				"close":
+					inner._throw_pending = true
+					inner._throw_value = step.throw_exc
+			# 直取共享迭代器 (绕过 _dsl_iter 的同步迭代拒绝: 那是 iter(agen) 的语义)
+			if inner._iterator == null:
+				inner._iterator = DSLFunctionGeneratorIterator.new(inner)
+			it = inner._iterator
+			it.windowed = false
+			state = {"expr": node, "iter": it, "val": step, "started": false}
+			gen._yield_from_states.append(state)
+		else:
+			it = state.iter
+		var hn = it.has_next()
+		if hn:
+			if _suspended:
+				# 底层步内程序挂起: 保留状态, 恢复轮续延
+				return null
+			var item = it.next()
+			gen._yield_from_states.erase(state)
+			if step.mode == "close":
+				# GeneratorExit 注入后生成器仍产出: ignored (CPython 同)
+				report.clear_error()
+				last_exception = null
+				raise_exception("RuntimeError", "async generator ignored GeneratorExit")
+				return null
+			return item
+		if _suspended:
+			return null
+		gen._yield_from_states.erase(state)
+		if last_exception != null:
+			if step.mode == "close" and last_exception._type_name() == "GeneratorExit":
+				# close 注入的 GeneratorExit 随生成器收尾静默 (与 _dsl_close 同约定)
+				report.clear_error()
+				last_exception = null
+				return get_none()
+			if last_exception._type_name() != "StopAsyncIteration":
+				# 注入异常未被生成器体内捕获: 原样传播
+				return null
+		# 底层 return / 耗尽 (含 close 收尾): 清通道后按模式收尾
+		report.clear_error()
+		last_exception = null
+		if step.mode == "close":
+			return get_none()
+		raise_exception("StopAsyncIteration", "")
+		return null
 
 	## 解析可等待对象为可被委托驱动的子迭代器 (P1-9) [br]
 	## 协程直接返回自身; 其它对象查找 __await__ 协议并调用, 结果须为迭代器形态 [br]
@@ -26829,6 +27555,14 @@ class Interpreter:
 				
 		# 生成器函数: 参数绑定完成后不执行函数体, 立即返回生成器对象
 		if function.declaration.is_generator:
+			if function.declaration.is_async:
+				# async generator (v0.8.0-alpha.4): 异步迭代协议, await 驱动单步
+				# (不登记 never-awaited: CPython 对 async generator 走独立的 finalization 机制)
+				var agen = DSLAsyncGenerator.new(self, function, local)
+				agen.cur_class = function._defining_class
+				if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
+					agen.cur_self = args[0]
+				return _memo_generator(_current_call_node, agen)
 			var gen = DSLFunctionGenerator.new(self, function, local)
 			gen.cur_class = function._defining_class
 			if args.size() > 0 and (function.method_type == 0 or function.method_type == 1):
@@ -29528,6 +30262,9 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception("TypeError", "aiter() takes exactly one argument (%d given)" % args.size())
 			return null
 		var obj = args[0]
+		if obj is DSLAsyncGenerator:
+			# 异步生成器: __aiter__ 返回自身
+			return obj
 		var aiter_fn = null
 		if obj.klass != null:
 			aiter_fn = obj.klass._lookup_method("__aiter__")
@@ -29547,6 +30284,11 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception("TypeError", "anext expected at most 2 arguments, got %d" % args.size())
 			return null
 		var it = args[0]
+		if it is DSLAsyncGenerator:
+			# 异步生成器: 默认值形态经 anext 包装吸 StopAsyncIteration
+			if args.size() == 2:
+				return DSLANextAwaitable.new(it, args[1], true)
+			return (it as DSLAsyncGenerator)._dsl_anext([], {})
 		var anext_fn = null
 		if it.klass != null:
 			anext_fn = it.klass._lookup_method("__anext__")

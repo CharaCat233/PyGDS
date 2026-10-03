@@ -1215,6 +1215,21 @@ finally:
 
 > **Interaction with the suspend system**: `time.sleep` (and the explicit suspend APIs) inside the `try` body, an `except` handler or the `finally` body all suspend and resume normally. When an exception raised by the try body is still in flight and the `finally` body suspends, the pending exception keeps propagating after resumption and the outer `except` catches it normally (an uncaught one terminates as a regular error); `return` / `break` / `continue` in the `finally` still discard the in-flight exception per Python semantics, and a new exception raised by the `finally` replaces the pending one following exception chaining semantics
 
+### Exception Groups and except* (PEP 654)
+
+`ExceptionGroup(msg, exceptions)` / `BaseExceptionGroup(msg, exceptions)` pack several exceptions into one (`exceptions` is a member tuple, `message` the message; construction validation matches CPython: empty sequences / non-exception members raise `ValueError`, `BaseException` members in an `ExceptionGroup` and non-str messages raise `TypeError`). `except* type as e:` matches by subgroup: a naked exception is auto-wrapped (empty message; `BaseException` direct members use `BaseExceptionGroup`); the matched subgroup binds to the `as` name (always a group), a normally finishing clause swallows the subgroup and the remaining clauses continue against the remainder; the remainder after all clauses propagates as a group, and an unmatched naked exception propagates as itself. `subgroup(filter)` / `split(filter)` provide programmatic splitting (`None` on no match)
+
+```python
+try:
+    raise ExceptionGroup("g", [ValueError("v"), TypeError("t")])
+except* TypeError as e:
+    print(len(e.exceptions))   # 1
+except* ValueError as e:
+    print(str(e))              # g (1 sub-exception)
+```
+
+> `except` and `except*` must not be mixed on one `try`; a bare `except*:` is illegal. Established simplification: nested groups are not matched recursively
+
 ### with Statement
 
 The `with` statement drives the context manager protocol: on entry the manager's `__enter__` is called (its return value is bound to the `as` target), and after the body the managers' `__exit__(exc_type, exc, tb)` run in reverse order. Comma-separated multiple managers are equivalent to nested `with` blocks (entered in order, exited in reverse). With no exception all three arguments are `None`; with an exception `__exit__` receives the exception class, the exception instance and `None` (PyGDS has no traceback object, so tb is always `None` — an established shape). A truthy `__exit__` return suppresses the in-flight exception (outer managers then exit without one), a falsy value lets it propagate; `return` / `break` / `continue` through the body also trigger the exit. A missing protocol raises `TypeError: 'X' object does not support the context manager protocol` (a missing `__exit__` on the exit side adds the `(missed __exit__ method)` suffix). File objects (returned by `open()`) implement the protocol: entry returns the file itself, exit closes it
@@ -1253,7 +1268,7 @@ print(f.closed)               # True
 
 > **Interaction with the suspension system**: `time.sleep` (and active suspension APIs) inside the `with` body, `__enter__` and `__exit__` suspend and resume normally. Resuming a suspended body never re-runs `__enter__` (the enter marker), and an `__exit__` suspension with an exception in flight resumes normally, deciding suppression or propagation by its return value. A `with` inside a generator keeps its entered state across `yield`, and the `GeneratorExit` injected by `close()` passes through the exit path as well
 
-> **Not yet supported**: parenthesized manager lists (`with (a as b, c as d):`, Python 3.10 syntax) and the `contextlib` module
+> **Not yet supported**: the `contextlib` module (P1-71). Parenthesized manager lists (3.10) are supported: `with (a as b, c as d):` parses as a manager list (a `with (a, b):` without `as` is also a list), while an `as` after the closing paren falls back to the tuple expression
 
 ### raise ... from Exception Chaining
 
@@ -1340,7 +1355,9 @@ except StopIteration as e:
 
 > **never-awaited warning**: at script end, coroutines created but never started get `RuntimeWarning: coroutine 'x' was never awaited` on the print channel (CPython emits at GC time on stderr — an established difference in channel and timing); started coroutines are never reported
 
-> **Established boundaries**: `yield` inside an `async def` body raises `SyntaxError` (CPython 3.12 allows async generators; PyGDS rejects it); await inside comprehensions remains unsupported; `import asyncio` is unavailable; no event-loop entries such as `asyncio.run` exist, async scenarios are still replaced by the suspension system
+Async generators (PEP 525): `yield` inside an `async def` is legal and the call returns an `async_generator` object; `__aiter__` returns self, and `__anext__` / `asend` / `athrow` / `aclose` return step awaitables whose await drives one step (the produced value is the element and is not auto-awaited); `return` with a value and `yield from` raise `SyntaxError` (CPython message)
+
+> **Established boundaries**: `yield from` inside async function bodies and await in comprehensions remain unsupported; `import asyncio` is unavailable; no event-loop entries such as `asyncio.run` exist, async scenarios are still replaced by the suspension system
 
 ### Custom Classes and Magic Methods
 
