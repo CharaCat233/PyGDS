@@ -650,6 +650,42 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_while_else.py](../../ci/cases/syntax_while_else.py)
 
+### syntax_with
+
+- Duty: `with` statement grammar core, multi-manager ordering, control-flow traversal and try/finally cross-check
+- Compare: `same_output`
+- Source: [ci/cases/syntax_with.py](../../ci/cases/syntax_with.py)
+
+### syntax_with_as_target
+
+- Duty: all `as` target forms (tuple/nested/starred/attribute/subscript) and manager still exited on unpack failure
+- Compare: `same_output`
+- Source: [ci/cases/syntax_with_as_target.py](../../ci/cases/syntax_with_as_target.py)
+
+### syntax_with_bare_as
+
+- Duty: `with x as:` missing target raises a parse error (invalid syntax)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_with_bare_as.py](../../ci/cases/syntax_with_bare_as.py)
+
+### syntax_with_missing_colon
+
+- Duty: `with` header missing colon raises a parse error (expected ':')
+- Compare: `same_error`
+- Source: [ci/cases/syntax_with_missing_colon.py](../../ci/cases/syntax_with_missing_colon.py)
+
+### syntax_with_starred_as
+
+- Duty: bare starred target in `with x as *a:` raises a parse error (same rule as for targets)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_with_starred_as.py](../../ci/cases/syntax_with_starred_as.py)
+
+### syntax_with_trailing_comma
+
+- Duty: trailing comma in the manager list raises a parse error (invalid syntax)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_with_trailing_comma.py](../../ci/cases/syntax_with_trailing_comma.py)
+
 ### syntax_yield
 
 - Responsibility: Generator `next`, laziness and `return` values
@@ -733,6 +769,18 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Responsibility: Parenthesized `yield` as a comprehension element errors
 - Comparison: `same_error`
 - Source: [ci/cases/syntax_yield_paren_comp.py](../../ci/cases/syntax_yield_paren_comp.py)
+
+### syntax_yield_with
+
+- Duty: generator and `with` interaction (yield in body, `as` binding across steps, close and throw through the exit path)
+- Compare: `same_output`
+- Source: [ci/cases/syntax_yield_with.py](../../ci/cases/syntax_yield_with.py)
+
+### syntax_yield_with_genexit
+
+- Duty: yielding again after `with` suppresses GeneratorExit raises ignored (CPython message)
+- Compare: `same_error`
+- Source: [ci/cases/syntax_yield_with_genexit.py](../../ci/cases/syntax_yield_with_genexit.py)
 
 ## Comprehensions (`comprehension_*`)
 
@@ -1388,6 +1436,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Comparison: `same_output`
 - Source: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
 
+### class_context_protocol
+
+- Duty: user-class context manager protocol semantics (exit argument shapes, suppression truth table, exception replacement and nested unwinding)
+- Compare: `same_output`
+- Source: [ci/cases/class_context_protocol.py](../../ci/cases/class_context_protocol.py)
+
 ### class_decorators
 
 - Responsibility: Built-in method decorators and stacked arbitrary decorators
@@ -1791,3 +1845,10 @@ PyGDS-specific suspend/resume mechanics (statement replay after a `time.sleep`-t
 - Responsibility: Side effects of consuming generators containing `sleep`
 - Comparison: `same_output`
 - Source: [ci/cases/suspend_sideeffect.py](../../ci/cases/suspend_sideeffect.py)
+
+### suspend_with_replay
+
+- Duty: suspension and replay of the `with` body and `__exit__` (enter marker prevents re-entry, P0-22 parking stack-up)
+- Compare: `same_output`
+- Source: [ci/cases/suspend_with_replay.py](../../ci/cases/suspend_with_replay.py)
+

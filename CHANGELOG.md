@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.1] - 2026-10-03
+
+本版实现 v0.8.0 第一阶段主任务 P1-7：`with` 语句与上下文管理器协议。词法新增 `WITH` 保留字，解析支持单管理器与逗号分隔多管理器（语义等价嵌套 with）及 `as` 目标（复用赋值目标机制），执行器按 try/finally 脱糖实现进入 / 体 / 逆序退出三段推进。挂起重放经 resume_info 进入标记保证体挂起后不重复执行 `__enter__`，退出中挂起按进度续延并与 P0-22 在途异常暂存配合；文件对象补齐协议。实现中发现并修复 `_walk_yield_stmt` 未覆盖 WithStmt 导致的生成器标记缺口。既定形态：`__exit__` 的 tb 参数恒传 `None`（PyGDS 无 traceback 对象，CPython 传真实 traceback）。括号化多管理器（3.10 语法）与 `contextlib` 随后评估
+
+### 新增
+
+- **with 语句（P1-7）**：`with` 成为保留字（此前按普通标识符解析，`async with` 的解析期报错同步改走 token 判定）；支持单管理器与逗号分隔多管理器（进入按序、退出逆序，后续管理器求值 / `__enter__` 失败时已进入的管理器仍逆序退出，CPython 实测对齐）；`as` 目标复用赋值目标机制（名字 / 元组与嵌套解包 / 星形 / 属性 / 下标），解包计数不匹配时管理器已进入、`__exit__` 照常收到异常；解析期错误按 CPython 3.12 对齐（缺冒号 `expected ':'`、`as` 缺目标与尾随逗号 `invalid syntax`、裸星形目标 `starred assignment target must be in a list or tuple`）
+- **上下文管理器协议执行语义**：用户类实例沿 MRO 查找 `__enter__` / `__exit__` 并前置接收者，文件对象走绑定方法描述符；协议缺失按 CPython 3.12 报 `TypeError: 'X' object does not support the context manager protocol`（退出侧带 `(missed __exit__ method)` 后缀）；`return` / `break` / `continue` 穿越体同样触发退出且不被 `__exit__` 的返回值污染（在途返回值随退出进度保全）；`__exit__` 返回真值抑制在途异常（`last_exception` 与错误通道双通道清位，外层管理器转为无异常退出），`__exit__` 体内新异常或协议缺失取代在途异常传播（`__context__` 链由 raise 侧记录，外层管理器继续逆序退出）
+- **挂起重放（进入标记）**：resume_info 记录进入进度（`entered`）与退出进度（`exit_idx`），体挂起重放不重复执行 `__enter__`（多管理器各只进入一次），`__enter__` / `__exit__` 体内挂起由调用帧续延；异常在途时 `__exit__` 挂起按 P0-22 暂存错误通道，恢复轮按抑制 / 传播 / 新异常三分支处置
+- **文件对象协议（DSLFile）**：补 `__enter__`（返回自身）与 `__exit__`（关闭文件并返回 `None`，重复退出幂等），`with open(...)` 可用
+
+### 修复
+
+- **生成器标记缺口（实现中发现）**：解析期 yield 扫描 `_walk_yield_stmt` 未覆盖 WithStmt——`def f():` 体中 `with x: yield ...` 的函数未被标记为生成器，调用时函数体被内联执行，`yield` 在无生成器上下文求值报 `'yield' outside function`（报告通道首胜保留 `globals.get_val` 的 `NameError` 变体文案，实测表现为 `NameError: name 'SyntaxError' is not defined`）；补 WithStmt 分支（管理器表达式与体均参与扫描，`loop_depth` 透传使 with 内 `break` / `continue` 合法性校验与 for/while 同规则）
+
+### 变更
+
+- **`with` 成为保留字（破坏性变更）**：与 `yield` / `async` / `await` 的先例一致，`with` 自本版起不能再用作变量名 / 函数名等标识符（此前按普通标识符解析）；旧代码若以 `with` 命名变量需改名。README 中英的兼容矩阵与破坏性变更清单已同步
+
+### 测试
+
+- 全量回归 **300/300** 通过（新增 10 例：`syntax_with` / `syntax_with_as_target` / `class_context_protocol` / `suspend_with_replay` / `syntax_yield_with` 五例 `same_output` 与 `syntax_with_missing_colon` / `syntax_with_bare_as` / `syntax_with_trailing_comma` / `syntax_with_starred_as` / `syntax_yield_with_genexit` 五例 `same_error`）；挂起套件 24/24 通过；lint_cases / lint_md / lint_gd 全部 0 问题；引擎 `SCRIPT ERROR` 保持 0；ObjectDB 零泄漏维持
+
 ## [0.7.0] - 2026-10-03
 
 v0.7.0 正式版。自 v0.6.0 以来的主线：行为一致性测试体系整体重构（290 例双端实时比对）、两轮全项目审计与修复、文案对齐专项（P2-2 / P2-3）、内建函数缺口按「务实全集」补齐（P1-32 主体 / P1-56）、深递归日志噪音与 ObjectDB 泄漏的修复；编辑器插件自本版起移除，单文件 `pygds.gd` 为唯一分发形态。逐项明细见下方 alpha.5 ~ alpha.10 各节

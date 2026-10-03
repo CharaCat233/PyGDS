@@ -650,6 +650,42 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_while_else.py](../../ci/cases/syntax_while_else.py)
 
+### syntax_with
+
+- 职责: `with` 语句文法主体, 多管理器次序, 流控穿越与 try/finally 对照
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_with.py](../../ci/cases/syntax_with.py)
+
+### syntax_with_as_target
+
+- 职责: `as` 目标全形态 (元组/嵌套/星形/属性/下标) 与解包失败时管理器仍退出
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_with_as_target.py](../../ci/cases/syntax_with_as_target.py)
+
+### syntax_with_bare_as
+
+- 职责: `with x as:` 缺目标触发解析期错误 (invalid syntax)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_with_bare_as.py](../../ci/cases/syntax_with_bare_as.py)
+
+### syntax_with_missing_colon
+
+- 职责: `with` 头缺冒号触发解析期错误 (expected ':')
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_with_missing_colon.py](../../ci/cases/syntax_with_missing_colon.py)
+
+### syntax_with_starred_as
+
+- 职责: `with x as *a:` 裸星形目标触发解析期错误 (与 for 目标同规则)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_with_starred_as.py](../../ci/cases/syntax_with_starred_as.py)
+
+### syntax_with_trailing_comma
+
+- 职责: `with` 管理器列表尾随逗号触发解析期错误 (invalid syntax)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_with_trailing_comma.py](../../ci/cases/syntax_with_trailing_comma.py)
+
 ### syntax_yield
 
 - 职责: 生成器 `next`/惰性/`return` 值
@@ -733,6 +769,18 @@
 - 职责: 括号 `yield` 作推导式元素触发解析错误
 - 比对: `same_error`
 - 源文件: [ci/cases/syntax_yield_paren_comp.py](../../ci/cases/syntax_yield_paren_comp.py)
+
+### syntax_yield_with
+
+- 职责: 生成器与 `with` 交互 (体含 yield, as 跨步保持, close 与 throw 穿越退出路径)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_yield_with.py](../../ci/cases/syntax_yield_with.py)
+
+### syntax_yield_with_genexit
+
+- 职责: `with` 抑制 GeneratorExit 后再次 yield 报 ignored (CPython 同文案)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_yield_with_genexit.py](../../ci/cases/syntax_yield_with_genexit.py)
 
 ## 推导式（comprehension_*）
 
@@ -1388,6 +1436,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
 
+### class_context_protocol
+
+- 职责: 用户类上下文管理器协议语义 (退出参数形态, 抑制真值表, 异常取代与嵌套展开)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_context_protocol.py](../../ci/cases/class_context_protocol.py)
+
 ### class_decorators
 
 - 职责: 内建方法装饰器与任意装饰器叠加包装
@@ -1791,3 +1845,10 @@ PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的�
 - 职责: 消费含 `sleep` 生成器的副作用
 - 比对: `same_output`
 - 源文件: [ci/cases/suspend_sideeffect.py](../../ci/cases/suspend_sideeffect.py)
+
+### suspend_with_replay
+
+- 职责: `with` 体与 `__exit__` 内挂起的重放 (进入标记不重复执行, P0-22 暂存叠加)
+- 比对: `same_output`
+- 源文件: [ci/cases/suspend_with_replay.py](../../ci/cases/suspend_with_replay.py)
+

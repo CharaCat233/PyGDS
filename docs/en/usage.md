@@ -1215,6 +1215,46 @@ finally:
 
 > **Interaction with the suspend system**: `time.sleep` (and the explicit suspend APIs) inside the `try` body, an `except` handler or the `finally` body all suspend and resume normally. When an exception raised by the try body is still in flight and the `finally` body suspends, the pending exception keeps propagating after resumption and the outer `except` catches it normally (an uncaught one terminates as a regular error); `return` / `break` / `continue` in the `finally` still discard the in-flight exception per Python semantics, and a new exception raised by the `finally` replaces the pending one following exception chaining semantics
 
+### with Statement
+
+The `with` statement drives the context manager protocol: on entry the manager's `__enter__` is called (its return value is bound to the `as` target), and after the body the managers' `__exit__(exc_type, exc, tb)` run in reverse order. Comma-separated multiple managers are equivalent to nested `with` blocks (entered in order, exited in reverse). With no exception all three arguments are `None`; with an exception `__exit__` receives the exception class, the exception instance and `None` (PyGDS has no traceback object, so tb is always `None` — an established shape). A truthy `__exit__` return suppresses the in-flight exception (outer managers then exit without one), a falsy value lets it propagate; `return` / `break` / `continue` through the body also trigger the exit. A missing protocol raises `TypeError: 'X' object does not support the context manager protocol` (a missing `__exit__` on the exit side adds the `(missed __exit__ method)` suffix). File objects (returned by `open()`) implement the protocol: entry returns the file itself, exit closes it
+
+```python
+class CM:
+    def __init__(self, name, log):
+        self.name = name
+        self.log = log
+    def __enter__(self):
+        self.log.append("enter:" + self.name)
+        return self.name
+    def __exit__(self, t, v, tb):
+        self.log.append("exit:" + self.name)
+        return False          # falsy: the exception keeps propagating
+
+log = []
+with CM("a", log) as x, CM("b", log):
+    print(x)                  # a
+print(log)                    # ['enter:a', 'enter:b', 'exit:b', 'exit:a']
+
+class Suppress:
+    def __enter__(self):
+        return self
+    def __exit__(self, t, v, tb):
+        return True           # truthy: suppress the in-flight exception
+
+with Suppress():
+    raise ValueError("swallowed")
+print("after")                # after
+
+with open("data.tmp", "w") as f:
+    f.write("hello")
+print(f.closed)               # True
+```
+
+> **Interaction with the suspension system**: `time.sleep` (and active suspension APIs) inside the `with` body, `__enter__` and `__exit__` suspend and resume normally. Resuming a suspended body never re-runs `__enter__` (the enter marker), and an `__exit__` suspension with an exception in flight resumes normally, deciding suppression or propagation by its return value. A `with` inside a generator keeps its entered state across `yield`, and the `GeneratorExit` injected by `close()` passes through the exit path as well
+
+> **Not yet supported**: parenthesized manager lists (`with (a as b, c as d):`, Python 3.10 syntax) and the `contextlib` module
+
 ### raise ... from Exception Chaining
 
 `raise expression from cause-expression` stores the cause exception in the exception instance's `__cause__` field; with `from None` the `__cause__` is `None`. Whatever the `from` value (including `None`), `__suppress_context__` is set to `True`. An exception raised without a `from` clause has `__cause__` `None` and `__suppress_context__` `False`. The cause expression, like the raise expression itself, runs through the evaluation channel, so `time.sleep` suspensions inside it resume normally. Raising an exception class (without parentheses) instantiates it with no arguments; a class used after `from` is likewise instantiated automatically

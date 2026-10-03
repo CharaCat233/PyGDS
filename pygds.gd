@@ -15,7 +15,7 @@ enum TokenType {
 	GLOBAL, NONLOCAL, DEL, IMPORT, FROM,
 	INDENT, DEDENT, EOF,
 	AT, NULL,
-	TRY, EXCEPT, FINALLY, RAISE, AS,
+	TRY, EXCEPT, FINALLY, RAISE, AS, WITH,
 	PLUS_EQ, MINUS_EQ, STAR_EQ, SLASH_EQ, DOUBLESLASH_EQ, STARSTAR_EQ, PERCENT_EQ,
 	PIPE_EQ, AMP_EQ, CARET_EQ, LESS_LESS_EQ, GREATER_GREATER_EQ,
 	IS, IS_NOT, NOT_IN, COLON_EQ,
@@ -99,7 +99,7 @@ class Lexer:
 		"global": TokenType.GLOBAL, "nonlocal": TokenType.NONLOCAL, "del": TokenType.DEL,
 		"import": TokenType.IMPORT, "from": TokenType.FROM,
 		"try": TokenType.TRY, "except": TokenType.EXCEPT, "finally": TokenType.FINALLY,
-		"raise": TokenType.RAISE, "as": TokenType.AS,
+		"raise": TokenType.RAISE, "as": TokenType.AS, "with": TokenType.WITH,
 		"lambda": TokenType.LAMBDA,
 		"is": TokenType.IS,
 		"yield": TokenType.YIELD,
@@ -2291,6 +2291,35 @@ class TryStmt extends Stmt:
 		except_clauses = exc_c
 		finally_body = fin_b
 		else_body = else_b
+
+## with 语句的上下文管理器项 [br]
+## 对应 with_item: expression ['as' target]
+class WithItem:
+	## 管理器表达式
+	var context_expr: Expr
+	## as 目标节点 (Variable / UnpackTarget / SubscriptTarget / AttrTarget), 无 as 时为 null
+	var target = null
+	## 构造 with 管理器项 [br]
+	## [param p_expr] 管理器表达式 [br]
+	## [param p_target] as 目标节点, 可为 null
+	func _init(p_expr, p_target = null):
+		context_expr = p_expr
+		target = p_target
+
+## with 语句 (P1-7) [br]
+## 逗号分隔的多管理器形式等价于嵌套 with (内层管理器先退出), [br]
+## 执行器按进入进度对已完成的管理器逆序调用 __exit__, 见 _exec_with
+class WithStmt extends Stmt:
+	## 管理器项数组 (WithItem)
+	var items: Array
+	## with 体语句列表
+	var body: Array
+	## 构造 with 语句 [br]
+	## [param p_items] 管理器项数组 [br]
+	## [param p_body] 体语句列表
+	func _init(p_items, p_body):
+		items = p_items
+		body = p_body
 
 ## except 子句 [br]
 ## 定义异常捕获的类型, 绑定变量和异常处理代码
@@ -10925,6 +10954,8 @@ class DSLFile extends DSLObject:
 			"flush": DSLWrappedDescriptor.new("flush", Callable(self, "builtin_fflush")),
 			"readable": DSLWrappedDescriptor.new("readable", Callable(self, "builtin_freadable")),
 			"writable": DSLWrappedDescriptor.new("writable", Callable(self, "builtin_fwritable")),
+			"__enter__": DSLWrappedDescriptor.new("__enter__", Callable(self, "builtin_fenter")),
+			"__exit__": DSLWrappedDescriptor.new("__exit__", Callable(self, "builtin_fexit")),
 		}
 		if methods.has(name):
 			return methods[name].__get__(self, null)
@@ -11038,6 +11069,19 @@ class DSLFile extends DSLObject:
 		if self_obj._fa != null:
 			self_obj._fa.close()
 		self_obj.is_closed = true
+		return DSLNone.new()
+
+	## __enter__ 协议 (with 语句入口): 返回自身, with ... as f 即绑定文件对象
+	func builtin_fenter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return args[0]
+
+	## __exit__ 协议 (with 语句出口): 关闭文件并返回 None (不抑制 with 体异常), 重复退出幂等
+	func builtin_fexit(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLFile
+		if not self_obj.is_closed:
+			if self_obj._fa != null:
+				self_obj._fa.close()
+			self_obj.is_closed = true
 		return DSLNone.new()
 
 	## seek(offset, whence=0): 文本模式基于缓冲游标, 二进制基于 FileAccess
@@ -15446,6 +15490,8 @@ class Parser:
 			return for_statement()
 		if match_types([TokenType.TRY]):
 			return try_statement()
+		if match_types([TokenType.WITH]):
+			return with_statement()
 		if match_types([TokenType.RAISE]):
 			return raise_statement()
 		if match_types([TokenType.ASYNC]):
@@ -15468,7 +15514,7 @@ class Parser:
 		if check(TokenType.FOR):
 			report.error("SyntaxError: 'async for' outside async function")
 			return null
-		if check(TokenType.IDENTIFIER) and peek().lexeme == "with":
+		if check(TokenType.WITH):
 			report.error("SyntaxError: 'async with' outside async function")
 			return null
 		# async 用作变量名/类型标注等: CPython 报通用语法错误
@@ -16672,6 +16718,42 @@ class Parser:
 			consume(TokenType.COLON, "expected ':'")
 			for_stmt.set_meta("_else_body", block())
 		return for_stmt
+
+	## 解析 with 语句 (P1-7) [br]
+	## 支持单管理器与逗号分隔的多管理器形式 (语义等价于嵌套 with), [br]
+	## 每个 item 可选 as 目标, 目标复用赋值目标机制 (名字 / 元组解包 / 下标 / 属性); [br]
+	## 括号化多管理器 (3.10 语法) 暂不支持, 随 contextlib 阶段评估 [br]
+	## [returns] 解析出的 WithStmt 节点, 出错时返回 null
+	func with_statement():
+		var items: Array[WithItem] = []
+		while true:
+			var expr = simple_expression()
+			if report.has_error or expr == null:
+				return null
+			var target = null
+			if match_types([TokenType.AS]):
+				target = parse_target()
+				if target == null:
+					report.error("SyntaxError: invalid syntax")
+					return null
+				# CPython: 单个裸星形名不是合法 as 目标 (须为元组形态, 与 for 目标同规则)
+				if target is StarredTarget:
+					report.error("SyntaxError: starred assignment target must be in a list or tuple")
+					return null
+			items.append(WithItem.new(expr, target))
+			if not match_types([TokenType.COMMA]):
+				break
+			# 尾随逗号非法 (CPython: item 列表后不允许逗号, 覆盖 with a,: 与逗号后直接换行)
+			if check(TokenType.COLON) or check(TokenType.NEWLINE) or is_at_end():
+				report.error("SyntaxError: invalid syntax")
+				return null
+		var colon = consume(TokenType.COLON, "expected ':'")
+		if colon == null:
+			return null
+		var body = block()
+		if report.has_error:
+			return null
+		return WithStmt.new(items, body)
 		
 	## 解析 try/except/finally 异常处理语句 [br]
 	## 支持多个 except 子句和一个可选的 finally 子句 [br]
@@ -17291,6 +17373,12 @@ class Parser:
 					if _walk_yield_stmt(clause.body, scope, loop_depth):
 						found = true
 				if _walk_yield_stmt(stmt.finally_body, scope, loop_depth):
+					found = true
+			elif stmt is WithStmt:
+				for item in stmt.items:
+					if _walk_yield_expr(item.context_expr, scope, ""):
+						found = true
+				if _walk_yield_stmt(stmt.body, scope, loop_depth):
 					found = true
 			elif stmt is MatchStmt:
 				if _walk_yield_expr(stmt.subject, scope, ""):
@@ -23610,9 +23698,12 @@ class Interpreter:
 				if fin_res != ExecResult.NORMAL:
 					_discard_unwind_error()
 					return fin_res
-			
+
 			return res
-			
+
+		if stmt is WithStmt:
+			return _exec_with(stmt)
+
 		if stmt is ImportStmt:
 			for entry in stmt.names:
 				var mod = _get_module(entry.name)
@@ -23648,8 +23739,188 @@ class Interpreter:
 					var bind_name = entry.alias if entry.alias != "" else entry.name
 					environment.define(bind_name, mod.members[entry.name])
 			return ExecResult.NORMAL
-			
+
 		return ExecResult.NORMAL
+
+	## 执行 with 语句 (P1-7) [br]
+	## 语义等价于逐管理器调用 __enter__ 的 try/finally 脱糖: 进入阶段按序调用 [br]
+	## __enter__ 并绑定 as 目标 (元组解包复用赋值目标机制), 体结束后逆序调用 [br]
+	## __exit__(exc_type, exc, tb)——无异常传 (None, None, None), 有异常传异常类对象 / [br]
+	## 异常实例 / None (无 traceback 对象, 记录为既定形态); __exit__ 返回真值抑制在途 [br]
+	## 异常 (last_exception 与 report 错误通道双通道清位), 假值继续传播, [br]
+	## return / break / continue 穿越体同样触发退出 [br]
+	## 挂起重放: resume_info 记录进入进度 (entered) 与退出进度 (exit_idx), [br]
+	## 体挂起重放不重复执行 __enter__ (进入标记), 退出中挂起按 exit_idx 续延, [br]
+	## 在途异常按 P0-22 暂存, 恢复轮的抑制 / 传播 / 新异常三分支分别处置 [br]
+	## [param stmt] with 语句节点 [br]
+	## [returns] 执行结果状态
+	func _exec_with(stmt: WithStmt) -> ExecResult:
+		var frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
+		var ri = frame.get("resume_info", {}) if frame is Dictionary else {}
+		var stage = ri.get("with_stage", "")
+		var entered: Array = ri.get("entered", [])
+		var res = ExecResult.NORMAL
+
+		if stage == "exit":
+			# 恢复被挂起的退出路径: 体结果取暂存值, 从 exit_idx 续延
+			var exit_res = _exec_with_exit(entered, ri.get("exit_idx", entered.size() - 1), ri.get("pending_res", ExecResult.NORMAL), ri.get("pending_ret"))
+			return exit_res
+
+		if stage == "body":
+			# 恢复被挂起的体: 不重走进入路径 (进入标记的核心保证)
+			res = exec_block(stmt.body, environment)
+			if res == ExecResult.SUSPENDED:
+				return res
+		else:
+			# 进入阶段 (首次执行或恢复): entered 之前的管理器已完成进入, 跳过重入
+			var idx = entered.size()
+			while idx < stmt.items.size():
+				var item = stmt.items[idx]
+				var mgr = evaluate(item.context_expr)
+				if _suspended:
+					_expr_evaluated = false
+					return ExecResult.SUSPENDED
+				if mgr == null or report.has_error:
+					# 后续管理器求值失败: 已进入的管理器仍逆序退出 (嵌套语义)
+					res = ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+					break
+				# 进入进度先落盘再调 __enter__: 该调用挂起重放时已完成的管理器不重入
+				if _exec_stack.size() > 0:
+					_exec_stack.back().resume_info = {"with_stage": "enter", "entered": entered}
+				var val = _invoke_cm_method(mgr, "__enter__", [] as Array[DSLObject])
+				if _suspended:
+					_expr_evaluated = false
+					return ExecResult.SUSPENDED
+				if val == null:
+					if last_exception != null or report.has_error:
+						# __enter__ 体内异常: 已进入的管理器仍逆序退出
+						res = ExecResult.RAISE
+						break
+					raise_exception("TypeError", "'%s' object does not support the context manager protocol" % mgr._type_name())
+					res = ExecResult.RAISE
+					break
+				entered.append({"mgr": mgr, "val": val})
+				if item.target != null:
+					var nullflag = assign_target_value(item.target, val, environment)
+					if nullflag == null:
+						# 目标绑定失败 (如解包计数不匹配): 管理器已进入, 仍走退出路径
+						res = ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+						break
+				idx += 1
+			if res == ExecResult.NORMAL:
+				# 全部进入完成: 置体标记后执行体
+				if _exec_stack.size() > 0:
+					_exec_stack.back().resume_info = {"with_stage": "body", "entered": entered}
+				res = exec_block(stmt.body, environment)
+				if res == ExecResult.SUSPENDED:
+					return res
+
+		# 体结束或进入期失败 (正常 / return / break / continue / raise): 逆序退出
+		# return 穿越体时在途返回值随退出进度一并暂存, 防 __exit__ 调用冲掉共享成员
+		var pending_ret = return_value if res == ExecResult.RETURN else null
+		if _exec_stack.size() > 0:
+			_exec_stack.back().resume_info = {"with_stage": "exit", "entered": entered, "exit_idx": entered.size() - 1, "pending_res": res, "pending_ret": pending_ret}
+		return _exec_with_exit(entered, entered.size() - 1, res, pending_ret)
+
+	## with 退出路径: 逆序调用已完成进入的管理器的 __exit__ [br]
+	## 在途异常对 __exit__ 体隐身 (调用前清错误通道, P0-22 同型处理), 返回真值抑制 [br]
+	## (双通道清位, 后续外层管理器按无异常退出), 假值继续传播; __exit__ 体内新异常 [br]
+	## 取代在途异常传播 (raise 侧已记录 __context__); 挂起时暂存进度与在途异常, [br]
+	## 恢复轮按抑制 / 传播 / 新异常三分支分别处置暂存 [br]
+	## [param entered] 已完成进入的管理器数组, 元素为 {"mgr": 管理器, "val": 进入值} [br]
+	## [param start_idx] 起始退出索引 (挂起续延时为上次未完成的管理器) [br]
+	## [param pending_res] 体或上一轮退出后的传播结果 [br]
+	## [param pending_ret] 在途返回值 (return 穿越体时经退出路径保全) [br]
+	## [returns] 执行结果状态
+	func _exec_with_exit(entered: Array, start_idx: int, pending_res: int, pending_ret) -> ExecResult:
+		var res = pending_res
+		var idx: int = start_idx
+		while idx >= 0:
+			var mgr = entered[idx]["mgr"]
+			var in_flight: bool = res == ExecResult.RAISE and last_exception != null
+			var exit_args: Array[DSLObject] = []
+			if in_flight:
+				exit_args.append(_exception_type_obj(last_exception))
+				exit_args.append(last_exception)
+				exit_args.append(get_none())
+			else:
+				exit_args.append(get_none())
+				exit_args.append(get_none())
+				exit_args.append(get_none())
+			var saved_has_error = report.has_error
+			report.has_error = false
+			var val = _invoke_cm_method(mgr, "__exit__", exit_args)
+			if _suspended:
+				report.has_error = saved_has_error or report.has_error
+				_park_unwind_error()
+				if _exec_stack.size() > 0:
+					_exec_stack.back().resume_info = {"with_stage": "exit", "entered": entered, "exit_idx": idx, "pending_res": res, "pending_ret": pending_ret}
+				_expr_evaluated = false
+				return ExecResult.SUSPENDED
+			report.has_error = saved_has_error or report.has_error
+			if pending_ret != null:
+				# __exit__ 调用是用户函数, 其自身 return 会写共享返回值成员, 还原在途值
+				return_value = pending_ret
+			if val == null:
+				# __exit__ 调用自身失败: 体内新异常 / 协议缺失 TypeError 取代在途异常,
+				# 内部错误按 ERROR 传播, 外层管理器均继续逆序退出 (嵌套语义)
+				_discard_unwind_error()
+				if last_exception != null:
+					res = ExecResult.RAISE
+				elif not report.has_error:
+					raise_exception("TypeError", "'%s' object does not support the context manager protocol (missed __exit__ method)" % mgr._type_name())
+					res = ExecResult.RAISE
+				else:
+					res = ExecResult.ERROR
+				idx -= 1
+				continue
+			if in_flight and val._dsl_bool():
+				# 抑制: last_exception 与错误通道双通道清位, 外层管理器按无异常退出
+				last_exception = null
+				report.clear_error()
+				res = ExecResult.NORMAL
+			idx -= 1
+		# 退出完成: 仍在途的异常写回错误通道 (挂起暂存还原), 已抑制 / 无异常的丢弃残留
+		if res == ExecResult.RAISE:
+			_restore_unwind_error()
+		else:
+			_discard_unwind_error()
+		return res
+
+	## 上下文管理器协议方法调用 (P1-7) [br]
+	## 用户类实例沿 MRO 查找类方法并前置接收者, 文件对象走绑定方法描述符, [br]
+	## 其余对象无协议方法时返回 null, 调用方据此按 CPython 文案报 TypeError [br]
+	## [param mgr] 管理器对象 [br]
+	## [param name] 协议方法名 ("__enter__" / "__exit__") [br]
+	## [param args] 调用实参 (不含接收者) [br]
+	## [returns] 调用结果, 无协议方法或出错返回 null
+	func _invoke_cm_method(mgr: DSLObject, name: String, args: Array[DSLObject]) -> DSLObject:
+		if mgr is DSLFile:
+			# 调用前清除接收者残留 (P2-18 同型: 驻留复用对象可能残留上次失败写入的 last_error)
+			mgr.last_error = ""
+			var bound = mgr._dsl_getattribute(name)
+			if bound != null:
+				return bound.magic_call(args, {} as Dictionary[String, DSLObject])
+			return null
+		if mgr.klass != null:
+			var method = mgr.klass._lookup_method(name)
+			if method != null:
+				var full_args: Array[DSLObject] = [mgr]
+				full_args.append_array(args)
+				return mgr.klass._invoke_func(method, full_args, {} as Dictionary[String, DSLObject])
+		return null
+
+	## __exit__ 的异常类型实参 (P1-7): 优先传异常实例的类对象, [br]
+	## 裸 DSLException (无 wrapper) 回退按类型名查全局异常类, 再退化为类型名字符串 [br]
+	## [param exc] 异常实例 [br]
+	## [returns] 类对象或类型名字符串
+	func _exception_type_obj(exc) -> DSLObject:
+		if exc.klass != null:
+			return exc.klass
+		var cls = globals.get_val_safe(exc._type_name())
+		if cls is DSLClass:
+			return cls
+		return DSLString.new(exc._type_name())
 
 	## 执行 yield from 语句 (语句级执行器) [br]
 	## 子迭代器状态保存在当前帧的 resume_info 中, 恢复时从挂起点继续 [br]
@@ -25612,6 +25883,11 @@ class Interpreter:
 				_collect_locals_stmts(exc.body, names, globals_decl)
 			_collect_locals_stmts(st.else_body, names, globals_decl)
 			_collect_locals_stmts(st.finally_body, names, globals_decl)
+		elif st is WithStmt:
+			for item in st.items:
+				_collect_locals_expr(item.context_expr, names, globals_decl)
+				_collect_locals_target(item.target, names)
+			_collect_locals_stmts(st.body, names, globals_decl)
 		elif st is FunctionStmt:
 			names[st.name] = true
 			for d in st.decorators:

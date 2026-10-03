@@ -1213,6 +1213,46 @@ finally:
 
 > **与挂起系统交互**：`try` 体、`except` 处理器与 `finally` 体内的 `time.sleep`（及主动挂起 API）均可正常挂起推进。try 体已抛出异常、`finally` 体内挂起时，恢复后进行中的异常照常传播，外层 `except` 可正常捕获（未捕获则按普通错误终止）；`finally` 中的 `return` / `break` / `continue` 仍按 Python 语义丢弃在途异常，`finally` 抛出的新异常按异常链语义取代在途异常
 
+### with 语句
+
+`with` 用于上下文管理器协议：进入时调用管理器的 `__enter__`（返回值绑定到 `as` 目标），体结束后逆序调用 `__exit__(exc_type, exc, tb)`。逗号分隔的多管理器等价于嵌套 `with`（进入按序，退出逆序）。无异常时三个实参均为 `None`；有异常时 `__exit__` 收到异常类、异常实例与 `None`（PyGDS 无 traceback 对象，tb 恒为 `None`，既定形态）。`__exit__` 返回真值抑制在途异常（外层管理器转为无异常退出），假值继续传播；`return` / `break` / `continue` 穿越体同样触发退出。协议缺失报 `TypeError: 'X' object does not support the context manager protocol`（退出侧缺 `__exit__` 带 `(missed __exit__ method)` 后缀）。文件对象（`open()` 返回值）实现协议：进入返回自身，退出关闭
+
+```python
+class CM:
+    def __init__(self, name, log):
+        self.name = name
+        self.log = log
+    def __enter__(self):
+        self.log.append("enter:" + self.name)
+        return self.name
+    def __exit__(self, t, v, tb):
+        self.log.append("exit:" + self.name)
+        return False          # 假值: 异常继续传播
+
+log = []
+with CM("a", log) as x, CM("b", log):
+    print(x)                  # a
+print(log)                    # ['enter:a', 'enter:b', 'exit:b', 'exit:a']
+
+class Suppress:
+    def __enter__(self):
+        return self
+    def __exit__(self, t, v, tb):
+        return True           # 真值: 抑制在途异常
+
+with Suppress():
+    raise ValueError("swallowed")
+print("after")                # after
+
+with open("data.tmp", "w") as f:
+    f.write("hello")
+print(f.closed)               # True
+```
+
+> **与挂起系统交互**：`with` 体、`__enter__` 与 `__exit__` 体内的 `time.sleep`（及主动挂起 API）均可正常挂起推进。体挂起重放后不重复执行 `__enter__`（进入标记），异常在途时 `__exit__` 挂起照常恢复并按返回值决定抑制或传播。生成器体中的 `with` 可跨 `yield` 保持进入状态，`close()` 注入的 `GeneratorExit` 同样经过退出路径
+
+> **暂不支持**：括号化多管理器列表（`with (a as b, c as d):`，Python 3.10 语法）与 `contextlib` 模块
+
 ### raise ... from 异常链
 
 `raise 表达式 from 因果表达式` 把因果异常存入异常实例的 `__cause__` 字段，`from None` 时 `__cause__` 为 `None`；无论 `from` 何值（含 `None`），`__suppress_context__` 均置为 `True`。无 `from` 子句的异常 `__cause__` 为 `None`、`__suppress_context__` 为 `False`。因果表达式与 raise 表达式一样经求值通道执行，内部的 `time.sleep` 挂起可正常推进。raise 一个异常类（不带括号）时按无参实例化处理，`from` 一个异常类时同样自动实例化
