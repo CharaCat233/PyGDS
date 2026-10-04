@@ -14,7 +14,7 @@ enum TokenType {
 	DEF, CLASS, RETURN, BREAK, CONTINUE, PASS,
 	GLOBAL, NONLOCAL, DEL, IMPORT, FROM,
 	INDENT, DEDENT, EOF,
-	AT, NULL,
+	AT, AT_EQ, NULL,
 	TRY, EXCEPT, FINALLY, RAISE, AS, WITH,
 	PLUS_EQ, MINUS_EQ, STAR_EQ, SLASH_EQ, DOUBLESLASH_EQ, STARSTAR_EQ, PERCENT_EQ,
 	PIPE_EQ, AMP_EQ, CARET_EQ, LESS_LESS_EQ, GREATER_GREATER_EQ,
@@ -222,7 +222,11 @@ class Lexer:
 					add_token(TokenType.MINUS_EQ)
 				else:
 					add_token(TokenType.MINUS)
-			'@': add_token(TokenType.AT)
+			'@':
+				if match_char('='):
+					add_token(TokenType.AT_EQ)
+				else:
+					add_token(TokenType.AT)
 			'*':
 				if match_char('*'):
 					if match_char('='):
@@ -2028,20 +2032,35 @@ class FunctionStmt extends Stmt:
 class ClassStmt extends Stmt:
 	## 类名
 	var name: String
-	## 基类表达式数组 (可为空, 表示默认继承 object)
+	## 基类表达式数组 (可为空, 表示默认继承 object; 位置基类与星参基类)
 	var bases: Array
 	## 类体语句列表 (一系列 FunctionStmt 或其他语句)
 	var body: Array[Stmt]
 	## 任意装饰器表达式数组 (源码顺序, 最外层在前)
 	var decorators: Array = []
+	## 类头关键字基类 (P1-72, PEP 487): KeywordArg 节点数组 (名字 → 值表达式)
+	var kw_bases: Array = []
+	## 类头 **字典解包基类表达式数组
+	var starkw_bases: Array = []
+	## 类头求值布局 (源码顺序): {"kind": "pos"/"star"/"kw"/"starkw", "index": int}
+	var base_layout: Array = []
 	## 构造类定义 [br]
 	## [param n] 类名 [br]
 	## [param base_arr] 基类表达式数组 [br]
-	## [param b] 类体语句列表
-	func _init(n, base_arr, b):
+	## [param b] 类体语句列表 [br]
+	## [param kw_arr] 关键字基类数组 (可选, P1-72) [br]
+	## [param starkw_arr] **解包表达式数组 (可选) [br]
+	## [param layout] 求值布局数组 (可选)
+	func _init(n, base_arr, b, kw_arr = null, starkw_arr = null, layout = null):
 		name = n
 		bases = base_arr
 		body = b
+		if kw_arr != null:
+			kw_bases = kw_arr
+		if starkw_arr != null:
+			starkw_bases = starkw_arr
+		if layout != null:
+			base_layout = layout
 
 ## return 语句 [br]
 ## 从当前函数返回, 可选携带返回值 [br]
@@ -16288,6 +16307,15 @@ class DSLFunctionGenerator extends DSLObject:
 			_finished = true
 			interp.raise_exception("RuntimeError", "generator ignored GeneratorExit")
 			return null
+		if res == 4:
+			# 步内发起程序挂起 (finally 体 sleep 等): 升级为语句级挂起, 消费语句整句重放
+			# (镜像 send/throw 的传播语义); 在途 GeneratorExit 的错误通道须清除
+			# (interpret 收尾与恢复轮的块顶检查把 has_error 当致命信号), last_exception
+			# 保留供 finally 完成后继续传播; 重放轮 close 经生成器停泊栈续驱 finally
+			# 完成后正常返回 None, 输出行序与 CPython 的同步 close 一致
+			interp.report.clear_error()
+			_propagate_step_suspend()
+			return null
 		# 结束或异常: GeneratorExit 静默 (close 成功), 其他异常原样传播
 		if interp.last_exception != null and interp.last_exception._type_name() == "GeneratorExit":
 			interp.report.clear_error()
@@ -16571,6 +16599,8 @@ class DSLEnvironment:
 	var is_class_scope: bool = false
 	## 类体作用域上正在构建的类对象 (P0-25): 类体内 def 语句组装方法时定位定义类
 	var building_class: DSLClass = null
+	## 类头关键字求值结果 (P1-72): execute_class 求值后挂载, 收尾阶段转发 __init_subclass__
+	var class_init_kw: Dictionary = {}
 	## 类体内由 def 语句绑定的名字 (P0-25): 收集阶段据此把最终对象归入类方法;
 	## 普通赋值 (set_val) 会清除标记, 与 CPython 的类字典单一名槽语义一致
 	var method_names: Dictionary = {}
@@ -17198,8 +17228,14 @@ class Parser:
 			if not _parse_type_params():
 				return null
 		var base_exprs: Array = []
+		var kw_bases: Array = []
+		var starkw_bases: Array = []
+		var base_layout: Array = []
+		var saw_keyword = false
+		var saw_starkw = false
 		if match_types([TokenType.LPAREN]):
-			# 基类表达式列表, 支持多继承与星参基类 (PEP 448 类侧泛化): Foo(Base) / Foo(A, B) / Foo(*bs,)
+			# 基类表达式列表: 位置 / 星参 (PEP 448) / 关键字与 ** 解包 (P1-72, PEP 487),
+			# 求值顺序经 base_layout 按源码记录
 			if not check(TokenType.RPAREN):
 				while true:
 					if report.has_error:
@@ -17209,8 +17245,42 @@ class Parser:
 						if star_expr == null:
 							return null
 						base_exprs.append(StarredExpr.new(star_expr))
+						base_layout.append({"kind": "star", "index": base_exprs.size() - 1})
+					elif match_types([TokenType.STARSTAR]):
+						var starkw_expr = simple_expression()
+						if starkw_expr == null:
+							return null
+						starkw_bases.append(starkw_expr)
+						base_layout.append({"kind": "starkw", "index": starkw_bases.size() - 1})
+						saw_starkw = true
 					else:
-						base_exprs.append(primary())
+						var base_expr = primary()
+						if base_expr == null:
+							return null
+						if match_types([TokenType.EQUAL]):
+							# 关键字基类: 名字必须为简单标识符, 不得重复 (CPython 同)
+							if not base_expr is Variable:
+								report.error("Invalid keyword argument name")
+								return null
+							for existing_kw in kw_bases:
+								if existing_kw.name == base_expr.name:
+									report.error("SyntaxError: keyword argument repeated: %s" % base_expr.name)
+									return null
+							var kw_value = simple_expression()
+							if kw_value == null or report.has_error:
+								return null
+							kw_bases.append(KeywordArg.new(base_expr.name, kw_value))
+							base_layout.append({"kind": "kw", "index": kw_bases.size() - 1})
+							saw_keyword = true
+						else:
+							if saw_keyword:
+								report.error("SyntaxError: positional argument follows keyword argument")
+								return null
+							if saw_starkw:
+								report.error("SyntaxError: positional argument follows keyword argument unpacking")
+								return null
+							base_exprs.append(base_expr)
+							base_layout.append({"kind": "pos", "index": base_exprs.size() - 1})
 					if not match_types([TokenType.COMMA]):
 						break
 					if check(TokenType.RPAREN):
@@ -17220,7 +17290,7 @@ class Parser:
 		if colon == null:
 			return null
 		var body = block()
-		return ClassStmt.new(name_tok.lexeme, base_exprs, body)
+		return ClassStmt.new(name_tok.lexeme, base_exprs, body, kw_bases, starkw_bases, base_layout)
 	
 	## 解析并丢弃泛型类型参数列表 [T, U] (PEP 695 语法) [br]
 	## 每个参数为名字, 可带绑定注解 (: 表达式) 与默认值 (= 表达式), 均只解析不求值 [br]
@@ -18488,7 +18558,13 @@ class Parser:
 	func bitwise_or():
 		var expr = bitwise_xor()
 		while match_types([TokenType.PIPE]):
-			expr = Binary.new(expr, previous(), bitwise_xor())
+			var op = previous()
+			var right = bitwise_xor()
+			var folded = _try_fold_int_binary(expr, op, right)
+			if folded != null:
+				expr = folded
+				continue
+			expr = Binary.new(expr, op, right)
 		return expr
 
 	## 解析位异或运算 (^) [br]
@@ -18497,7 +18573,13 @@ class Parser:
 	func bitwise_xor():
 		var expr = bitwise_and()
 		while match_types([TokenType.CARET]):
-			expr = Binary.new(expr, previous(), bitwise_and())
+			var op = previous()
+			var right = bitwise_and()
+			var folded = _try_fold_int_binary(expr, op, right)
+			if folded != null:
+				expr = folded
+				continue
+			expr = Binary.new(expr, op, right)
 		return expr
 
 	## 解析位与运算 (&) [br]
@@ -18506,7 +18588,13 @@ class Parser:
 	func bitwise_and():
 		var expr = shift()
 		while match_types([TokenType.BITAND]):
-			expr = Binary.new(expr, previous(), shift())
+			var op = previous()
+			var right = shift()
+			var folded = _try_fold_int_binary(expr, op, right)
+			if folded != null:
+				expr = folded
+				continue
+			expr = Binary.new(expr, op, right)
 		return expr
 
 	## 解析移位运算 (<<, >>) [br]
@@ -18515,7 +18603,13 @@ class Parser:
 	func shift():
 		var expr = addition()
 		while match_types([TokenType.LESS_LESS, TokenType.GREATER_GREATER]):
-			expr = Binary.new(expr, previous(), addition())
+			var op = previous()
+			var right = addition()
+			var folded = _try_fold_int_binary(expr, op, right)
+			if folded != null:
+				expr = folded
+				continue
+			expr = Binary.new(expr, op, right)
 		return expr
 
 	## 解析加减运算 (+, -) [br]
@@ -18531,6 +18625,10 @@ class Parser:
 				if folded != null:
 					expr = folded
 					continue
+			var int_folded = _try_fold_int_binary(expr, op, right)
+			if int_folded != null:
+				expr = int_folded
+				continue
 			expr = Binary.new(expr, op, right)
 		return expr
 		
@@ -18539,7 +18637,7 @@ class Parser:
 	## [returns] 解析出的 Binary 节点或下级表达式节点
 	func multiplication():
 		var expr = power()
-		while match_types([TokenType.STAR, TokenType.SLASH, TokenType.PERCENT, TokenType.DOUBLESLASH]):
+		while match_types([TokenType.STAR, TokenType.SLASH, TokenType.PERCENT, TokenType.DOUBLESLASH, TokenType.AT]):
 			var op = previous()
 			var right = power()
 			if op.type == TokenType.STAR:
@@ -18547,6 +18645,10 @@ class Parser:
 				if folded != null:
 					expr = folded
 					continue
+			var int_folded = _try_fold_int_binary(expr, op, right)
+			if int_folded != null:
+				expr = int_folded
+				continue
 			expr = Binary.new(expr, op, right)
 		return expr
 
@@ -18559,6 +18661,9 @@ class Parser:
 	## [param right] 右操作数 [br]
 	## [returns] 折叠后的 Literal 节点, 不可折叠时返回 null
 	const _FOLD_MAX_STR_SIZE := 4096
+	## 整型折叠结果的位长上限 (CPython 优化器同值): 超限放弃折叠保留运行期求值,
+	## 使超界大表达式的求值次数与对象身份语义与 CPython 一致
+	const _FOLD_MAX_INT_BITS := 128
 	func _try_fold_concat(left: Expr, op: Token, right: Expr) -> Expr:
 		if not (left is Literal and right is Literal):
 			return null
@@ -18613,6 +18718,110 @@ class Parser:
 		for _r in range(count):
 			out.append_array(base_data)
 		return Literal.new(DSLBytes.pooled_literal(out))
+
+	## 整型常量折叠 (CPython 编译期常量折叠, P2-56): [br]
+	## 两侧均为整数字面量 (含大数形态) 时复用 DSLBigInt 静态函数求值, 折叠为字面量节点; [br]
+	## 结果落 int64 走快路径字面量, 超界落大数字面量, 求值端驻留使同一字面表达式的 [br]
+	## `is` 身份语义与 CPython 一致 [br]
+	## 不折叠: 真除 (/) 的浮点结果涉宿主精度边界; 求值遇错 (除零 / 负移位 / 负指数 / [br]
+	## 巨移位 / MemoryError 上限 / 巨指数) 一律放弃折叠保留运行期求值 (CPython 优化器同规则) [br]
+	## [param left] 左操作数 [br]
+	## [param op] 运算符 Token [br]
+	## [param right] 右操作数 [br]
+	## [returns] 折叠后的 Literal 节点, 不可折叠时返回 null
+	func _try_fold_int_binary(left: Expr, op: Token, right: Expr) -> Expr:
+		if not (left is Literal and right is Literal):
+			return null
+		var lp = left as Literal
+		var rp = right as Literal
+		# bool 字面量不参与 (TRUE/FALSE 的字面量值为 bool 类型); 浮点 / 虚数 / 其他字面量同拒
+		if not (lp.value is int) or not (rp.value is int):
+			return null
+		if lp.overflow and lp.big_value == "":
+			return null
+		if rp.overflow and rp.big_value == "":
+			return null
+		# 操作数带符号归一为 (neg, limbs); 大数字面量经驻留解析取幅值
+		var na: bool = false
+		var nb: bool = false
+		var la: Array[int]
+		var lb: Array[int]
+		if lp.overflow:
+			var pair_l = DSLInteger.pooled_literal_big(lp.big_value, lp.big_neg)._pair()
+			na = pair_l[0]
+			la = pair_l[1]
+		else:
+			var pair_a = DSLBigInt.pair_of_i64(lp.value)
+			na = pair_a[0]
+			la = pair_a[1]
+		if rp.overflow:
+			var pair_r = DSLInteger.pooled_literal_big(rp.big_value, rp.big_neg)._pair()
+			nb = pair_r[0]
+			lb = pair_r[1]
+		else:
+			var pair_b = DSLBigInt.pair_of_i64(rp.value)
+			nb = pair_b[0]
+			lb = pair_b[1]
+		# 右操作数的快路径整数值 (指数 / 移位量): 大数形态已在各分支单独放弃折叠
+		var rb_fold: int = rp.value
+		# CPython 优化器的分运算门控 (ast_opt.c): 一般运算无门控, 乘看操作数位和,
+		# 幂看 bits(底) * 指数, 移位看 bits(左) + 移位值, 超过 MAX_INT_SIZE=128 拒折
+		var la_bits := DSLBigInt.mag_bitlen(la)
+		var res = null
+		match op.type:
+			TokenType.PLUS:
+				res = DSLBigInt.add(na, la, nb, lb)
+			TokenType.MINUS:
+				res = DSLBigInt.sub(na, la, nb, lb)
+			TokenType.STAR:
+				if la_bits + DSLBigInt.mag_bitlen(lb) > _FOLD_MAX_INT_BITS:
+					return null
+				res = DSLBigInt.mul(na, la, nb, lb)
+			TokenType.DOUBLESLASH, TokenType.PERCENT:
+				# 除零放弃折叠 (运行期 ZeroDivisionError, CPython 优化器同规则)
+				if DSLBigInt.mag_is_zero(lb):
+					return null
+				var dm = DSLBigInt.divmod(na, la, nb, lb)
+				res = [dm[0], dm[1]] if op.type == TokenType.DOUBLESLASH else [dm[2], dm[3]]
+			TokenType.STARSTAR:
+				# 负指数 / 巨指数放弃折叠 (运行期走浮点或 OverflowError 路径)
+				if rp.overflow or rb_fold < 0:
+					return null
+				if rb_fold > 0 and la_bits > _FOLD_MAX_INT_BITS / rb_fold:
+					return null
+				res = DSLBigInt.big_pow(na, la, rb_fold)
+			TokenType.LESS_LESS:
+				# 负移位放弃折叠 (运行期 ValueError); 超门控与巨移位放弃折叠 (lshift
+				# 的 MAX_BITS 预判对剩余形态返回 null)
+				if rp.overflow or rb_fold < 0:
+					return null
+				if la_bits + rb_fold > _FOLD_MAX_INT_BITS:
+					return null
+				res = DSLBigInt.lshift(na, la, rb_fold)
+			TokenType.GREATER_GREATER:
+				if rp.overflow or rb_fold < 0:
+					return null
+				res = DSLBigInt.rshift(na, la, rb_fold)
+			TokenType.PIPE:
+				res = DSLBigInt.bitop("or", na, la, nb, lb)
+			TokenType.CARET:
+				res = DSLBigInt.bitop("xor", na, la, nb, lb)
+			TokenType.BITAND:
+				res = DSLBigInt.bitop("and", na, la, nb, lb)
+			_:
+				return null
+		if res == null:
+			return null
+		var rn: bool = res[0]
+		var rl: Array[int] = res[1]
+		var shrunk = DSLBigInt.to_i64(rn, rl)
+		if shrunk != null:
+			return Literal.new(shrunk)
+		var folded_lit = Literal.new(0)
+		folded_lit.overflow = true
+		folded_lit.big_value = DSLBigInt.to_dec(rn, rl)
+		folded_lit.big_neg = rn
+		return folded_lit
 		
 	## 解析乘方运算 (**) [br]
 	## 右结合: a ** b ** c 解析为 a ** (b ** c) [br]
@@ -18622,6 +18831,9 @@ class Parser:
 		if match_types([TokenType.STARSTAR]):
 			var op = previous()
 			var right = power()
+			var folded = _try_fold_int_binary(expr, op, right)
+			if folded != null:
+				return folded
 			expr = Binary.new(expr, op, right)
 		return expr
 		
@@ -18847,6 +19059,13 @@ class Parser:
 				var prev_cls_async = _walk_async
 				_walk_async = false
 				_walk_yield_stmt(stmt.body, 0)
+				# P1-72: 类头关键字值与 ** 表达式可含 yield (类语句在生成器体内执行)
+				for kb in stmt.kw_bases:
+					if _walk_yield_expr(kb.value, scope, ""):
+						found = true
+				for skb in stmt.starkw_bases:
+					if _walk_yield_expr(skb, scope, ""):
+						found = true
 				_walk_async = prev_cls_async
 			elif stmt is ExpressionStmt:
 				if _walk_yield_expr(stmt.expression, scope, ""):
@@ -20220,7 +20439,7 @@ class Parser:
 			return null
 
 		# 增强赋值 x += 1, x -= 2, x *= 3, x /= 4, x //= 5, x **= 6, x %= 7, x |= 8
-		if match_types([TokenType.PLUS_EQ, TokenType.MINUS_EQ, TokenType.STAR_EQ, TokenType.SLASH_EQ, TokenType.DOUBLESLASH_EQ, TokenType.STARSTAR_EQ, TokenType.PERCENT_EQ, TokenType.PIPE_EQ, TokenType.AMP_EQ, TokenType.CARET_EQ, TokenType.LESS_LESS_EQ, TokenType.GREATER_GREATER_EQ]):
+		if match_types([TokenType.PLUS_EQ, TokenType.MINUS_EQ, TokenType.STAR_EQ, TokenType.SLASH_EQ, TokenType.DOUBLESLASH_EQ, TokenType.STARSTAR_EQ, TokenType.PERCENT_EQ, TokenType.AT_EQ, TokenType.PIPE_EQ, TokenType.AMP_EQ, TokenType.CARET_EQ, TokenType.LESS_LESS_EQ, TokenType.GREATER_GREATER_EQ]):
 			var op = previous()
 			var value = tuple_expression()
 			if value == null:
@@ -21020,33 +21239,76 @@ class Interpreter:
 				return r
 			if report.has_error:
 				return null
+		var result: DSLObject = null
 		match op.type:
 			TokenType.PLUS_EQ:
-				return _binary_with_reflect(left, right, "__add__", "__radd__", func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__add__", "__radd__", func(): return left.magic_add([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.MINUS_EQ:
-				return _binary_with_reflect(left, right, "__sub__", "__rsub__", func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__sub__", "__rsub__", func(): return left.magic_sub([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.STAR_EQ:
-				return _binary_with_reflect(left, right, "__mul__", "__rmul__", func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__mul__", "__rmul__", func(): return left.magic_mul([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.SLASH_EQ:
-				return _binary_with_reflect(left, right, "__truediv__", "__rtruediv__", func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__truediv__", "__rtruediv__", func(): return left.magic_div([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.DOUBLESLASH_EQ:
-				return _binary_with_reflect(left, right, "__floordiv__", "__rfloordiv__", func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__floordiv__", "__rfloordiv__", func(): return left.magic_floordiv([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.STARSTAR_EQ:
-				return _binary_with_reflect(left, right, "__pow__", "__rpow__", func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__pow__", "__rpow__", func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PERCENT_EQ:
-				return _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+			TokenType.AT_EQ:
+				# P2-16: 矩阵乘增强赋值 (__imatmul__ 优先由函数顶部尝试, 缺省回退 __matmul__ 链)
+				result = _binary_with_reflect(left, right, "__matmul__", "__rmatmul__", func(): return _matmul_type_error(left, right, "@="))
 			TokenType.PIPE_EQ:
-				return _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.AMP_EQ:
-				return _binary_with_reflect(left, right, "__and__", "__rand__", func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__and__", "__rand__", func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.CARET_EQ:
-				return _binary_with_reflect(left, right, "__xor__", "__rxor__", func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__xor__", "__rxor__", func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.LESS_LESS_EQ:
-				return _binary_with_reflect(left, right, "__lshift__", "__rlshift__", func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__lshift__", "__rlshift__", func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.GREATER_GREATER_EQ:
-				return _binary_with_reflect(left, right, "__rshift__", "__rrshift__", func(): return left.magic_rshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__rshift__", "__rrshift__", func(): return left.magic_rshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			_:
 				return null
+		# 增强赋值失败的文案一律用增强形式 (CPython 的原地分派层传 "+=" 等增强文本,
+		# 二元回退写入的是普通形式), 把 last_error 里的 "for +:" 归一为 "for +=:"
+		if result == null and not report.has_error and left.last_error != "":
+			var aug_text = _aug_assign_op_text(op.type)
+			if aug_text != "":
+				left.last_error = left.last_error.replace("for %s:" % aug_text.substr(0, aug_text.length() - 1), "for %s:" % aug_text)
+		return result
+
+	## 增强赋值运算符的增强形文本 (错误文案用), 无对应时为空串
+	func _aug_assign_op_text(op_type: TokenType) -> String:
+		match op_type:
+			TokenType.PLUS_EQ:
+				return "+="
+			TokenType.MINUS_EQ:
+				return "-="
+			TokenType.STAR_EQ:
+				return "*="
+			TokenType.SLASH_EQ:
+				return "/="
+			TokenType.DOUBLESLASH_EQ:
+				return "//="
+			TokenType.STARSTAR_EQ:
+				return "**="
+			TokenType.PERCENT_EQ:
+				return "%="
+			TokenType.AT_EQ:
+				return "@="
+			TokenType.PIPE_EQ:
+				return "|="
+			TokenType.AMP_EQ:
+				return "&="
+			TokenType.CARET_EQ:
+				return "^="
+			TokenType.LESS_LESS_EQ:
+				return "<<="
+			TokenType.GREATER_GREATER_EQ:
+				return ">>="
+			_:
+				return ""
 	
 	## 增强赋值运算符对应的原地方法名 [br]
 	## [param op_type] 运算符类型 [br]
@@ -21055,6 +21317,8 @@ class Interpreter:
 		match op_type:
 			TokenType.PLUS_EQ:
 				return "__iadd__"
+			TokenType.AT_EQ:
+				return "__imatmul__"
 			TokenType.MINUS_EQ:
 				return "__isub__"
 			TokenType.STAR_EQ:
@@ -21088,6 +21352,11 @@ class Interpreter:
 	## [param rdunder] 右操作数反射方法名 (如 __radd__) [br]
 	## [param fallback] 左操作数内建回退 (返回 DSLObject) [br]
 	## [returns] 运算结果, 双方都无法处理时返回 null (last_error 记录在操作数上)
+	## @ 矩阵乘的内建回退 (P2-16): 内建数值/序列类型未实现 __matmul__, 按 CPython 文案报错
+	func _matmul_type_error(left: DSLObject, right: DSLObject, op_text: String) -> DSLObject:
+		left.last_error = "TypeError: unsupported operand type(s) for %s: '%s' and '%s'" % [op_text, left._type_name(), right._type_name()]
+		return null
+
 	func _binary_with_reflect(left: DSLObject, right: DSLObject, dunder: String, rdunder: String, fallback: Callable) -> DSLObject:
 		# 操作数可能是驻留池/单例等复用对象, 其上残留上一次运算写入的 last_error
 		# 反射分派前统一清除, 之后读到的错误文案只会来自本次运算
@@ -21102,7 +21371,10 @@ class Interpreter:
 			return r
 		if report.has_error:
 			return null
-		if right.klass != null and right.klass._lookup_method(rdunder) != null:
+		# 同类跳过反射: CPython 对类型相同的两侧只调用一次槽函数, 槽内反射仅在
+		# 两侧类型不同时尝试 (即便类型仅定义了 __r*__ 也报 TypeError), 与比较运算
+		# 的互补反射 (_compare_with_reflect, 同类也走镜像) 语义不同
+		if right.klass != null and right.klass != left.klass and right.klass._lookup_method(rdunder) != null:
 			var rr = _call_magic_or_fallback(right, rdunder, [left], func(): return null)
 			if _suspended:
 				return null
@@ -22241,6 +22513,7 @@ class Interpreter:
 		mod.members["floordiv"] = _make_builtin("floordiv", Callable(self, "_op_floordiv"))
 		mod.members["mod"] = _make_builtin("mod", Callable(self, "_op_mod"))
 		mod.members["pow"] = _make_builtin("pow", Callable(self, "_op_pow"))
+		mod.members["matmul"] = _make_builtin("matmul", Callable(self, "_op_matmul"))
 		mod.members["neg"] = _make_builtin("neg", Callable(self, "_op_neg"))
 		mod.members["pos"] = _make_builtin("pos", Callable(self, "_op_pos"))
 		mod.members["abs"] = _make_builtin("abs", Callable(self, "_op_abs"))
@@ -23925,6 +24198,9 @@ class Interpreter:
 	## operator.pow(a, b)
 	func _op_pow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return _op_binary("pow", TokenType.STARSTAR, args)
+
+	func _op_matmul(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _op_binary("matmul", TokenType.AT, args)
 
 	## operator.and_(a, b)
 	func _op_and(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -26230,6 +26506,8 @@ class Interpreter:
 				result = _binary_with_reflect(left, right, "__pow__", "__rpow__", func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PERCENT:
 				result = _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+			TokenType.AT:
+				result = _binary_with_reflect(left, right, "__matmul__", "__rmatmul__", func(): return _matmul_type_error(left, right, "@"))
 			TokenType.LESS_LESS:
 				result = _call_magic_or_fallback(left, "__lshift__", [right], func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.GREATER_GREATER:
@@ -26275,6 +26553,8 @@ class Interpreter:
 		match token_type:
 			TokenType.PLUS:
 				return "+"
+			TokenType.AT:
+				return "@"
 			TokenType.MINUS:
 				return "-"
 			TokenType.STAR:
@@ -26630,6 +26910,8 @@ class Interpreter:
 					result = _binary_with_reflect(left, right, "__pow__", "__rpow__", func(): return left.magic_pow([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.PERCENT:
 					result = _binary_with_reflect(left, right, "__mod__", "__rmod__", func(): return left.magic_mod([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				TokenType.AT:
+					result = _binary_with_reflect(left, right, "__matmul__", "__rmatmul__", func(): return _matmul_type_error(left, right, "@"))
 				TokenType.LESS_LESS:
 					result = _call_magic_or_fallback(left, "__lshift__", [right], func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.GREATER_GREATER:
@@ -28402,6 +28684,11 @@ class Interpreter:
 				_collect_locals_expr(d, names, globals_decl)
 			for b in st.bases:
 				_collect_locals_expr(b, names, globals_decl)
+			# P1-72: 类头关键字值与 ** 表达式同样求值, 其中的 walrus 绑定名计入
+			for kb in st.kw_bases:
+				_collect_locals_expr(kb.value, names, globals_decl)
+			for skb in st.starkw_bases:
+				_collect_locals_expr(skb, names, globals_decl)
 		elif st is MatchStmt:
 			_collect_locals_expr(st.subject, names, globals_decl)
 			for case in st.cases:
@@ -28976,7 +29263,12 @@ class Interpreter:
 	## [param new_cls] 新建类 (MRO 已就绪) [br]
 	## [param own_attrs] 类体自有属性字典 (insertion 顺序) [br]
 	## [returns] NORMAL / SUSPENDED / RAISE / ERROR
-	func _run_class_fixup_hooks(new_cls: DSLClass, own_attrs: Dictionary) -> ExecResult:
+	func _run_class_fixup_hooks(new_cls: DSLClass, own_attrs: Dictionary, init_sub_kw = null) -> ExecResult:
+		# 类头关键字 (P1-72): 转发 __init_subclass__; 无显式钩子且带 kw 时按 CPython 报错
+		var sub_kw: Dictionary[String, DSLObject] = {}
+		if init_sub_kw != null:
+			for k in init_sub_kw:
+				sub_kw[k] = init_sub_kw[k]
 		for attr_name in own_attrs:
 			var attr_val = own_attrs[attr_name]
 			# 函数式 property 无 klass, 其 prop_name 由本钩子补全 (对齐 CPython property.__set_name__)
@@ -29003,14 +29295,28 @@ class Interpreter:
 				hook = new_cls.mro[k].methods["__init_subclass__"]
 				break
 		if hook != null:
+			# 默认 object.__init_subclass__ (CPython 同): 不接受任何关键字
+			# (内建形态直接按名识别; 用户类形态按定义类识别)
+			var is_default_hook = false
+			if hook is DSLBuiltinFunction:
+				is_default_hook = (hook as DSLBuiltinFunction).name == "__init_subclass__"
+			elif hook is DSLFunction and globals.get_val_safe("object") is DSLClass:
+				is_default_hook = (hook as DSLFunction)._defining_class == globals.get_val_safe("object")
+			if is_default_hook and not sub_kw.is_empty():
+				raise_exception("TypeError", "%s.__init_subclass__() takes no keyword arguments" % new_cls.name)
+				return ExecResult.RAISE
 			# classmethod 包装取被包函数, 以新类为 cls 直接调用 (CPython 同语义)
 			while hook is DSLClassMethodWrapper:
 				hook = hook.wrapped
-			var is_res = _dispatch_call(hook, [new_cls] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var is_res = _dispatch_call(hook, [new_cls] as Array[DSLObject], sub_kw)
 			if _suspended:
 				return ExecResult.SUSPENDED
 			if is_res == null and (report.has_error or last_exception != null):
 				return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
+		elif not sub_kw.is_empty():
+			# 无任何钩子可达: 默认 object 钩子不接受关键字 (CPython 同)
+			raise_exception("TypeError", "%s.__init_subclass__() takes no keyword arguments" % new_cls.name)
+			return ExecResult.RAISE
 		return ExecResult.NORMAL
 
 	## 执行类定义语句 [br]
@@ -29018,6 +29324,40 @@ class Interpreter:
 	## 注册到当前环境 [br]
 	## [param stmt] ClassStmt AST 节点 [br]
 	## [returns] 执行结果状态
+	## 非类基类的元类候选解析 (CPython build_class 语义) [br]
+	## 类基类的候选是其元类 type, 非类基类的候选是其类型对象 (type(value)); [br]
+	## 候选互不为子类时报 metaclass conflict (CPython 同文案), 同一候选重复出现不冲突 [br]
+	## [param base_val] 已求值的基类值 (类或非类) [br]
+	## [param base_objs] 原始基类值收集表 (含非类值, 供胜出候选调用时透传) [br]
+	## [param state] 解析状态, 键 "winner" 为候选对象或 null [br]
+	## [returns] true 正常登记, false 已报冲突
+	func _class_base_register(base_val: DSLObject, base_objs: Array, state: Dictionary) -> bool:
+		var cand: DSLObject = null
+		if base_val is DSLClass:
+			cand = globals.get_val_safe("type")
+		else:
+			cand = builtin_type([base_val] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var winner = state["winner"]
+		if winner == null:
+			state["winner"] = cand
+		elif winner == cand:
+			pass
+		elif not (cand is DSLClass) or not (winner is DSLClass):
+			raise_exception("TypeError", "metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases")
+			return false
+		else:
+			var w: DSLClass = winner
+			var c: DSLClass = cand
+			# 类与类的派生判断走 mro 直接比对 (_is_subclass_of_klass 走 klass 链,
+			# 对类对象而言是元类链, 语义不同)
+			if c.mro.has(w):
+				state["winner"] = c
+			elif not w.mro.has(c):
+				raise_exception("TypeError", "metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases")
+				return false
+		base_objs.append(base_val)
+		return true
+
 	func execute_class(stmt: ClassStmt) -> ExecResult:
 		# 挂起重入 (P0-25): 类体挂起后语句整句重放, 依赖外层块帧 resume_info 恢复
 		# 类体作用域与类骨架, 基类求值与骨架重建在恢复轮跳过
@@ -29031,8 +29371,51 @@ class Interpreter:
 		if cls_stage != "":
 			return _execute_class_finish(stmt, cls_stage, cls_env, cls_skel)
 		var base_objs: Array = []
-		for base_expr in stmt.bases:
-			if base_expr is StarredExpr:
+		# 非类基类的元类候选解析状态 (CPython build_class 语义): 类基类候选为 type,
+		# 非类基类候选为其类型对象, 候选互不为子类时报 metaclass conflict
+		var base_meta_state: Dictionary = {"winner": null}
+		# 类头关键字 (P1-72, PEP 487): kw= 与 ** 解包, 值转发给 __init_subclass__
+		var kw_objs: Dictionary[String, DSLObject] = {}
+		for item in stmt.base_layout:
+			var kind: String = item["kind"]
+			var idx: int = item["index"]
+			if kind == "kw":
+				var kw_name: String = (stmt.kw_bases[idx] as KeywordArg).name
+				var kw_val = evaluate((stmt.kw_bases[idx] as KeywordArg).value)
+				if _suspended:
+					_expr_evaluated = false
+					return ExecResult.SUSPENDED
+				if kw_val == null:
+					return ExecResult.RAISE
+				if kw_objs.has(kw_name):
+					raise_exception("TypeError", "__build_class__() got multiple values for keyword argument '%s'" % kw_name)
+					return ExecResult.RAISE
+				kw_objs[kw_name] = kw_val
+				continue
+			if kind == "starkw":
+				var map_val = evaluate(stmt.starkw_bases[idx])
+				if _suspended:
+					_expr_evaluated = false
+					return ExecResult.SUSPENDED
+				if map_val == null:
+					return ExecResult.RAISE
+				if not map_val is DSLDict:
+					raise_exception("TypeError", "argument after ** must be a mapping, not %s" % map_val._type_name())
+					return ExecResult.RAISE
+				for map_key in (map_val as DSLDict).dict.keys():
+					var key_obj = (map_val as DSLDict)._original_key_obj(map_key)
+					if not key_obj is DSLString:
+						raise_exception("TypeError", "keywords must be strings")
+						return ExecResult.RAISE
+					var key_name: String = (key_obj as DSLString).value
+					var map_v = (map_val as DSLDict).dict[map_key]
+					if kw_objs.has(key_name):
+						raise_exception("TypeError", "__build_class__() got multiple values for keyword argument '%s'" % key_name)
+						return ExecResult.RAISE
+					kw_objs[key_name] = map_v
+				continue
+			var base_expr = stmt.bases[idx]
+			if kind == "star" or base_expr is StarredExpr:
 				# 星参基类展开 (PEP 448 类侧泛化): 可迭代对象的每个元素各为一个基类
 				var seq_val = evaluate(base_expr.value)
 				if _suspended:
@@ -29057,10 +29440,8 @@ class Interpreter:
 					if star_it.suspended:
 						_expr_evaluated = false
 						return ExecResult.SUSPENDED
-					if not star_base is DSLClass:
-						raise_exception("TypeError", "all bases must be classes")
+					if not _class_base_register(star_base, base_objs, base_meta_state):
 						return ExecResult.RAISE
-					base_objs.append(star_base)
 				continue
 			var base_val = evaluate(base_expr)
 			if _suspended:
@@ -29068,10 +29449,40 @@ class Interpreter:
 				return ExecResult.SUSPENDED
 			if base_val == null:
 				return ExecResult.RAISE
-			if not base_val is DSLClass:
-				raise_exception("TypeError", "superclass must be a class")
+			if not _class_base_register(base_val, base_objs, base_meta_state):
 				return ExecResult.RAISE
-			base_objs.append(base_val)
+		# metaclass 关键字 (P1-38 边界): 仅接受默认 type; 非可调用值按 CPython 的调用错误文案
+		# (先于基类候选解析, CPython 同序), 可调用的自定义元类机制不支持 (既定边界, 报 metaclass conflict);
+		# 非类基类的候选与显式 metaclass 并存时按 CPython 报 conflict
+		if kw_objs.has("metaclass"):
+			var mv = kw_objs["metaclass"]
+			kw_objs.erase("metaclass")
+			if not mv._dsl_is_callable():
+				raise_exception("TypeError", "'%s' object is not callable" % mv._type_name())
+				return ExecResult.RAISE
+			var base_winner = base_meta_state["winner"]
+			if base_winner != null and base_winner != globals.get_val_safe("type"):
+				raise_exception("TypeError", "metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases")
+				return ExecResult.RAISE
+			if mv != globals.get_val_safe("type"):
+				raise_exception("TypeError", "metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases")
+				return ExecResult.RAISE
+		# 非类基类的胜出候选调用 (CPython build_class 语义): 以 (名字, 原始基类元组, 空属性字典)
+		# 调用候选, 调用报错原样传播; 调用成功则自定义元类机制不支持, 落 P1-38 边界;
+		# 全部为类基类时胜出候选即默认 type, 走既有建类机制不发起调用
+		var base_winner = base_meta_state["winner"]
+		if base_winner != null and base_winner != globals.get_val_safe("type"):
+			var tuple_items: Array[DSLObject] = []
+			tuple_items.assign(base_objs)
+			var call_args: Array[DSLObject] = [DSLString.new(stmt.name), DSLTuple.new(tuple_items), DSLDict.new()]
+			var call_res = _dispatch_call(base_winner, call_args, {} as Dictionary[String, DSLObject])
+			if _suspended:
+				_expr_evaluated = false
+				return ExecResult.SUSPENDED
+			if call_res == null and (report.has_error or last_exception != null):
+				return ExecResult.RAISE
+			raise_exception("TypeError", "metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases")
+			return ExecResult.RAISE
 		if base_objs.is_empty() and stmt.name != "object":
 			base_objs.append(environment.get_val("object"))
 		# 直接基类重复检查
@@ -29103,6 +29514,8 @@ order (MRO) for bases %s" % ", ".join(names))
 			return ExecResult.RAISE
 		# 类体作用域上登记构建中类对象: 类体内 def 语句组装方法时定位定义类 (super() / 装饰器链)
 		class_env.building_class = class_obj
+		# 类头关键字挂载 (P1-72): 收尾阶段转发 __init_subclass__
+		class_env.class_init_kw = kw_objs
 		return _execute_class_finish(stmt, "fresh", class_env, class_obj)
 
 	## 类体整块执行与收尾 (P0-25): 类体是完整代码块, 整块交给通用块执行, [br]
@@ -29151,8 +29564,9 @@ order (MRO) for bases %s" % ", ".join(names))
 				mfn = mval.fget
 			if mfn is DSLFunction and mfn.qualname == "":
 				mfn.qualname = stmt.name + "." + mname
-		# 类创建固定钩子: __set_name__ → __init_subclass__ (先于名字绑定与装饰器, CPython 同语义)
-		var hook_res = _run_class_fixup_hooks(class_obj, class_attrs)
+		# 类创建固定钩子: __set_name__ → __init_subclass__ (先于名字绑定与装饰器, CPython 同语义);
+		# 类头关键字 (P1-72) 经类体作用域载体转发 __init_subclass__
+		var hook_res = _run_class_fixup_hooks(class_obj, class_attrs, class_env.class_init_kw)
 		if hook_res != ExecResult.NORMAL:
 			return hook_res
 		environment.define(stmt.name, class_obj)
@@ -31653,7 +32067,7 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param bases_obj] 基类 (DSLTuple 或 DSLClass) [br]
 	## [param attrs_obj] 类属性字典 (DSLDict) [br]
 	## [returns] 新创建的 DSLClass
-	func _type_metaclass(name_obj: DSLObject, bases_obj: DSLObject, attrs_obj: DSLObject) -> DSLObject:
+	func _type_metaclass(name_obj: DSLObject, bases_obj: DSLObject, attrs_obj: DSLObject, init_sub_kw = null) -> DSLObject:
 		# Validate name
 		if not name_obj is DSLString:
 			raise_exception("TypeError", "type() argument 1 must be str, not " + name_obj._type_name())
@@ -31715,7 +32129,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
 			return null
 		# 类创建固定钩子: __set_name__ → __init_subclass__ (type() 三参与 class 语句同语义)
-		var hook_res = _run_class_fixup_hooks(new_cls, class_attrs_dict)
+		var hook_res = _run_class_fixup_hooks(new_cls, class_attrs_dict, init_sub_kw)
 		if hook_res != ExecResult.NORMAL:
 			return null
 		globals.define(name_obj.value, new_cls)
@@ -32620,12 +33034,15 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] 新的 DSLInstance
 	## 内部 API: type.__new__, 1 参返回对象类型, 3 参动态建类
-	func api_type_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	func api_type_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		# args[0] 是 type 类自身, 其余为用户实参
 		if args.size() == 2:
+			if not kwargs.is_empty():
+				raise_exception("TypeError", "type() takes 1 or 3 arguments")
+				return null
 			return builtin_type([args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if args.size() == 4:
-			return _type_metaclass(args[1], args[2], args[3])
+			return _type_metaclass(args[1], args[2], args[3], kwargs)
 		raise_exception("TypeError", "type() takes 1 or 3 arguments")
 		return null
 

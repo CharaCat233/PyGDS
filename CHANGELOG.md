@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.6] - 2026-10-05
+
+本版为语法层收尾小版本：类定义基类关键字参数（P1-72，PEP 487 的 kw 转发形态）与 `@` 矩阵乘运算符（P2-16），并在同一版本内完成四项 P2 修复（P2-57 / P2-42 / P2-56 / P2-37）
+
+### 新增
+
+- **类定义基类关键字参数（P1-72 / PEP 487）**：`class C(Base, kw=1)` 语法放开，`kw=` 与 `**` 解包按源码序求值并转发 `__init_subclass__`（含 `type()` 三参形态的关键字转发）；关键字重复报编译期 `SyntaxError: keyword argument repeated: k`，字面 kw 与 `**` 键的运行期冲突报 `TypeError: __build_class__() got multiple values for keyword argument 'k'`；默认 `object.__init_subclass__` 不接受任何关键字（`«类名».__init_subclass__() takes no keyword arguments`）；`metaclass=type` 合法（默认机制），非可调用元类值按 CPython 报调用错误文案，可调用的自定义元类机制仍不支持（报 `metaclass conflict`，P1-38 既定边界收窄为此）
+- **`@` 矩阵乘运算符（P2-16，语法层）**：`@` 与 `*` / `/` 同优先级入表达式文法，`@=` 增强赋值（含属性 / 下标目标，`__imatmul__` 优先回退 `__matmul__` 链）；内建类型未实现 `__matmul__` 时按 CPython 报 `TypeError: unsupported operand type(s) for @: 'int' and 'int'`；用户类 `__matmul__` / `__rmatmul__` 跨类型反射生效；`operator.matmul` 注册
+
+### 修复
+
+- **同类型反射运算（P2-57）**：两侧类型相同且类型仅定义 `__r*__` 时（如 `S() + S()`），CPython 对同类只调用一次槽函数、不尝试反射（报 `TypeError: unsupported operand type(s) for +`），PyGDS 原尝试反射并返回结果；`_binary_with_reflect` 的反射尝试补同类判等跳过（比较运算的互补反射语义不同，不受影响），跨类型 / 子类 / 共同基类子类间的反射保持一致
+- **增强赋值失败文案**：增强赋值二元回退失败时文案原沿用普通形式（`for +:`），CPython 的原地分派层一律传增强文本（`for +=:`）；失败路径按运算符归一为 `+=` / `//=` / `**=` 等增强形式（P2-57 同类结果对齐后该差异随之可见，属同一分派路径的收口）
+- **非类基类的元类候选解析与调用文案（P2-42）**：`class C(1)` / `class C(*[1])` 原报 `superclass must be a class` / `all bases must be classes`，CPython 以基类的类型对象作元类候选参与解析（类基类候选为 `type`），胜出候选按 `(名字, 原始基类元组, 属性字典)` 三参调用、报其自身文案（如 `class C(*[{}])` 报 `dict expected at most 1 argument, got 3`）；候选互不为子类（混排 / 多候选 / 与显式 metaclass 并存）报 `metaclass conflict` 不发起调用，非可调用显式元类先报调用错误（CPython 同序）；直接与星参形态文案一致。int / str 等类型的三参调用文案与 CPython 仍有既有差异（`int expected at most 2 arguments, got 3` 与 `int() takes at most 2 arguments (3 given)`），属 `int()` / `str()` 文案对齐专项
+- **整型常量表达式折叠与驻留（P2-56）**：解析器对两侧均为整数字面量（含大数形态）的二元运算复用 `DSLBigInt` 静态函数折叠（`+ - * // % ** << >> & | ^`），结果落 int64 走快路径字面量、超界落大数字面量，经求值端驻留使同一字面表达式共享对象（`x = 10 ** 30; y = 10 ** 30; x is y` 为 True，CPython 同）；门控逐运算对齐 CPython 优化器（乘看操作数位和、幂看 bits(底)×指数、移位看 bits(左)+移位值，超 128 位拒折），求值遇错（除零 / 负移位 / 负指数 / 巨移位）一律放弃折叠保留运行期报错；真除 `/` 涉浮点精度边界不折叠（P2-27）；字符串 concat 折叠共存不受影响
+- **`close()` 的跨挂起行序（P2-37）**：生成器 `finally` 体内 `sleep` 挂起时，`it.close()` 原按异步续做模型先返回 None（`print(it.close())` 先打印 None 后打印 finally 内输出），CPython 的 close 同步走完 finally 才返回；close 驱动的挂起升级为语句级挂起（镜像 send / throw 的传播语义，在途 GeneratorExit 的错误通道在传播前清除），消费语句整句重放，重放轮 close 经生成器停泊栈续驱 finally 完成后返回 None，输出行序与 CPython 一致
+
+### 测试
+
+- 新增 7 例：`class_base_kwargs`（kw 转发全形态 / 默认钩子拒绝 / 链式 super）/ `type_matmul`（内建文案 / 用户 dunder / 优先级 / `@=` / `operator.matmul`）/ `class_reflect_same_type`（同类反射跳过与增强赋值文案）/ `class_star_base_error`（非类基类元类候选全形态）/ `type_int_fold`（折叠驻留 / 门控正反两向 / 出错不折叠）/ `suspend_close_order`（close 行序七形态）`same_output` 与 `class_dup_kw`（重复关键字编译期文案）`same_error`；behavioral.md 中英同步（332 条）
+- 全量回归 **332/332** 通过（0 跳过）；挂起套件 24/24 通过；lint 三件套 0 问题；引擎 SCRIPT ERROR 保持 0；任意精度核心随机向量探针 1614/1614 通过
+
 ## [0.8.0-alpha.5] - 2026-10-04
 
 本版合并交付两项 v0.8.0 排期的 P0 主任务（经使用者决定合并为一个版本）：P0-13 任意精度 int（消除与 CPython 的最大单项语义差异）与 P0-25 类体完整语句执行。实现期连带修复巨指数幂优先级解析偏差、除法零判断与大数分派次序、`_int_from_float_exact` 零值死循环等问题

@@ -1096,6 +1096,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 
 `1+0j` 与 `1` 为同键同哈希, 序比较报 `'<' not supported...`, 复数幂的整数指数走精确重复乘法, 非整数指数 (含 `**0.5`) 为 libm 极坐标路径, 比对须 `round(..., N)` (ci.md 规则 4)
 
+### type_matmul
+
+- 职责: `@` 矩阵乘运算符 (P2-16, 语法层): 内建类型的 `TypeError: unsupported operand type(s) for @` 文案, 用户 `__matmul__` / `__rmatmul__` 跨类型反射, 与 `*` 同优先级, `@=` 增强赋值与 `operator.matmul`
+- 比对: `same_output`
+- 源文件: [ci/cases/type_matmul.py](../../ci/cases/type_matmul.py)
+
 ### type_memoryview
 
 - 职责: memoryview 的构造/下标/切片/只读与可写透传/tobytes/cast/release
@@ -1211,6 +1217,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 职责: `int`/`float` 位方法与 `format()`
 - 比对: `same_output`
 - 源文件: [ci/cases/type_int_methods.py](../../ci/cases/type_int_methods.py)
+
+### type_int_fold
+
+- 职责: 整型常量表达式折叠与驻留 (CPython 优化器同门控): 同字面表达式共享对象 (`is` 为 True), 分运算门控 (乘看操作数位和 / 幂看 bits(底)×指数 / 移位看 bits(左)+移位值, 超 128 拒折) 的正反两向, 折叠值矩阵 (含负数 floor 语义), 求值遇错 (除零/负移位/巨移位) 不折叠保留运行期报错, 字符串 concat 折叠共存
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_fold.py](../../ci/cases/type_int_fold.py)
 
 ### type_int_overflow
 
@@ -1563,6 +1575,30 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: 类体挂起重放 (P0-25): 类体内 sleep 挂起后已完成语句副作用不重复, 循环 / try / with / 生成器消费器在类体内挂起, 函数内类体与基类求值重放, 类体在生成器函数内按步执行
 - 比对: `same_output`
 - 源文件: [ci/cases/class_body_suspend.py](../../ci/cases/class_body_suspend.py)
+
+### class_base_kwargs
+
+- 职责: 类定义基类关键字参数 (P1-72, PEP 487): `kw=` 与 `**` 解包按源码序转发 `__init_subclass__`（含 `type()` 三参形态）, 默认 object 钩子拒 kw, 运行期重复的 `__build_class__` 文案, `metaclass=type` 合法与自定义元类边界, super 链式转发
+- 比对: `same_output`
+- 源文件: [ci/cases/class_base_kwargs.py](../../ci/cases/class_base_kwargs.py)
+
+### class_dup_kw
+
+- 职责: 类头关键字参数重复的编译期 SyntaxError (P1-72, CPython 同文案 `keyword argument repeated: k`)
+- 比对: `same_error`
+- 源文件: [ci/cases/class_dup_kw.py](../../ci/cases/class_dup_kw.py)
+
+### class_reflect_same_type
+
+- 职责: 同类反射运算的跳过规则 (CPython 对类型相同的两侧只调用一次槽函数, 仅定义 `__r*__` 的同类运算报 TypeError 不反射; 跨类型、子类与共同基类子类间的反射不受影响; 增强赋值失败文案用 `+=` 形式)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_reflect_same_type.py](../../ci/cases/class_reflect_same_type.py)
+
+### class_star_base_error
+
+- 职责: 非类基类的元类候选解析与调用文案 (CPython 以基类类型作元类候选, 胜出者按三参调用报自身文案; 直接/星参形态一致, 混排与多候选、显式 metaclass 并存报 `metaclass conflict`, 非可调用元类先报调用错误; 星参真类基类正常建类)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_star_base_error.py](../../ci/cases/class_star_base_error.py)
 
 ### class_binding_errors
 
@@ -1943,6 +1979,12 @@ PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的�
 - 职责: 并列调用挂起重放副作用单次
 - 比对: `same_output`
 - 源文件: [ci/cases/suspend_call_replay.py](../../ci/cases/suspend_call_replay.py)
+
+### suspend_close_order
+
+- 职责: close() 驱动 finally 体挂起的语句级重放 (finally 内输出先于 close 返回值, 与 CPython 同步行序一致): 基本形态、表达式链、for 耗尽收尾、with `__exit__` 内 close、捕获 GeneratorExit 后 sleep 再 yield 的 RuntimeError、两层委托 close、多段 sleep 续驱
+- 比对: `same_output`
+- 源文件: [ci/cases/suspend_close_order.py](../../ci/cases/suspend_close_order.py)
 
 ### suspend_comp_effect
 

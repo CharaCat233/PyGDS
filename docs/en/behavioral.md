@@ -1096,6 +1096,12 @@ bytearray is unhashable (dict keys raise `unhashable type: 'bytearray'`); `bytes
 
 `1+0j` shares key and hash with `1`; ordering raises `'<' not supported...`; complex power uses exact repeated multiplication for integer exponents and the libm polar path for non-integer ones (including `**0.5`) — compare with `round(..., N)` (ci.md rule 4)
 
+### type_matmul
+
+- Responsibility: the `@` matrix-multiply operator (P2-16, syntax level): `TypeError: unsupported operand type(s) for @` on builtin types, user `__matmul__` / `__rmatmul__` cross-type reflection, same precedence as `*`, `@=` augmented assignment and `operator.matmul`
+- Comparison: `same_output`
+- Source: [ci/cases/type_matmul.py](../../ci/cases/type_matmul.py)
+
 ### type_memoryview
 
 - Responsibility: memoryview construction, indexing, slicing, read-only vs writable passthrough, tobytes/cast/release
@@ -1211,6 +1217,12 @@ Pragmatic support covers one-dimensional B-format views only; bytes-backed views
 - Responsibility: `int`/`float` bit methods and `format()`
 - Comparison: `same_output`
 - Source: [ci/cases/type_int_methods.py](../../ci/cases/type_int_methods.py)
+
+### type_int_fold
+
+- Responsibility: integer constant-expression folding and interning (gates matching the CPython optimizer): identical literal expressions share one object (`is` is True), per-operator gates (multiply by operand bit sum / power by bits(base)×exponent / shift by bits(left)+shift, over 128 refuses) verified both ways, folded value matrix (including negative floor semantics), evaluation errors (division by zero / negative shift / huge shift) keep runtime raising, string concat folding coexists
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_fold.py](../../ci/cases/type_int_fold.py)
 
 ### type_int_overflow
 
@@ -1563,6 +1575,30 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: class-body suspension replay (P0-25): completed-statement side effects not repeated after in-body sleep suspension; loops / try / with / generator consumers suspending inside class bodies; class bodies inside functions and base-class evaluation replay; class bodies stepped inside generator functions
 - Comparison: `same_output`
 - Source: [ci/cases/class_body_suspend.py](../../ci/cases/class_body_suspend.py)
+
+### class_base_kwargs
+
+- Responsibility: class definition base keyword arguments (P1-72, PEP 487): `kw=` and `**` unpacking forwarded to `__init_subclass__` in source order (including the `type()` three-arg form), default object hook rejecting kw, runtime-duplicate `__build_class__` message, `metaclass=type` legality and the custom-metaclass boundary, super chain forwarding
+- Comparison: `same_output`
+- Source: [ci/cases/class_base_kwargs.py](../../ci/cases/class_base_kwargs.py)
+
+### class_dup_kw
+
+- Responsibility: compile-time SyntaxError for duplicate class-header keywords (P1-72, CPython message `keyword argument repeated: k`)
+- Comparison: `same_error`
+- Source: [ci/cases/class_dup_kw.py](../../ci/cases/class_dup_kw.py)
+
+### class_reflect_same_type
+
+- Responsibility: same-type reflection skip rule (CPython invokes the slot once for identical operand types, so a same-type operation with only `__r*__` defined raises TypeError without reflection; cross-type, subclass and sibling-class reflection are unaffected; augmented-assignment failure messages use the `+=` form)
+- Comparison: `same_output`
+- Source: [ci/cases/class_reflect_same_type.py](../../ci/cases/class_reflect_same_type.py)
+
+### class_star_base_error
+
+- Responsibility: metaclass-candidate resolution and call messages for non-class bases (CPython uses the base value's type as a metaclass candidate, the winner is invoked with three arguments producing its own message; direct and star forms agree, mixing class and non-class bases or distinct candidates raises `metaclass conflict` without calling, a non-callable explicit metaclass reports the call error first; a star-unpacked genuine class base still builds normally)
+- Comparison: `same_output`
+- Source: [ci/cases/class_star_base_error.py](../../ci/cases/class_star_base_error.py)
 
 ### class_binding_errors
 
@@ -1943,6 +1979,12 @@ PyGDS-specific suspend/resume mechanics (statement replay after a `time.sleep`-t
 - Responsibility: Side effects run once when a suspend replays adjacent calls
 - Comparison: `same_output`
 - Source: [ci/cases/suspend_call_replay.py](../../ci/cases/suspend_call_replay.py)
+
+### suspend_close_order
+
+- Responsibility: statement-level replay of a close()-driven suspension inside the finally body (output inside the finally precedes the close return value, matching CPython's synchronous close): basic form, expression chains, for-loop exhaustion cleanup, close inside with `__exit__`, RuntimeError for catch-sleep-yield after GeneratorExit, two-level delegation close, multi-sleep continuation
+- Comparison: `same_output`
+- Source: [ci/cases/suspend_close_order.py](../../ci/cases/suspend_close_order.py)
 
 ### suspend_comp_effect
 
