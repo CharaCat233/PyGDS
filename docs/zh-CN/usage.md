@@ -365,7 +365,7 @@ int("0x1f", 0)      # 31 (自动识别十六进制前缀)
 int("-ff", 16)      # -255 (支持符号)
 ```
 
-**整数范围**：PyGDS 的 `int` 为 64 位有符号整数，与 CPython 的 `int`（任意精度整数，永不溢出）存在表示层面的根本差异：字面量、算术运算（加 / 减 / 乘 / 幂 / 左移 / 一元负号 / 整除）、`int()` 的字符串与浮点转换在结果超出 `[-9223372036854775808, 9223372036854775807]` 时明确报 `OverflowError`，移位计数为负报 `ValueError`；CPython 对同样的运算给出精确的任意精度结果。这是两者的既定差异（静默环绕已废除，改为明确报错），彻底对齐需将整数改为任意精度实现，属架构级改动。范围内的边界行为与 CPython 一致（如 `(-2) ** 63` 恰为最小整数、负底数奇次幂结果合法）
+**整数范围（P0-13 已对齐任意精度）**：PyGDS 的 `int` 与 CPython 一致为任意精度整数，永不溢出——字面量、算术运算（加 / 减 / 乘 / 除 / 整除 / 取模 / 幂 / 移位 / 位运算）、`int()` 的字符串与浮点转换在超出 int64 时自动升级为大数表示，结果落回 int64 范围时缩回快路径，对用户完全透明；`hash(int)` 同步对齐 CPython 的模 `2^61 - 1` 算法（`hash(-1) == -2`）。仍保留的索引位边界（CPython `Py_ssize_t` 同构）：序列下标超出 int64 报 `IndexError: cannot fit 'int' into an index-sized integer`，序列重复计数、`str` 宽度参数、`chr()`、`bytes(n)`、`range()` 参数与巨移位（`1 << 2**70` 报 `too many digits in integer`）等位置越界报 `OverflowError`；`float(10 ** 400)` 报 `OverflowError`（CPython 同）。已文档化限制：CPython 的 `range(10**30)` 可惰性构造成功，PyGDS 的 `range()` 参数按索引位收敛为 int64 直接报 `OverflowError`。性能说明：大数运算为 GDScript 层 O(n²) 实现（学校乘法 / 长除法），万位十进制数字内流畅，更大位数会明显变慢；结果位数超过约 400 万二进制位（约 127 万十进制位）时报 `MemoryError`。
 
 ### `...`（Ellipsis）
 

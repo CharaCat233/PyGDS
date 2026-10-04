@@ -35,8 +35,10 @@ class Token:
 	var line: int
 	## 所在列
 	var column: int
-	## 字面量转换是否溢出 int64 (求值处据此报 OverflowError)
+	## 字面量转换是否溢出 int64 (P0-13: 溢出不再报错, literal_big 携带精确十进制串)
 	var literal_overflow: bool = false
+	## 大数十进制数字串 (无符号, literal_overflow 为真时有效; 空 = 快路径)
+	var literal_big: String = ""
 	## 本 NEWLINE 是否由分号产生 (行内复合体的语句分隔符, block 据此判定同块归属)
 	var semi: bool = false
 	
@@ -738,7 +740,7 @@ class Lexer:
 			if digits == "":
 				report.error("Invalid hex literal at line %d" % line)
 				return
-			_add_int_token(_digits_to_int(digits, 16))
+			_add_int_token(_digits_to_int(digits, 16), digits, 16)
 			return
 		# 八进制 0o/0O
 		if (peek() == 'o' or peek() == 'O') and start + 1 < source.length() and source[start] == '0':
@@ -751,7 +753,7 @@ class Lexer:
 			if digits == "":
 				report.error("Invalid octal literal at line %d" % line)
 				return
-			_add_int_token(_digits_to_int(digits, 8))
+			_add_int_token(_digits_to_int(digits, 8), digits, 8)
 			return
 		# 二进制 0b/0B
 		if (peek() == 'b' or peek() == 'B') and start + 1 < source.length() and source[start] == '0':
@@ -764,7 +766,7 @@ class Lexer:
 			if digits == "":
 				report.error("Invalid binary literal at line %d" % line)
 				return
-			_add_int_token(_digits_to_int(digits, 2))
+			_add_int_token(_digits_to_int(digits, 2), digits, 2)
 			return
 		# 十进制 (支持下划线)
 		# 注意: 首个字符已被 scan_token 的 advance() 消费, 需从 source[start] 补回
@@ -821,7 +823,7 @@ class Lexer:
 				advance()
 				add_token(TokenType.IMAGINARY, float(int_val))
 				return
-			_add_int_token(int_val)
+			_add_int_token(int_val, int_part, 10)
 
 	## 判断字符串是否含非零数字
 	func _has_nonzero_digit(s: String) -> bool:
@@ -909,10 +911,13 @@ class Lexer:
 			result = result * base + v
 		return result
 
-	## 产出整数字面量 Token, 回写溢出标志
-	func _add_int_token(v: int):
+	## 产出整数字面量 Token (P0-13): 溢出时按原进制数字串精确升级为十进制大串
+	func _add_int_token(v: int, digits: String = "", base: int = 10):
 		add_token(TokenType.INTEGER, v)
 		tokens[tokens.size() - 1].literal_overflow = literal_overflow
+		if literal_overflow and digits != "":
+			var pr = DSLBigInt.from_digits(digits, base, false)
+			tokens[tokens.size() - 1].literal_big = DSLBigInt.to_dec(pr[0], pr[1])
 		
 	## 扫描标识符或关键字
 	func identifier():
@@ -1432,8 +1437,12 @@ class CompClause:
 class Literal extends Expr:
 	## 字面量的实际值 (int/float/String/bool/null)
 	var value
-	## 整数字面量是否溢出 int64 (词法层标记)
+	## 整数字面量是否溢出 int64 (P0-13: 溢出由 big_value 承载, 不再是错误)
 	var overflow: bool = false
+	## 大数十进制数字串 (无符号; 非空 = 大数字面量, value 恒为 0)
+	var big_value: String = ""
+	## 大数符号
+	var big_neg: bool = false
 	## 是否为虚数字面量 (1j 等, P1-56): value 为虚部的浮点值
 	var is_imag: bool = false
 	## 构造字面量表达式 [br]
@@ -3562,6 +3571,31 @@ class DSLObject:
 				dg.insert(0, 0)
 		return [dg, frac_len]
 
+	## DSLInteger 的十进制串 (P0-13, 快慢路径统一; 供 dict/set 键编码)
+	static func _int_dec_of(obj: DSLInteger) -> String:
+		if obj.is_big():
+			return DSLBigInt.to_dec(obj.big_neg, obj.big_limbs)
+		return str(obj.value)
+
+	## float 的精确整数截断 (P0-13): 复用十进制展开, 向零截断, 支持超出 int64 [br]
+	## 零值先行短路: 规格化循环对 0 不终止
+	static func _int_from_float_exact(f: float) -> DSLInteger:
+		if f == 0.0:
+			return DSLInteger.pooled(0)
+		var neg = f < 0.0
+		var dec = _decimal_digits_of(absf(f))
+		var digits: Array = dec[0]
+		var frac_len: int = dec[1]
+		var s = ""
+		for d in digits:
+			s += str(d)
+		var int_len = s.length() - frac_len
+		if int_len <= 0:
+			return DSLInteger.pooled(0)
+		s = s.substr(0, int_len)
+		var pr = DSLBigInt.from_digits(s, 10, neg)
+		return DSLInteger.from_big(pr[0], pr[1])
+
 	## 十进制数字串 (高位在前) 乘 small (2 或 5)
 	static func _digits_mul(dg: Array, m: int) -> void:
 		var carry = 0
@@ -3706,8 +3740,16 @@ class DSLObject:
 	## [param idx] 下标对象 [br]
 	## [param err_obj] 接收错误文案的容器对象 (可为 null) [br]
 	## [returns] 转换后的整数, 失败返回 INDEX_ERR
-	static func _seq_index_int(idx: DSLObject, err_obj: DSLObject = null) -> int:
+	static func _seq_index_int(idx: DSLObject, err_obj: DSLObject = null, clamp_big: bool = true) -> int:
 		if idx is DSLInteger:
+			# P0-13: 大数索引位 (CPython Py_ssize_t 同构)——切片分量钳制到 int64 边界
+			# (CPython 切片对超界分量取钳制语义), 直接下标经 _norm_seq_index 传 false 报 IndexError
+			if (idx as DSLInteger).is_big():
+				if clamp_big:
+					return -9223372036854775807 if (idx as DSLInteger).big_neg else 9223372036854775807
+				if err_obj != null and err_obj.last_error == "":
+					err_obj.last_error = "IndexError: cannot fit 'int' into an index-sized integer"
+				return INDEX_ERR
 			return idx.value
 		if idx is DSLBool:
 			return 1 if idx.value else 0
@@ -3716,6 +3758,12 @@ class DSLObject:
 			if method != null:
 				var res = idx.klass._invoke_func(method, [idx] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if res is DSLInteger:
+					if (res as DSLInteger).is_big():
+						if clamp_big:
+							return -9223372036854775807 if (res as DSLInteger).big_neg else 9223372036854775807
+						if err_obj != null and err_obj.last_error == "":
+							err_obj.last_error = "IndexError: cannot fit 'int' into an index-sized integer"
+						return INDEX_ERR
 					return res.value
 				if res is DSLBool:
 					return 1 if res.value else 0
@@ -3744,11 +3792,15 @@ class DSLObject:
 	## [param msg] 站点文案模板 (规则同 _seq_index_fail) [br]
 	## [returns] 规范化后的 DSLInteger, 失败返回 null
 	static func _norm_seq_index(idx: DSLObject, err_obj: DSLObject, msg: String):
-		var i = _seq_index_int(idx, err_obj)
+		var i = _seq_index_int(idx, err_obj, false)
 		if i == INDEX_ERR and not (idx is DSLInteger):
 			_seq_index_fail(idx, err_obj, msg)
 			return null
 		if i == INDEX_ERR:
+			# P0-13: 大数下标是真失败 (返回错误); 快路径整数为哨兵值复用, 原样返回
+			if (idx as DSLInteger).is_big():
+				_seq_index_fail(idx, err_obj, msg)
+				return null
 			return idx
 		return DSLInteger.pooled(i)
 		
@@ -3943,6 +3995,9 @@ class DSLBool extends DSLObject:
 		var a = lhs._promote(rhs, op)
 		if a[0] == null:
 			return null
+		# P0-13: 大数操作数分派 (二元算术结果恒为 int/float, bool 不折叠)
+		if a[1] is DSLInteger and (lhs.is_big() or (a[1] as DSLInteger).is_big()):
+			return lhs._binop_big(a[1], op)
 		match op:
 			"+":
 				return DSLInteger.pooled(a[1].value + lhs.value) if a[1] is DSLInteger else DSLFloat.new(float(lhs.value) + a[1].value)
@@ -4019,6 +4074,10 @@ class DSLBool extends DSLObject:
 			rhs = (rhs as DSLBool)._as_int()
 		if not (rhs is DSLInteger):
 			return _arithmetic_type_error(op, rhs)
+		var rhsi = rhs as DSLInteger
+		if rhsi.is_big():
+			# P0-13: 与大数的位运算走整数路径 (结果恒为 int)
+			return _as_int()._binop_big(rhsi, op)
 		var l = 1 if value else 0
 		var res = 0
 		match op:
@@ -4182,12 +4241,625 @@ class DSLExceptionDescriptor extends DSLObject:
 			return DSLString.new(dname)
 		return super._dsl_getattribute(attr_name)
 
+## 任意精度整数核心 (P0-13): 纯静态函数, 无解释器依赖 [br]
+## 表示约定: (neg: bool, limbs: Array[int]) —— limbs 为 32 位一组的**小端幅值** [br]
+## (下标 0 为最低位), 规范化后无前导零 limb; 零表示为空 limbs 且 neg=false [br]
+## 全部算法与 CPython longobject 同型: floor 除法 / 余数符号随除数 / 无限二补数位运算 / [br]
+## hash 模 2^61-1。调用方 (DSLInteger) 负责快路径分派与 DSLObject 包装
+class DSLBigInt:
+	const BASE := 4294967296
+	const MASK := 4294967295
+	## CPython int 哈希模数 2^61 - 1
+	const HASH_MOD := 2305843009213693951
+	## 单值幅值位数上限 (pow / lshift 预判): 超出报 MemoryError, 防宿主端不可控巨量分配
+	const MAX_BITS := 4194304
+
+	## 去除幅值前导零 limb (原地)
+	static func _strip(limbs: Array[int]) -> void:
+		while limbs.size() > 0 and limbs[limbs.size() - 1] == 0:
+			limbs.pop_back()
+
+	## 规范化的零幅值 (类型化空数组; 字面量 [] 无类型, 传入 typed 参数会运行期报错)
+	static func _zero_limbs() -> Array[int]:
+		var e: Array[int] = []
+		return e
+
+	## 非负 int64 的幅值 limbs
+	static func mag_of_u64(v: int) -> Array[int]:
+		var out: Array[int] = []
+		if v <= 0:
+			return out
+		out.append(v & MASK)
+		var rest = v >> 32
+		if rest > 0:
+			out.append(rest & MASK)
+		return out
+
+	## 任意 int64 (含最小整数) 的幅值 limbs
+	static func mag_of_i64_abs(v: int) -> Array[int]:
+		if v == -9223372036854775807 - 1:
+			var out: Array[int] = [0, 2147483648]
+			return out
+		if v < 0:
+			return mag_of_u64(-v)
+		return mag_of_u64(v)
+
+	## int64 → [neg, limbs]
+	static func pair_of_i64(v: int) -> Array:
+		if v >= 0:
+			return [false, mag_of_u64(v)]
+		return [true, mag_of_i64_abs(v)]
+
+	## 缩回快路径: (neg, limbs) 能落在 int64 时返回 int, 否则 null
+	static func to_i64(neg: bool, limbs: Array[int]):
+		if limbs.is_empty():
+			return 0
+		if limbs.size() > 2:
+			return null
+		if limbs.size() == 1:
+			var v1 = limbs[0]
+			if neg:
+				if v1 > 2147483648:
+					return null
+				return -v1
+			return v1
+		var hi = limbs[1]
+		if hi >= 2147483648:
+			if neg and hi == 2147483648 and limbs[0] == 0:
+				return -9223372036854775807 - 1
+			return null
+		var v2 = hi * BASE + limbs[0]
+		return -v2 if neg else v2
+
+	## 幅值是否为零
+	static func mag_is_zero(limbs: Array[int]) -> bool:
+		return limbs.is_empty()
+
+	## 幅值是否为一
+	static func mag_is_one(limbs: Array[int]) -> bool:
+		return limbs.size() == 1 and limbs[0] == 1
+
+	## 32 位 limb 的位长
+	static func _bit_len32(v: int) -> int:
+		var b = 0
+		while v > 0:
+			b += 1
+			v >>= 1
+		return b
+
+	## 幅值位长
+	static func mag_bitlen(limbs: Array[int]) -> int:
+		if limbs.is_empty():
+			return 0
+		return (limbs.size() - 1) * 32 + _bit_len32(limbs[limbs.size() - 1])
+
+	## 幅值比较: a<b 返回 -1, 相等 0, a>b 返回 1
+	static func mag_cmp(a: Array[int], b: Array[int]) -> int:
+		if a.size() != b.size():
+			return 1 if a.size() > b.size() else -1
+		for i in range(a.size() - 1, -1, -1):
+			if a[i] != b[i]:
+				return 1 if a[i] > b[i] else -1
+		return 0
+
+	## 带符号比较 (双方已规范化)
+	static func cmp(neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> int:
+		if neg_a != neg_b:
+			return -1 if neg_a else 1
+		var mc = mag_cmp(a, b)
+		return -mc if neg_a else mc
+
+	## 幅值加法
+	static func mag_add(a: Array[int], b: Array[int]) -> Array[int]:
+		var out: Array[int] = []
+		var carry = 0
+		var n = a.size() if a.size() > b.size() else b.size()
+		for i in range(n):
+			var t = carry
+			if i < a.size():
+				t += a[i]
+			if i < b.size():
+				t += b[i]
+			out.append(t & MASK)
+			carry = t >> 32
+		if carry > 0:
+			out.append(carry)
+		return out
+
+	## 幅值减法 (要求 |a| >= |b|)
+	static func mag_sub(a: Array[int], b: Array[int]) -> Array[int]:
+		var out: Array[int] = []
+		var borrow = 0
+		for i in range(a.size()):
+			var t = a[i] - borrow - (b[i] if i < b.size() else 0)
+			if t < 0:
+				t += BASE
+				borrow = 1
+			else:
+				borrow = 0
+			out.append(t)
+		_strip(out)
+		return out
+
+	## 带符号加法
+	static func add(neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> Array:
+		if neg_a == neg_b:
+			return [neg_a, mag_add(a, b)]
+		var c = mag_cmp(a, b)
+		if c == 0:
+			return [false, _zero_limbs()]
+		if c > 0:
+			return [neg_a, mag_sub(a, b)]
+		return [neg_b, mag_sub(b, a)]
+
+	## 带符号减法
+	static func sub(neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> Array:
+		return add(neg_a, a, not neg_b, b)
+
+	## 幅值乘法 (学校乘法 O(n²)) [br]
+	## 32 位 limb 乘积可达 2^64, 超 GDScript int64 上限, 故以 16 位半积组合
+	static func mag_mul(a: Array[int], b: Array[int]) -> Array[int]:
+		if a.is_empty() or b.is_empty():
+			return []
+		var out: Array[int] = []
+		out.resize(a.size() + b.size())
+		out.fill(0)
+		for i in range(a.size()):
+			var ai = a[i]
+			if ai == 0:
+				continue
+			var a0 = ai & 0xFFFF
+			var a1 = ai >> 16
+			var carry = 0
+			for j in range(b.size()):
+				var bj = b[j]
+				var ll = a0 * (bj & 0xFFFF)
+				var mid = a0 * (bj >> 16) + a1 * (bj & 0xFFFF)
+				var hh = a1 * (bj >> 16)
+				# 64 位积 P = hh*2^32 + mid*2^16 + ll, 与 out/carry 相加总量 < 2^64
+				var t = ll + ((mid & 0xFFFF) << 16)
+				var lo = t + out[i + j] + carry
+				var hi = hh + (mid >> 16) + (lo >> 32)
+				out[i + j] = lo & MASK
+				carry = hi
+			out[i + b.size()] = carry
+		_strip(out)
+		return out
+
+	## 带符号乘法
+	static func mul(neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> Array:
+		var mag = mag_mul(a, b)
+		if mag.is_empty():
+			return [false, _zero_limbs()]
+		return [neg_a != neg_b, mag]
+
+	## 幅值短除 (除数为单 limb): 返回 [商, 余 limbs] [br]
+	## r*BASE+a[i] 可达 2^64 超 int64, 拆两个 16 位数字分步除
+	static func _mag_divmod_short(a: Array[int], d: int) -> Array:
+		var q: Array[int] = []
+		q.resize(a.size())
+		var r = 0
+		for i in range(a.size() - 1, -1, -1):
+			var q1 = 0
+			var q2 = 0
+			var cur1 = r * 65536 + (a[i] >> 16)
+			q1 = cur1 / d
+			r = cur1 - q1 * d
+			var cur2 = r * 65536 + (a[i] & 0xFFFF)
+			q2 = cur2 / d
+			r = cur2 - q2 * d
+			q[i] = (q1 << 16) | q2
+		_strip(q)
+		var rr: Array[int] = []
+		if r > 0:
+			rr.append(r)
+		return [q, rr]
+
+	## 通用位左移 (bits_per 位一组的数字数组): 基 2^32 与基 2^16 共用
+	static func _shl_digits(a: Array[int], sh: int, bits_per: int) -> Array[int]:
+		if a.is_empty():
+			return []
+		var full = sh / bits_per
+		var bits = sh % bits_per
+		var out: Array[int] = []
+		for i in range(full):
+			out.append(0)
+		if bits == 0:
+			for v in a:
+				out.append(v)
+		else:
+			var prev_carry = 0
+			var half = 1 << bits_per
+			for v in a:
+				out.append(((v << bits) | prev_carry) & (half - 1))
+				prev_carry = v >> (bits_per - bits)
+			if prev_carry > 0:
+				out.append(prev_carry)
+		return out
+
+	## 通用位右移 (bits_per 位一组): 返回 [结果 digits, 被丢弃位是否非零]
+	static func _shr_digits(a: Array[int], sh: int, bits_per: int) -> Array:
+		var full = sh / bits_per
+		var bits = sh % bits_per
+		var dropped = false
+		if full >= a.size():
+			for v in a:
+				if v != 0:
+					dropped = true
+					break
+			var empty: Array[int] = []
+			return [empty, dropped]
+		var out: Array[int] = []
+		var half = 1 << bits_per
+		for i in range(full, a.size()):
+			var t = a[i] >> bits
+			if bits > 0 and i + 1 < a.size():
+				t = (t | ((a[i + 1] << (bits_per - bits)) & (half - 1))) & (half - 1)
+			out.append(t)
+		_strip(out)
+		for i in range(full):
+			if a[i] != 0:
+				dropped = true
+				break
+		if bits > 0 and (a[full] & ((1 << bits) - 1)) != 0:
+			dropped = true
+		return [out, dropped]
+
+	## 幅值左移 sh 位
+	static func mag_shl(a: Array[int], sh: int) -> Array[int]:
+		return _shl_digits(a, sh, 32)
+
+	## 幅值右移 sh 位: 返回 [结果 limbs, 被丢弃位是否非零]
+	static func mag_shr(a: Array[int], sh: int) -> Array:
+		return _shr_digits(a, sh, 32)
+
+	## 幅值长除 (Knuth Algorithm D): 返回 [商, 余 limbs] [br]
+	## 中间量以基 2^16 数字化 (32 位积与 2^48 中间量均可安全落在 int64), 结果转回 32 位 limbs
+	static func _mag_divmod_knuth(a: Array[int], b: Array[int]) -> Array:
+		var A: Array[int] = []
+		A.resize(a.size() * 2)
+		for i in range(a.size()):
+			A[2 * i] = a[i] & 0xFFFF
+			A[2 * i + 1] = a[i] >> 16
+		_strip(A)
+		var Bv: Array[int] = []
+		Bv.resize(b.size() * 2)
+		for i in range(b.size()):
+			Bv[2 * i] = b[i] & 0xFFFF
+			Bv[2 * i + 1] = b[i] >> 16
+		_strip(Bv)
+		var n = A.size()
+		var m = Bv.size()
+		var half := 65536
+		var mask16 := 65535
+		var shift = 16 - _bit_len32(Bv[m - 1])
+		var u = _shl_digits(A, shift, 16)
+		if u.size() == n:
+			u.append(0)
+		var v = _shl_digits(Bv, shift, 16)
+		var q: Array[int] = []
+		q.resize(n - m + 1)
+		q.fill(0)
+		for j in range(n - m, -1, -1):
+			# 估值与校正 (qhat < 2^17, 积 < 2^33, 中间量 < 2^48, 均在 int64 界内)
+			var num = u[j + m] * half + u[j + m - 1]
+			var qhat = num / v[m - 1]
+			var rhat = num - qhat * v[m - 1]
+			while qhat >= half or qhat * v[m - 2] > rhat * half + u[j + m - 2]:
+				qhat -= 1
+				rhat += v[m - 1]
+				if rhat >= half:
+					break
+			var carry = 0
+			var borrow = 0
+			for i in range(m):
+				var p = qhat * v[i] + carry
+				carry = p >> 16
+				var t = u[i + j] - (p & mask16) - borrow
+				if t < 0:
+					t += half
+					borrow = 1
+				else:
+					borrow = 0
+				u[i + j] = t
+			var t2 = u[j + m] - carry - borrow
+			if t2 < 0:
+				t2 += half
+				borrow = 1
+			else:
+				borrow = 0
+			u[j + m] = t2
+			if borrow != 0:
+				# 商估计过大: 加回除数
+				qhat -= 1
+				var carry2 = 0
+				for i in range(m):
+					var s = u[i + j] + v[i] + carry2
+					if s >= half:
+						s -= half
+						carry2 = 1
+					else:
+						carry2 = 0
+					u[i + j] = s
+				u[j + m] = (u[j + m] + carry2) % half
+			q[j] = qhat
+		_strip(q)
+		# 商与余数 16 位数字 → 32 位 limbs
+		var q32: Array[int] = []
+		var i32 = 0
+		while i32 < q.size():
+			var lo16 = q[i32]
+			var hi16 = q[i32 + 1] if i32 + 1 < q.size() else 0
+			q32.append(lo16 | (hi16 << 16))
+			i32 += 2
+		_strip(q32)
+		var rem16 = _shr_digits(u, shift, 16)[0]
+		var rem32: Array[int] = []
+		i32 = 0
+		while i32 < rem16.size():
+			var lo16b = rem16[i32]
+			var hi16b = rem16[i32 + 1] if i32 + 1 < rem16.size() else 0
+			rem32.append(lo16b | (hi16b << 16))
+			i32 += 2
+		_strip(rem32)
+		return [q32, rem32]
+
+	## 幅值除法总入口: 返回 [商, 余 limbs], 假定 b 非零
+	static func mag_divmod(a: Array[int], b: Array[int]) -> Array:
+		if mag_cmp(a, b) < 0:
+			var empty: Array[int] = []
+			return [empty, a.duplicate()]
+		if b.size() == 1:
+			return _mag_divmod_short(a, b[0])
+		return _mag_divmod_knuth(a, b)
+
+	## 带符号 floor 除法: 返回 [neg_q, q, neg_r, r]; 余数符号随除数 (CPython 语义)
+	static func divmod(neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> Array:
+		var dm = mag_divmod(a, b)
+		var q_mag: Array[int] = dm[0]
+		var r_mag: Array[int] = dm[1]
+		var q_neg = neg_a != neg_b
+		if neg_a != neg_b and not r_mag.is_empty():
+			# floor 调整: 商再减一, 余数改为 |b| - r0 (符号随除数)
+			q_mag = mag_add(q_mag, [1])
+			r_mag = mag_sub(b, r_mag)
+		if q_mag.is_empty():
+			q_neg = false
+		var r_neg = neg_b and not r_mag.is_empty()
+		return [q_neg, q_mag, r_neg, r_mag]
+
+	## 带符号右移 (floor 语义: 向负无穷): 返回 [neg, limbs]
+	static func rshift(neg: bool, limbs: Array[int], sh: int) -> Array:
+		if not neg:
+			return [false, _shr_digits(limbs, sh, 32)[0]]
+		# 负数: -(ceil(mag / 2^sh))
+		var rs = _shr_digits(limbs, sh, 32)
+		var q: Array[int] = rs[0]
+		if rs[1]:
+			q = mag_add(q, [1])
+		if q.is_empty():
+			return [false, _zero_limbs()]
+		return [true, q]
+
+	## 带符号左移: 返回 [neg, limbs]; 超出 MAX_BITS 返回 null (调用方报 MemoryError)
+	static func lshift(neg: bool, limbs: Array[int], sh: int):
+		var bits = mag_bitlen(limbs)
+		if bits > 0 and bits + sh > MAX_BITS:
+			return null
+		var mag = mag_shl(limbs, sh)
+		if mag.is_empty():
+			return [false, _zero_limbs()]
+		return [neg, mag]
+
+	## 无限二补数流: 取前 length 个 32 位组 (负数按符号扩展)
+	static func _tc_stream(neg: bool, limbs: Array[int], length: int) -> Array[int]:
+		var out: Array[int] = []
+		if not neg:
+			for i in range(length):
+				out.append(limbs[i] if i < limbs.size() else 0)
+			return out
+		var carry = 1
+		for i in range(length):
+			var byte = limbs[i] if i < limbs.size() else 0
+			var t = ((~byte) & MASK) + carry
+			out.append(t & MASK)
+			carry = t >> 32
+		return out
+
+	## 二补数流 → [neg, limbs] (最高 limb 符号位定号)
+	static func _from_tc(stream: Array[int]) -> Array:
+		var top = stream[stream.size() - 1]
+		if (top & 2147483648) == 0:
+			var mag: Array[int] = []
+			mag.append_array(stream)
+			_strip(mag)
+			return [false, mag]
+		var mag2: Array[int] = []
+		var carry = 1
+		for v in stream:
+			var t = ((~v) & MASK) + carry
+			mag2.append(t & MASK)
+			carry = t >> 32
+		_strip(mag2)
+		return [true, mag2]
+
+	## 带符号位运算 (无限二补数语义): op ∈ "and" / "or" / "xor"
+	static func bitop(op: String, neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> Array:
+		var n = (a.size() if a.size() > b.size() else b.size()) + 1
+		var sa = _tc_stream(neg_a, a, n)
+		var sb = _tc_stream(neg_b, b, n)
+		var out: Array[int] = []
+		out.resize(n)
+		for i in range(n):
+			if op == "and":
+				out[i] = sa[i] & sb[i]
+			elif op == "or":
+				out[i] = sa[i] | sb[i]
+			else:
+				out[i] = sa[i] ^ sb[i]
+		return _from_tc(out)
+
+	## 带符号取反 ~x = -x - 1 [br]
+	## x >= 0: -(x+1); x < 0 (幅值 mag): mag - 1 (非负)
+	static func invert(neg: bool, limbs: Array[int]) -> Array:
+		var mag = mag_add(limbs, [1]) if not neg else mag_sub(limbs, [1])
+		if mag.is_empty():
+			return [false, _zero_limbs()]
+		return [not neg, mag]
+
+	## 带符号幂 (exp >= 0): 超出 MAX_BITS 返回 null (调用方报 MemoryError)
+	static func big_pow(neg: bool, limbs: Array[int], exp: int):
+		var base_bits = mag_bitlen(limbs)
+		if base_bits > 0 and exp > MAX_BITS / base_bits:
+			return null
+		var result: Array[int] = [1]
+		var b = limbs.duplicate()
+		var e = exp
+		while e > 0:
+			if (e & 1) != 0:
+				result = mag_mul(result, b)
+			e >>= 1
+			if e > 0:
+				b = mag_mul(b, b)
+		_strip(result)
+		if result.is_empty():
+			return [false, _zero_limbs()]
+		return [neg and (exp & 1) != 0, result]
+
+	## 十进制串 (含符号; 零为 "0")
+	static func to_dec(neg: bool, limbs: Array[int]) -> String:
+		if limbs.is_empty():
+			return "0"
+		var chunks: Array[int] = []
+		var work = limbs.duplicate()
+		var b10: Array[int] = [1000000000]
+		while work.size() > 0:
+			var dm = mag_divmod(work, b10)
+			work = dm[0]
+			var r: Array[int] = dm[1]
+			chunks.append(r[0] if r.size() > 0 else 0)
+		var s = str(chunks[chunks.size() - 1])
+		for i in range(chunks.size() - 2, -1, -1):
+			s += "%09d" % chunks[i]
+		return ("-" + s) if neg else s
+
+	## 数字字符值 (0-35), 非法返回 -1
+	static func digit_val(ch: String) -> int:
+		if ch >= "0" and ch <= "9":
+			return ch.unicode_at(0) - 48
+		var lower = ch.to_lower()
+		if lower >= "a" and lower <= "z":
+			return lower.unicode_at(0) - 87
+		return -1
+
+	## 指定进制数字串 → [neg, limbs] (调用方已校验字符合法性与下划线)
+	static func from_digits(digits: String, base: int, neg: bool) -> Array:
+		var mag: Array[int] = []
+		for ch in digits:
+			var d = digit_val(ch)
+			var carry = d
+			for i in range(mag.size()):
+				var t = mag[i] * base + carry
+				mag[i] = t & MASK
+				carry = t >> 32
+			while carry > 0:
+				mag.append(carry & MASK)
+				carry = carry >> 32
+		_strip(mag)
+		if mag.is_empty():
+			return [false, _zero_limbs()]
+		return [neg, mag]
+
+	## 幅值 → 指定位序的小写进制串 (base ∈ 2/8/16)
+	static func mag_to_base(limbs: Array[int], base: int) -> String:
+		if limbs.is_empty():
+			return "0"
+		var bits_per = 4 if base == 16 else (3 if base == 8 else 1)
+		var digits = "0123456789abcdef"
+		# 自低位向高按 bits_per 位取数字: 跨 limb 的位窗口
+		var out: Array[String] = []
+		var cur = 0
+		var cur_bits = 0
+		for limb in limbs:
+			var take = 0
+			while take < 32:
+				var need = bits_per - cur_bits
+				var avail = 32 - take
+				var k = need if need < avail else avail
+				cur |= ((limb >> take) & ((1 << k) - 1)) << cur_bits
+				cur_bits += k
+				take += k
+				if cur_bits == bits_per:
+					out.append(digits[cur])
+					cur = 0
+					cur_bits = 0
+		if cur_bits > 0:
+			out.append(digits[cur])
+		while out.size() > 1 and out[out.size() - 1] == "0":
+			out.pop_back()
+		out.reverse()
+		return "".join(out)
+
+	## CPython int 哈希: 幅值 Horner 模 2^61-1, 负数取反, -1 映射 -2
+	static func hash_of(neg: bool, limbs: Array[int]) -> int:
+		var h = 0
+		for i in range(limbs.size() - 1, -1, -1):
+			var h1 = h >> 30
+			var h0 = h & 1073741823
+			h = ((h1 << 1) + ((h0 << 32) % HASH_MOD) + limbs[i]) % HASH_MOD
+		if neg:
+			h = -h
+		if h == -1:
+			h = -2
+		return h
+
+	## int64 快路径哈希 (与大数同算法, 保证等值同哈希)
+	static func hash_i64(v: int) -> int:
+		var p = pair_of_i64(v)
+		return hash_of(p[0], p[1])
+
+	## 幅值 → double: 53 位半到偶舍入; 返回 [ok, value], ok=false 表示超出 double 范围
+	static func mag_to_float(neg: bool, limbs: Array[int]) -> Array:
+		var bits = mag_bitlen(limbs)
+		if bits == 0:
+			return [true, 0.0]
+		if bits <= 63:
+			var v = 0
+			for i in range(limbs.size()):
+				v += limbs[i] * (1 << (32 * i))
+			var f0 = float(v)
+			return [true, -f0 if neg else f0]
+		var dropped_sh = bits - 54
+		var shr = mag_shr(limbs, dropped_sh)
+		var top: Array[int] = shr[0]
+		var m54 = top[0] + ((top[1] << 32) if top.size() > 1 else 0)
+		var rest_nonzero: bool = shr[1]
+		var round_bit = m54 & 1
+		var m = m54 >> 1
+		# 半到偶: 舍入位为 1 且 (丢弃位非零 或 保留末位为 1) 才进位
+		if round_bit == 1 and (rest_nonzero or (m & 1) == 1):
+			m += 1
+			if m == 9007199254740992:
+				m = 4503599627370496
+				dropped_sh += 1
+		# 舍入位已移出: 有效 53 位 m 的真实尺度是 2^(dropped_sh+1)
+		if dropped_sh + 1 > 1023:
+			return [false, 0.0]
+		var f = float(m) * pow(2.0, float(dropped_sh + 1))
+		if is_inf(f):
+			return [false, 0.0]
+		return [true, -f if neg else f]
+
 ## DSL 整数类型, 对应 Python int
 class DSLInteger extends DSLObject:
 	## int 类引用 (register_builtins 注入): 数值字面量实例未挂 klass, 方法查找经它解析
 	static var _type_class: DSLClass = null
-	## 底层的整数值
+	## 底层的整数值 (快路径; big_limbs 非空时未定义, 恒为 0)
 	var value: int
+	## 大数幅值 limbs (P0-13): 32 位一组小端, 空数组 = 快路径 (value 有效)
+	var big_limbs: Array[int] = []
+	## 大数符号 (big_limbs 非空时有效)
+	var big_neg: bool = false
 	## int 类型的魔法方法描述符缓存 [br]
 	## 存储各 Python 魔法方法对应的 DSLWrappedDescriptor
 	var _int_magic_descriptors: Dictionary = {}
@@ -4222,6 +4894,200 @@ class DSLInteger extends DSLObject:
 			return obj
 		return DSLInteger.new(v)
 
+	## 是否为大数形态 (P0-13): big_limbs 非空时 value 未定义
+	func is_big() -> bool:
+		return not big_limbs.is_empty()
+
+	## 取 [neg, limbs] 对 (快路径按 value 展开)
+	func _pair() -> Array:
+		if not big_limbs.is_empty():
+			return [big_neg, big_limbs]
+		return DSLBigInt.pair_of_i64(value)
+
+	## 由大数对构造: 能落回 int64 时缩回快路径并走驻留池 (P0-13)
+	static func from_big(neg: bool, limbs: Array[int]) -> DSLInteger:
+		DSLBigInt._strip(limbs)
+		var v = DSLBigInt.to_i64(neg, limbs)
+		if v != null:
+			return DSLInteger.pooled(v)
+		var obj: DSLInteger = DSLInteger.new(0)
+		obj.big_limbs = limbs
+		obj.big_neg = neg
+		return obj
+
+	## 大数十进制字面量构造 (字面量驻留池复用, 键为符号+十进制串)
+	static func pooled_literal_big(dec: String, neg: bool) -> DSLInteger:
+		var key = ("-" + dec) if neg else dec
+		if _literal_pool.has(key):
+			return _literal_pool[key]
+		var obj = from_big(neg, DSLBigInt.from_digits(dec, 10, neg)[1])
+		_literal_pool[key] = obj
+		return obj
+
+	## 大数哈希 (CPython int 哈希: 模 2^61-1, -1 映射 -2)
+	func _big_hash() -> int:
+		if is_big():
+			return DSLBigInt.hash_of(big_neg, big_limbs)
+		return DSLBigInt.hash_i64(value)
+
+	## 大数 → double (53 位半到偶舍入); 越界写 OverflowError 并返回 null
+	func _to_float_checked():
+		if not is_big():
+			return float(value)
+		var conv = DSLBigInt.mag_to_float(big_neg, big_limbs)
+		if not conv[0]:
+			last_error = "OverflowError: int too large to convert to float"
+			return null
+		return conv[1]
+
+	## 与 float 的精确比较 (CPython 语义: 按 m*2^ep 精确值比, 不经 double 有损转换) [br]
+	## 返回 -1/0/1; NaN 返回 -2 (无序, 调用方一律按 false 处理)
+	func _cmp_with_float(f: float) -> int:
+		if is_nan(f):
+			return -2
+		var my_zero = (not is_big()) and value == 0
+		var my_neg = big_neg if is_big() else value < 0
+		if is_inf(f):
+			return -1 if f > 0.0 else 1
+		if my_zero:
+			if f == 0.0:
+				return 0
+			return -1 if f > 0.0 else 1
+		if f == 0.0:
+			return 1 if not my_neg else -1
+		var f_neg = f < 0.0
+		if my_neg != f_neg:
+			return -1 if my_neg else 1
+		var dec = _decompose_double(absf(f))
+		var m: int = dec[0]
+		var ep: int = dec[1]
+		var mag = big_limbs if is_big() else DSLBigInt.mag_of_i64_abs(value)
+		var res: int
+		if ep >= 0:
+			res = DSLBigInt.mag_cmp(mag, DSLBigInt.mag_shl(DSLBigInt.mag_of_u64(m), ep))
+		else:
+			res = DSLBigInt.mag_cmp(DSLBigInt.mag_shl(mag, -ep), DSLBigInt.mag_of_u64(m))
+		return -res if my_neg else res
+
+	## 大数二元算术分派 (P0-13): 任一操作数为大数或快路径结果溢出时走此路径 [br]
+	## op ∈ "+ - * // % ** << >> & | ^"; DSLBool 由调用方折算为 DSLInteger 传入 [br]
+	## 失败时写 last_error 返回 null (与魔术方法约定一致)
+	func _binop_big(other: DSLInteger, op: String) -> DSLObject:
+		var pa = _pair()
+		var pb = other._pair()
+		var na: bool = pa[0]
+		var nb: bool = pb[0]
+		match op:
+			"+":
+				var r = DSLBigInt.add(na, pa[1], nb, pb[1])
+				return DSLInteger.from_big(r[0], r[1])
+			"-":
+				var r2 = DSLBigInt.sub(na, pa[1], nb, pb[1])
+				return DSLInteger.from_big(r2[0], r2[1])
+			"*":
+				var r3 = DSLBigInt.mul(na, pa[1], nb, pb[1])
+				return DSLInteger.from_big(r3[0], r3[1])
+			"/":
+				if pb[1].is_empty():
+					last_error = "ZeroDivisionError: division by zero"
+					return null
+				var tfd = _to_float_checked()
+				if tfd == null:
+					last_error = "OverflowError: integer division result too large for a float"
+					return null
+				var tofd = other._to_float_checked()
+				if tofd == null:
+					last_error = "OverflowError: integer division result too large for a float"
+					return null
+				return DSLFloat.new(tfd / tofd)
+			"//", "%":
+				if pb[1].is_empty():
+					last_error = "ZeroDivisionError: integer division or modulo by zero"
+					return null
+				var dm = DSLBigInt.divmod(na, pa[1], nb, pb[1])
+				if op == "//":
+					return DSLInteger.from_big(dm[0], dm[1])
+				return DSLInteger.from_big(dm[2], dm[3])
+			"**":
+				if other.is_big():
+					# 巨指数: 结果位数不可控 (CPython 耗尽内存同型)
+					last_error = "MemoryError: "
+					return null
+				var exp = other.value
+				if exp < 0:
+					if pa[1].is_empty():
+						last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
+						return null
+					var bf = _to_float_checked()
+					if bf == null:
+						return null
+					return DSLFloat.new(pow(bf, float(exp)))
+				var pr = DSLBigInt.big_pow(na, pa[1], exp)
+				if pr == null:
+					last_error = "MemoryError: "
+					return null
+				return DSLInteger.from_big(pr[0], pr[1])
+			"<<":
+				if other.is_big():
+					if other.big_neg:
+						last_error = "ValueError: negative shift count"
+						return null
+					if pa[1].is_empty():
+						return DSLInteger.pooled(0)
+					# 巨移位: CPython 报 too many digits in integer
+					last_error = "OverflowError: too many digits in integer"
+					return null
+				if other.value < 0:
+					last_error = "ValueError: negative shift count"
+					return null
+				if pa[1].is_empty():
+					return DSLInteger.pooled(0)
+				var lr = DSLBigInt.lshift(na, pa[1], other.value)
+				if lr == null:
+					last_error = "MemoryError: "
+					return null
+				return DSLInteger.from_big(lr[0], lr[1])
+			">>":
+				if other.is_big():
+					if other.big_neg:
+						last_error = "ValueError: negative shift count"
+						return null
+					# 巨右移: 结果必为 0 或 -1
+					return DSLInteger.pooled(-1 if na and not pa[1].is_empty() else 0)
+				if other.value < 0:
+					last_error = "ValueError: negative shift count"
+					return null
+				var rr = DSLBigInt.rshift(na, pa[1], other.value)
+				return DSLInteger.from_big(rr[0], rr[1])
+			"&":
+				var ra = DSLBigInt.bitop("and", na, pa[1], nb, pb[1])
+				return DSLInteger.from_big(ra[0], ra[1])
+			"|":
+				var ro = DSLBigInt.bitop("or", na, pa[1], nb, pb[1])
+				return DSLInteger.from_big(ro[0], ro[1])
+			"^":
+				var rx = DSLBigInt.bitop("xor", na, pa[1], nb, pb[1])
+				return DSLInteger.from_big(rx[0], rx[1])
+		last_error = "TypeError: unsupported operand type(s)"
+		return null
+
+	## 大数比较分派 (P0-13): op ∈ "== != < > <= >="
+	func _cmp_big(other: DSLInteger, op: String) -> DSLBool:
+		var c = DSLBigInt.cmp(_pair()[0], _pair()[1], other._pair()[0], other._pair()[1])
+		match op:
+			"==":
+				return DSLBool.new(c == 0)
+			"!=":
+				return DSLBool.new(c != 0)
+			"<":
+				return DSLBool.new(c < 0)
+			">":
+				return DSLBool.new(c > 0)
+			"<=":
+				return DSLBool.new(c <= 0)
+			_:
+				return DSLBool.new(c >= 0)
+
 	## Python 整数整除: 向负无穷取整 [br]
 	## Godot 对 int 的 / 是向零截断, 有余数且符号相反时商需再减一 [br]
 	## 不用 floor(float(a)/float(b)) 转换, 避免大整数丢精度 [br]
@@ -4254,15 +5120,18 @@ class DSLInteger extends DSLObject:
 		if a[0] == null:
 			return null
 		elif a[1] is DSLInteger:
-			var bv = a[1].value
+			var oi = a[1] as DSLInteger
+			# P0-13: 任一侧大数或快路径回绕 → 大数路径自动升级
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "+")
+			var bv = oi.value
 			var rv = self_obj.value + bv
 			if (self_obj.value > 0 and bv > 0 and rv < 0) or (self_obj.value < 0 and bv < 0 and rv > 0):
-				self_obj.last_error = "OverflowError: integer addition exceeds 64-bit range"
-				return null
+				return self_obj._binop_big(oi, "+")
 			return DSLInteger.pooled(rv)
 		else:
 			return DSLFloat.new(a[0].value + a[1].value)
-			
+
 	func magic_sub(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = DSLObject._unwrap_dsl(args[1])
@@ -4272,15 +5141,17 @@ class DSLInteger extends DSLObject:
 		if a[0] == null:
 			return null
 		elif a[1] is DSLInteger:
-			var bv = a[1].value
+			var oi = a[1] as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "-")
+			var bv = oi.value
 			var rv = self_obj.value - bv
 			if (self_obj.value > 0 and bv < 0 and rv < 0) or (self_obj.value < 0 and bv > 0 and rv > 0):
-				self_obj.last_error = "OverflowError: integer subtraction exceeds 64-bit range"
-				return null
+				return self_obj._binop_big(oi, "-")
 			return DSLInteger.pooled(rv)
 		else:
 			return DSLFloat.new(a[0].value - a[1].value)
-			
+
 	func magic_mul(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = DSLObject._unwrap_dsl(args[1])
@@ -4290,22 +5161,21 @@ class DSLInteger extends DSLObject:
 		if a[0] == null:
 			return null
 		elif a[1] is DSLInteger:
-			var bv = a[1].value
+			var oi = a[1] as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "*")
+			var bv = oi.value
 			var av = self_obj.value
-			var imin = -9223372036854775807 - 1
-			if (av == imin and bv == -1) or (av == -1 and bv == imin):
-				self_obj.last_error = "OverflowError: integer multiplication exceeds 64-bit range"
-				return null
 			if av != 0 and bv != 0:
 				var rv = av * bv
 				if rv / bv != av or rv / av != bv:
-					self_obj.last_error = "OverflowError: integer multiplication exceeds 64-bit range"
-					return null
+					# 回绕即溢出: 自动升级大数 (int64min * -1 组合同样由此承接)
+					return self_obj._binop_big(oi, "*")
 				return DSLInteger.pooled(rv)
 			return DSLInteger.pooled(0)
 		else:
 			return DSLFloat.new(a[0].value * a[1].value)
-			
+
 	func magic_div(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = DSLObject._unwrap_dsl(args[1])
@@ -4314,14 +5184,31 @@ class DSLInteger extends DSLObject:
 		var a = self_obj._promote(other, "/")
 		if a[0] == null:
 			return null
-		if a[1].value == 0:
-			# 两个整数相除报 "division by zero", 只要一侧是浮点则报 "float division by zero"
-			if a[1] is DSLFloat:
+		if a[1] is DSLFloat:
+			if a[1].value == 0:
 				self_obj.last_error = "ZeroDivisionError: float division by zero"
-			else:
-				self_obj.last_error = "ZeroDivisionError: division by zero"
+				return null
+			return DSLFloat.new(a[0].value / a[1].value)
+		var oi = a[1] as DSLInteger
+		# P0-13: 大数真除 (零判断移后, 大数的 value 未定义)
+		if self_obj.is_big() or oi.is_big():
+			if oi.is_big() or oi.value != 0:
+				if oi._pair()[1].is_empty():
+					self_obj.last_error = "ZeroDivisionError: division by zero"
+					return null
+			var top = self_obj._to_float_checked()
+			if top == null:
+				self_obj.last_error = "OverflowError: integer division result too large for a float"
+				return null
+			var oof = oi._to_float_checked()
+			if oof == null:
+				self_obj.last_error = "OverflowError: integer division result too large for a float"
+				return null
+			return DSLFloat.new(top / oof)
+		if oi.value == 0:
+			self_obj.last_error = "ZeroDivisionError: division by zero"
 			return null
-		return DSLFloat.new(float(self_obj.value) / float(a[1].value))
+		return DSLFloat.new(float(self_obj.value) / float(oi.value))
 	
 	## 一元正号: 数值本身 (CPython 中 +x 即 x)
 	func magic_pos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -4335,19 +5222,25 @@ class DSLInteger extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
-			if other.value == 0:
+			var oi = other as DSLInteger
+			# P0-13: 大数分派先于零判断 (大数形态的 value 未定义, 恒为 0)
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "//")
+			if oi.value == 0:
 				self_obj.last_error = "ZeroDivisionError: integer division or modulo by zero"
 				return null
-			# 最小整数除以 -1 超出 int64, 宿主整除对该组合会挂死, 必须先行拦截
-			if self_obj.value == -9223372036854775807 - 1 and other.value == -1:
-				self_obj.last_error = "OverflowError: integer floor division exceeds 64-bit range"
-				return null
-			return DSLInteger.pooled(DSLInteger._py_floordiv(self_obj.value, other.value))
+			# int64min//-1 挂死组合 → 大数路径
+			if self_obj.value == -9223372036854775807 - 1 and oi.value == -1:
+				return self_obj._binop_big(oi, "//")
+			return DSLInteger.pooled(DSLInteger._py_floordiv(self_obj.value, oi.value))
 		if other is DSLFloat:
 			if other.value == 0.0:
 				self_obj.last_error = "ZeroDivisionError: float floor division by zero"
 				return null
-			return DSLFloat.new(floor(float(self_obj.value) / other.value))
+			var sf = self_obj._to_float_checked()
+			if sf == null:
+				return null
+			return DSLFloat.new(floor(sf / other.value))
 		self_obj._arithmetic_type_error("//", other)
 		return null
 
@@ -4359,21 +5252,28 @@ class DSLInteger extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
-			if other.value == 0:
+			var oi = other as DSLInteger
+			# P0-13: 大数分派先于零判断
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "%")
+			if oi.value == 0:
 				self_obj.last_error = "ZeroDivisionError: integer modulo by zero"
 				return null
 			# 任何整数对 -1 取模都是 0, 同时绕开宿主对最小整除组合的挂死
-			if other.value == -1:
+			if oi.value == -1:
 				return DSLInteger.pooled(0)
-			return DSLInteger.pooled(DSLInteger._py_mod(self_obj.value, other.value))
+			return DSLInteger.pooled(DSLInteger._py_mod(self_obj.value, oi.value))
 		if other is DSLFloat:
 			if other.value == 0.0:
 				self_obj.last_error = "ZeroDivisionError: float modulo"
 				return null
-			return DSLFloat.new(float(self_obj.value) - other.value * floor(float(self_obj.value) / other.value))
+			var sf = self_obj._to_float_checked()
+			if sf == null:
+				return null
+			return DSLFloat.new(sf - other.value * floor(sf / other.value))
 		self_obj._arithmetic_type_error("%", other)
 		return null
-		
+
 	func magic_pow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = args[1]
@@ -4389,11 +5289,38 @@ class DSLInteger extends DSLObject:
 			exp_int = 1 if other.value else 0
 			has_int_exp = true
 		if has_int_exp:
+			var oi: DSLInteger = other if other is DSLInteger else null
+			if oi != null and oi.is_big():
+				# P0-13: 大数指数
+				if oi.big_neg:
+					# 负大指数: 按浮点幂 (底数/指数转 double, 越界报 OverflowError)
+					if not self_obj.is_big() and self_obj.value == 0:
+						self_obj.last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
+						return null
+					var bfneg = self_obj._to_float_checked()
+					if bfneg == null:
+						return null
+					var efneg = oi._to_float_checked()
+					if efneg == null:
+						return null
+					return DSLFloat.new(pow(bfneg, -efneg))
+				# 非负大指数: 底数绝对值 <= 1 时结果平凡, 否则结果位数不可控 (MemoryError)
+				if not self_obj.is_big():
+					if self_obj.value == 0:
+						return DSLInteger.pooled(0)
+					if self_obj.value == 1:
+						return DSLInteger.pooled(1)
+					if self_obj.value == -1:
+						return DSLInteger.pooled(-1 if (oi.big_limbs[0] & 1) == 1 else 1)
+				self_obj.last_error = "MemoryError: "
+				return null
 			if exp_int >= 0:
+				if self_obj.is_big():
+					return self_obj._binop_big(DSLInteger.pooled(exp_int), "**")
 				var result = 1
 				var base = self_obj.value
 				var e = exp_int
-				# 结果幅值超界预判: 负底数奇次幂允许恰为最小整数
+				# 结果幅值超界预判: 负底数奇次幂允许恰为最小整数; 超界 → 大数路径自动升级
 				var fbase = float(base)
 				if fbase < 0.0:
 					fbase = -fbase
@@ -4401,24 +5328,29 @@ class DSLInteger extends DSLObject:
 					var est = pow(fbase, float(exp_int))
 					var allow_min = base < 0 and exp_int % 2 == 1
 					if est > 9223372036854775808.0 or (est == 9223372036854775808.0 and not allow_min):
-						self_obj.last_error = "OverflowError: integer power exceeds 64-bit range"
-						return null
+						return self_obj._binop_big(DSLInteger.pooled(exp_int), "**")
 				while e > 0:
 					if e & 1:
 						result *= base
 					base *= base
 					e >>= 1
 				return DSLInteger.pooled(result)
-			# 0 的负次幂: CPython 报 ZeroDivisionError (宿主 pow 会给出 inf)
-			if self_obj.value == 0 and exp_int < 0:
+			# 0 的负次幂: CPython 报 ZeroDivisionError (宿主 pow 会给出 inf); 大数底数恒非零
+			if not self_obj.is_big() and self_obj.value == 0 and exp_int < 0:
 				self_obj.last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
 				return null
-			return DSLFloat.new(pow(float(self_obj.value), float(exp_int)))
+			var bf2 = self_obj._to_float_checked()
+			if bf2 == null:
+				return null
+			return DSLFloat.new(pow(bf2, float(exp_int)))
 		if other is DSLFloat:
-			if self_obj.value == 0 and other.value < 0.0:
+			var bf3 = self_obj._to_float_checked()
+			if bf3 == null:
+				return null
+			if bf3 == 0.0 and other.value < 0.0:
 				self_obj.last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
 				return null
-			return DSLFloat.new(pow(float(self_obj.value), other.value))
+			return DSLFloat.new(pow(bf3, other.value))
 		self_obj._arithmetic_type_error("** or pow()", other)
 		return null
 	
@@ -4428,88 +5360,144 @@ class DSLInteger extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		# bool 是 int 的子类: 1 == True 为真 (CPython 语义)
 		if other is DSLComplex:
-			return DSLBool.new(other.imag == 0.0 and float(self_obj.value) == other.real)
-		var result = DSLBool.new((other is DSLInteger and self_obj.value == other.value) or (other is DSLBool and self_obj.value == (1 if other.value else 0)) or (other is DSLFloat and float(self_obj.value) == other.value))
-		return result
-	
+			return DSLBool.new(other.imag == 0.0 and self_obj._cmp_with_float(other.real) == 0)
+		if other is DSLInteger:
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._cmp_big(oi, "==")
+			return DSLBool.new(self_obj.value == oi.value)
+		if other is DSLBool:
+			if self_obj.is_big():
+				return self_obj._cmp_big(DSLInteger.pooled(1 if other.value else 0), "==")
+			return DSLBool.new(self_obj.value == (1 if other.value else 0))
+		if other is DSLFloat:
+			# P0-13: 与浮点的精确比较 (不经 double 有损转换, CPython 同语义)
+			return DSLBool.new(self_obj._cmp_with_float(other.value) == 0)
+		return DSLBool.new(false)
+
 	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0]
 		var other = args[1]
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLComplex:
-			return DSLBool.new(not (other.imag == 0.0 and float(self_obj.value) == other.real))
-		return DSLBool.new(not ((other is DSLInteger and self_obj.value == other.value) or (other is DSLBool and self_obj.value == (1 if other.value else 0)) or (other is DSLFloat and float(self_obj.value) == other.value)))
-	
+			return DSLBool.new(not (other.imag == 0.0 and self_obj._cmp_with_float(other.real) == 0))
+		if other is DSLInteger:
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._cmp_big(oi, "!=")
+			return DSLBool.new(self_obj.value != oi.value)
+		if other is DSLBool:
+			if self_obj.is_big():
+				return self_obj._cmp_big(DSLInteger.pooled(1 if other.value else 0), "!=")
+			return DSLBool.new(self_obj.value != (1 if other.value else 0))
+		if other is DSLFloat:
+			return DSLBool.new(self_obj._cmp_with_float(other.value) != 0)
+		return DSLBool.new(true)
+
 	func magic_lt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0]
 		var other = args[1]
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLBool:
+			if self_obj.is_big():
+				return self_obj._cmp_big(DSLInteger.pooled(1 if other.value else 0), "<")
 			return DSLBool.new(self_obj.value < (1 if other.value else 0))
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value < other.value)
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._cmp_big(oi, "<")
+			return DSLBool.new(self_obj.value < oi.value)
 		if other is DSLFloat:
-			return DSLBool.new(float(self_obj.value) < other.value)
+			return DSLBool.new(self_obj._cmp_with_float(other.value) < 0)
 		self_obj._comparison_type_error("<", other)
 		return DSLBool.new(false)
-	
+
 	func magic_gt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0]
 		var other = args[1]
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLBool:
+			if self_obj.is_big():
+				return self_obj._cmp_big(DSLInteger.pooled(1 if other.value else 0), ">")
 			return DSLBool.new(self_obj.value > (1 if other.value else 0))
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value > other.value)
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._cmp_big(oi, ">")
+			return DSLBool.new(self_obj.value > oi.value)
 		if other is DSLFloat:
-			return DSLBool.new(float(self_obj.value) > other.value)
+			return DSLBool.new(self_obj._cmp_with_float(other.value) > 0)
 		self_obj._comparison_type_error(">", other)
 		return DSLBool.new(false)
-	
+
 	func magic_le(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0]
 		var other = args[1]
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLBool:
+			if self_obj.is_big():
+				return self_obj._cmp_big(DSLInteger.pooled(1 if other.value else 0), "<=")
 			return DSLBool.new(self_obj.value <= (1 if other.value else 0))
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value <= other.value)
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._cmp_big(oi, "<=")
+			return DSLBool.new(self_obj.value <= oi.value)
 		if other is DSLFloat:
-			return DSLBool.new(float(self_obj.value) <= other.value)
+			return DSLBool.new(self_obj._cmp_with_float(other.value) <= 0)
 		self_obj._comparison_type_error("<=", other)
 		return DSLBool.new(false)
-	
+
 	func magic_ge(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0]
 		var other = args[1]
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLBool:
+			if self_obj.is_big():
+				return self_obj._cmp_big(DSLInteger.pooled(1 if other.value else 0), ">=")
 			return DSLBool.new(self_obj.value >= (1 if other.value else 0))
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value >= other.value)
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._cmp_big(oi, ">=")
+			return DSLBool.new(self_obj.value >= oi.value)
 		if other is DSLFloat:
-			return DSLBool.new(float(self_obj.value) >= other.value)
+			return DSLBool.new(self_obj._cmp_with_float(other.value) >= 0)
 		self_obj._comparison_type_error(">=", other)
 		return DSLBool.new(false)
 	
 	func magic_neg(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if args[0].value == -9223372036854775807 - 1:
-			args[0].last_error = "OverflowError: integer negation exceeds 64-bit range"
-			return null
-		return DSLInteger.pooled(-args[0].value)
-	
+		var self_obj = args[0]
+		if self_obj.is_big():
+			return DSLInteger.from_big(not self_obj.big_neg, self_obj.big_limbs)
+		if self_obj.value == -9223372036854775807 - 1:
+			# 最小整数的相反数超出 int64: 升级大数 (P0-13)
+			return DSLInteger.from_big(true, DSLBigInt.mag_of_i64_abs(self_obj.value))
+		return DSLInteger.pooled(-self_obj.value)
+
 	func magic_str(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
-		return DSLString.new(str(args[0].value))
-	
+		var self_obj = args[0]
+		if self_obj.is_big():
+			return DSLString.new(DSLBigInt.to_dec(self_obj.big_neg, self_obj.big_limbs))
+		return DSLString.new(str(self_obj.value))
+
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLString.new(str(args[0].value))
-	
+		var self_obj = args[0]
+		if self_obj.is_big():
+			return DSLString.new(DSLBigInt.to_dec(self_obj.big_neg, self_obj.big_limbs))
+		return DSLString.new(str(self_obj.value))
+
 	func magic_bool(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
-		return DSLBool.new(args[0].value != 0)
-	
+		var self_obj = args[0]
+		return DSLBool.new(self_obj.is_big() or self_obj.value != 0)
+
 	func magic_invert(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(~args[0].value)
-	
+		var self_obj = args[0]
+		if self_obj.is_big():
+			var iv = DSLBigInt.invert(self_obj.big_neg, self_obj.big_limbs)
+			return DSLInteger.from_big(iv[0], iv[1])
+		return DSLInteger.pooled(~self_obj.value)
+
 	func magic_lshift(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = args[1]
@@ -4518,7 +5506,10 @@ class DSLInteger extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
-			var sh = other.value
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "<<")
+			var sh = oi.value
 			if sh < 0:
 				self_obj.last_error = "ValueError: negative shift count"
 				return null
@@ -4526,11 +5517,11 @@ class DSLInteger extends DSLObject:
 			if v == 0:
 				return DSLInteger.pooled(0)
 			if sh >= 64 or (v > 0 and v > (9223372036854775807 >> sh)) or (v < 0 and v < ((-9223372036854775807 - 1) >> sh)):
-				self_obj.last_error = "OverflowError: integer left shift exceeds 64-bit range"
-				return null
+				# 左移越界: 自动升级大数 (P0-13)
+				return self_obj._binop_big(oi, "<<")
 			return DSLInteger.pooled(v << sh)
 		return self_obj._arithmetic_type_error("<<", other)
-	
+
 	func magic_rshift(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = args[1]
@@ -4539,7 +5530,10 @@ class DSLInteger extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
-			var sh = other.value
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, ">>")
+			var sh = oi.value
 			if sh < 0:
 				self_obj.last_error = "ValueError: negative shift count"
 				return null
@@ -4547,7 +5541,7 @@ class DSLInteger extends DSLObject:
 				return DSLInteger.pooled(-1 if self_obj.value < 0 else 0)
 			return DSLInteger.pooled(self_obj.value >> sh)
 		return self_obj._arithmetic_type_error(">>", other)
-	
+
 	func magic_xor(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = args[1]
@@ -4556,9 +5550,12 @@ class DSLInteger extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
-			return DSLInteger.pooled(self_obj.value ^ other.value)
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "^")
+			return DSLInteger.pooled(self_obj.value ^ oi.value)
 		return self_obj._arithmetic_type_error("^", other)
-	
+
 	func magic_or(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = args[1]
@@ -4567,9 +5564,12 @@ class DSLInteger extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
-			return DSLInteger.pooled(self_obj.value | other.value)
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "|")
+			return DSLInteger.pooled(self_obj.value | oi.value)
 		return self_obj._arithmetic_type_error("|", other)
-	
+
 	func magic_and(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = args[1]
@@ -4578,29 +5578,37 @@ class DSLInteger extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
-			return DSLInteger.pooled(self_obj.value & other.value)
+			var oi = other as DSLInteger
+			if self_obj.is_big() or oi.is_big():
+				return self_obj._binop_big(oi, "&")
+			return DSLInteger.pooled(self_obj.value & oi.value)
 		return self_obj._arithmetic_type_error("&", other)
-	
+
 	func _dsl_str() -> String:
+		if is_big():
+			return DSLBigInt.to_dec(big_neg, big_limbs)
 		return str(value)
-	
+
 	func _dsl_bool() -> bool:
-		return value != 0
-	
+		return is_big() or value != 0
+
 	func _dsl_eq(other: DSLObject) -> bool:
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLInteger:
-			return value == other.value
+			var oi = other as DSLInteger
+			if is_big() or oi.is_big():
+				return _cmp_big(oi, "==").value
+			return value == oi.value
 		if other is DSLFloat:
-			return float(value) == other.value
+			return _cmp_with_float(other.value) == 0
 		if other is DSLBool:
-			return (value != 0) == other.value
+			return _cmp_big(DSLInteger.pooled(1 if other.value else 0), "==").value
 		return false
 	
 	func _dsl_getattribute(name: String) -> DSLObject:
 		# int 的内省属性 (CPython: real / imag / numerator / denominator 为属性值)
 		if name == "real" or name == "numerator":
-			return DSLInteger.pooled(value)
+			return self if is_big() else DSLInteger.pooled(value)
 		if name == "imag":
 			return DSLInteger.pooled(0)
 		if name == "denominator":
@@ -4632,6 +5640,11 @@ class DSLInteger extends DSLObject:
 		if other is DSLInteger:
 			return [self, other]
 		if other is DSLFloat:
+			if is_big():
+				var pf = _to_float_checked()
+				if pf == null:
+					return [null, null]
+				return [DSLFloat.new(pf), other]
 			return [DSLFloat.new(float(value)), other]
 		if op != "":
 			_arithmetic_type_error(op, other)
@@ -4671,7 +5684,10 @@ class DSLInteger extends DSLObject:
 		}
 
 	func builtin_bit_length(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var v = abs(args[0].value)
+		var self_obj = args[0]
+		if self_obj.is_big():
+			return DSLInteger.pooled(DSLBigInt.mag_bitlen(self_obj.big_limbs))
+		var v = abs(self_obj.value)
 		var bits = 0
 		while v > 0:
 			bits += 1
@@ -4679,7 +5695,16 @@ class DSLInteger extends DSLObject:
 		return DSLInteger.pooled(bits)
 
 	func builtin_bit_count(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var v = abs(args[0].value)
+		var self_obj = args[0]
+		if self_obj.is_big():
+			var pop = 0
+			for limb in self_obj.big_limbs:
+				var w = limb
+				while w > 0:
+					pop += 1 if (w & 1) == 1 else 0
+					w = w >> 1
+			return DSLInteger.pooled(pop)
+		var v = abs(self_obj.value)
 		var bits = 0
 		while v > 0:
 			bits += 1 if v & 1 else 0
@@ -4687,24 +5712,35 @@ class DSLInteger extends DSLObject:
 		return DSLInteger.pooled(bits)
 
 	func builtin_to_bytes(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var v = args[0].value
+		var self_obj = args[0]
+		var v = self_obj.value
+		var mag_limbs: Array[int] = []
+		var v_neg = false
+		if self_obj.is_big():
+			mag_limbs = self_obj.big_limbs.duplicate()
+			v_neg = self_obj.big_neg
+		else:
+			mag_limbs = DSLBigInt.mag_of_i64_abs(v)
+			v_neg = v < 0
 		var length = args[1].value if args.size() >= 2 and args[1] is DSLInteger else 1
 		var byteorder = args[2].value if args.size() >= 3 and args[2] is DSLString else "big"
 		var signed = false
 		if kwargs.has("signed") and kwargs["signed"] is DSLBool:
 			signed = kwargs["signed"].value
-		if v < 0 and not signed:
+		if v_neg and not signed:
 			last_error = "OverflowError: can't convert negative int to unsigned"
 			return null
-		var mag = abs(v) if signed else v
-		var limit = (1 << (length * 8 - 1)) if signed else (1 << (length * 8))
-		if mag >= limit:
+		# 幅值须落在 length 字节内 (带符号再扣一位); 大数按位长比较, 快路径按 2^limit 比
+		var need_bits = DSLBigInt.mag_bitlen(mag_limbs)
+		var cap_bits = length * 8 - (1 if signed else 0)
+		if need_bits > cap_bits or (not self_obj.is_big() and self_obj.value == -9223372036854775807 - 1 and signed and length * 8 < 64):
 			last_error = "OverflowError: int too big to convert"
 			return null
 		var out: Array[int] = []
 		var i = 0
 		while i < length:
-			out.append((mag >> (8 * i)) & 0xFF)
+			var limb = mag_limbs[i / 4] if i / 4 < mag_limbs.size() else 0
+			out.append((limb >> ((i % 4) * 8)) & 0xFF)
 			i += 1
 		if byteorder == "big":
 			out.reverse()
@@ -4714,7 +5750,10 @@ class DSLInteger extends DSLObject:
 		return DSLBytes.new(out)
 
 	func builtin_hex(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var v = args[0].value
+		var self_obj = args[0]
+		if self_obj.is_big():
+			return DSLString.new(("-" if self_obj.big_neg else "") + "0x" + DSLBigInt.mag_to_base(self_obj.big_limbs, 16))
+		var v = self_obj.value
 		if v == 0:
 			return DSLString.new("0x0")
 		var sign = "-" if v < 0 else ""
@@ -4788,6 +5827,16 @@ class DSLFloat extends DSLObject:
 			return null
 		return DSLFloat.new(self_obj.value / a[1].value)
 	
+	## 大数操作数转 double (P0-13): 越界报 OverflowError (CPython 同型)
+	func _float_of(other: DSLObject) -> float:
+		if other is DSLInteger and (other as DSLInteger).is_big():
+			var conv = (other as DSLInteger)._to_float_checked()
+			if conv == null:
+				last_error = "OverflowError: int too large to convert to float"
+				return 0.0
+			return conv
+		return other.value
+
 	## 一元正号: 数值本身 (CPython 中 +x 即 x)
 	func magic_pos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return args[0]
@@ -4799,7 +5848,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger or other is DSLFloat:
-			var denom = other.value
+			var denom = _float_of(other)
 			if denom == 0:
 				self_obj.last_error = "ZeroDivisionError: float floor division by zero"
 				return null
@@ -4814,7 +5863,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLBool:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger or other is DSLFloat:
-			var v = other.value
+			var v = _float_of(other)
 			if v == 0:
 				self_obj.last_error = "ZeroDivisionError: float modulo"
 				return null
@@ -4832,11 +5881,12 @@ class DSLFloat extends DSLObject:
 		if other is DSLBool:
 			return DSLFloat.new(pow(self_obj.value, 1.0 if other.value else 0.0))
 		if other is DSLInteger or other is DSLFloat:
+			var pf = _float_of(other)
 			# 0.0 的负次幂: CPython 报 ZeroDivisionError (宿主 pow 会给出 inf)
-			if self_obj.value == 0.0 and other.value < 0.0:
+			if self_obj.value == 0.0 and pf < 0.0:
 				self_obj.last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
 				return null
-			return DSLFloat.new(pow(self_obj.value, other.value))
+			return DSLFloat.new(pow(self_obj.value, pf))
 		self_obj._arithmetic_type_error("** or pow()", other)
 		return null
 	
@@ -4848,13 +5898,18 @@ class DSLFloat extends DSLObject:
 			return DSLBool.new(other.imag == 0.0 and self_obj.value == other.real)
 		if other is DSLBool:
 			return DSLBool.new(self_obj.value == float(1 if other.value else 0))
-		return DSLBool.new((other is DSLFloat and self_obj.value == other.value) or (other is DSLInteger and self_obj.value == float(other.value)))
+		if other is DSLInteger:
+			# P0-13: 与大数的精确相等比较 (不经 double 有损转换)
+			return DSLBool.new((other as DSLInteger)._cmp_with_float(self_obj.value) == 0)
+		return DSLBool.new(other is DSLFloat and self_obj.value == other.value)
 	
 	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0]
 		var other = args[1]
 		other = DSLObject._unwrap_dsl(other)
-		return DSLBool.new(not ((other is DSLFloat and self_obj.value == other.value) or (other is DSLInteger and self_obj.value == float(other.value))))
+		if other is DSLInteger:
+			return DSLBool.new((other as DSLInteger)._cmp_with_float(self_obj.value) != 0)
+		return DSLBool.new(not (other is DSLFloat and self_obj.value == other.value))
 	
 	func magic_lt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0]
@@ -4865,7 +5920,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return DSLBool.new(self_obj.value < other.value)
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value < float(other.value))
+			return DSLBool.new(self_obj.value < _float_of(other))
 		self_obj._comparison_type_error("<", other)
 		return DSLBool.new(false)
 	
@@ -4878,7 +5933,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return DSLBool.new(self_obj.value > other.value)
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value > float(other.value))
+			return DSLBool.new(self_obj.value > _float_of(other))
 		self_obj._comparison_type_error(">", other)
 		return DSLBool.new(false)
 	
@@ -4891,7 +5946,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return DSLBool.new(self_obj.value <= other.value)
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value <= float(other.value))
+			return DSLBool.new(self_obj.value <= _float_of(other))
 		self_obj._comparison_type_error("<=", other)
 		return DSLBool.new(false)
 	
@@ -4904,7 +5959,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return DSLBool.new(self_obj.value >= other.value)
 		if other is DSLInteger:
-			return DSLBool.new(self_obj.value >= float(other.value))
+			return DSLBool.new(self_obj.value >= _float_of(other))
 		self_obj._comparison_type_error(">=", other)
 		return DSLBool.new(false)
 	
@@ -4931,7 +5986,8 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return value == other.value
 		if other is DSLInteger:
-			return value == float(other.value)
+			# P0-13: 与大数/大值的精确相等比较
+			return (other as DSLInteger)._cmp_with_float(value) == 0
 		if other is DSLBool:
 			return (value != 0.0) == other.value
 		return false
@@ -4969,6 +6025,13 @@ class DSLFloat extends DSLObject:
 		if other is DSLBool:
 			return [self, DSLFloat.new(1.0 if other.value else 0.0)]
 		if other is DSLInteger:
+			# P0-13: 大数经 53 位舍入转 double, 越界报 OverflowError
+			if (other as DSLInteger).is_big():
+				var convp = (other as DSLInteger)._to_float_checked()
+				if convp == null:
+					last_error = "OverflowError: int too large to convert to float"
+					return [null, null]
+				return [self, DSLFloat.new(convp)]
 			return [self, DSLFloat.new(float(other.value))]
 		if op != "":
 			_arithmetic_type_error(op, other)
@@ -5419,6 +6482,10 @@ class DSLString extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		var reps = -1
 		if other is DSLInteger:
+			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			if (other as DSLInteger).is_big():
+				self_obj.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+				return null
 			reps = other.value
 		elif other is DSLBool:
 			reps = 1 if other.value else 0
@@ -5544,6 +6611,16 @@ class DSLString extends DSLObject:
 			out += one
 		return out
 
+	## 数值格式化的浮点取值 (P0-13): 大数经 53 位舍入转 double, 越界报 OverflowError
+	func _fmt_float_of(val: DSLObject) -> float:
+		if val is DSLInteger and val.is_big():
+			var conv = DSLBigInt.mag_to_float(val.big_neg, val.big_limbs)
+			if not conv[0]:
+				last_error = "OverflowError: int too large to convert to float"
+				return 0.0
+			return conv[1]
+		return float(_num(val))
+
 	## 格式化单个值
 	func _format_one(val: DSLObject, conv: String, width: int, precision: int, flags: String) -> String:
 		if val == null:
@@ -5565,18 +6642,31 @@ class DSLString extends DSLObject:
 				s = r.value if r is DSLString else val._dsl_str()
 			'd', 'i', 'u':
 				is_numeric = true
-				s = str(int(_num(val)))
+				# P0-13: 大数按十进制串格式化
+				if val is DSLInteger and val.is_big():
+					s = DSLObject._int_dec_of(val)
+				else:
+					s = str(int(_num(val)))
 			'x', 'X':
 				is_numeric = true
-				var n = int(_num(val))
-				var body = _int_to_base_str(abs(n), 16)
-				s = ("-" if n < 0 else "") + (body.to_upper() if conv == 'X' else body)
-				if flags.find("#") != -1:
-					s = ("-" if n < 0 else "") + ("0X" if conv == 'X' else "0x") + body
+				if val is DSLInteger and val.is_big():
+					var bodyb = DSLBigInt.mag_to_base(val.big_limbs, 16)
+					s = ("-" if val.big_neg else "") + (bodyb.to_upper() if conv == 'X' else bodyb)
+					if flags.find("#") != -1:
+						s = ("-" if val.big_neg else "") + ("0X" if conv == 'X' else "0x") + bodyb
+				else:
+					var n = int(_num(val))
+					var body = _int_to_base_str(abs(n), 16)
+					s = ("-" if n < 0 else "") + (body.to_upper() if conv == 'X' else body)
+					if flags.find("#") != -1:
+						s = ("-" if n < 0 else "") + ("0X" if conv == 'X' else "0x") + body
 			'o':
 				is_numeric = true
-				var n = int(_num(val))
-				s = ("-" if n < 0 else "") + ("0o" if flags.find("#") != -1 else "") + _int_to_base_str(abs(n), 8)
+				if val is DSLInteger and val.is_big():
+					s = ("-" if val.big_neg else "") + ("0o" if flags.find("#") != -1 else "") + DSLBigInt.mag_to_base(val.big_limbs, 8)
+				else:
+					var n2 = int(_num(val))
+					s = ("-" if n2 < 0 else "") + ("0o" if flags.find("#") != -1 else "") + _int_to_base_str(abs(n2), 8)
 			'c':
 				if val is DSLString:
 					# CPython: %c 接受长度为 1 的 str
@@ -5586,19 +6676,21 @@ class DSLString extends DSLObject:
 					s = val.value
 				else:
 					var cp_c = int(_num(val))
+					if val is DSLInteger and val.is_big():
+						cp_c = -1
 					if cp_c < 0 or cp_c > 0x10FFFF:
 						last_error = "OverflowError: %c arg not in range(0x110000)"
 						return ""
 					s = char(cp_c)
 			'f', 'F':
 				is_numeric = true
-				s = _fixed_float_str(float(_num(val)), precision if precision >= 0 else 6)
+				s = _fixed_float_str(_fmt_float_of(val), precision if precision >= 0 else 6)
 			'e', 'E':
 				is_numeric = true
-				s = _sci_float_str(float(_num(val)), precision if precision >= 0 else 6, conv == 'E')
+				s = _sci_float_str(_fmt_float_of(val), precision if precision >= 0 else 6, conv == 'E')
 			'g', 'G':
 				is_numeric = true
-				s = _general_float_str(float(_num(val)), precision if precision >= 0 else 6, conv == 'G')
+				s = _general_float_str(_fmt_float_of(val), precision if precision >= 0 else 6, conv == 'G')
 			_:
 				return "%" + conv
 		if is_numeric and not s.begins_with("-"):
@@ -6176,6 +7268,7 @@ class DSLString extends DSLObject:
 					return null
 				if start_idx < 0:
 					start_idx = start_idx + s.length()
+				start_idx = clampi(start_idx, -1, s.length())
 			if index.stop != null and not index.stop is DSLNone:
 				stop_idx = DSLObject._seq_index_int(index.stop, self_obj)
 				if stop_idx == DSLObject.INDEX_ERR:
@@ -6183,6 +7276,7 @@ class DSLString extends DSLObject:
 					return null
 				if stop_idx < 0:
 					stop_idx = stop_idx + s.length()
+				stop_idx = clampi(stop_idx, -1, s.length())
 			var result = ""
 			var i = start_idx
 			if step_val > 0:
@@ -6594,6 +7688,10 @@ class DSLString extends DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var tabsize = 8
 		if args.size() >= 2 and args[1] is DSLInteger:
+			# P0-13: tabsize 为索引位
+			if (args[1] as DSLInteger).is_big():
+				last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+				return null
 			tabsize = args[1].value
 		# 无 tab 时返回原对象自身 (CPython 自返回语义)
 		if not raw.contains("\t"):
@@ -6831,6 +7929,10 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
+			# P0-13: 宽度参数为索引位
+			if (args[1] as DSLInteger).is_big():
+				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
+				return null
 			width = args[1].value
 		var fill = " "
 		if args.size() >= 3 and args[2] is DSLString:
@@ -6862,6 +7964,10 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
+			# P0-13: 宽度参数为索引位
+			if (args[1] as DSLInteger).is_big():
+				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
+				return null
 			width = args[1].value
 		var fill = " "
 		if args.size() >= 3 and args[2] is DSLString:
@@ -6884,6 +7990,10 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
+			# P0-13: 宽度参数为索引位
+			if (args[1] as DSLInteger).is_big():
+				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
+				return null
 			width = args[1].value
 		var fill = " "
 		if args.size() >= 3 and args[2] is DSLString:
@@ -6966,6 +8076,10 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
+			# P0-13: 宽度参数为索引位
+			if (args[1] as DSLInteger).is_big():
+				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
+				return null
 			width = args[1].value
 		if s.length() >= width:
 			return obj if obj is DSLString else DSLString.new(s)
@@ -7245,6 +8359,10 @@ class DSLList extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		var reps_l = -1
 		if other is DSLInteger:
+			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			if (other as DSLInteger).is_big():
+				self_obj.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+				return null
 			reps_l = other.value
 		elif other is DSLBool:
 			reps_l = 1 if other.value else 0
@@ -7402,6 +8520,7 @@ class DSLList extends DSLObject:
 					return null
 				if start_idx < 0:
 					start_idx = start_idx + self_obj.items.size()
+				start_idx = clampi(start_idx, -1, self_obj.items.size())
 			if index.stop != null and not index.stop is DSLNone:
 				stop_idx = DSLObject._seq_index_int(index.stop, self_obj)
 				if stop_idx == DSLObject.INDEX_ERR:
@@ -7409,6 +8528,7 @@ class DSLList extends DSLObject:
 					return null
 				if stop_idx < 0:
 					stop_idx = stop_idx + self_obj.items.size()
+				stop_idx = clampi(stop_idx, -1, self_obj.items.size())
 			var result = DSLList.new([])
 			var i = start_idx
 			if step_val > 0:
@@ -8013,6 +9133,7 @@ class DSLTuple extends DSLObject:
 					return null
 				if start_idx < 0:
 					start_idx = start_idx + self_obj.items.size()
+				start_idx = clampi(start_idx, -1, self_obj.items.size())
 			if index.stop != null and not index.stop is DSLNone:
 				stop_idx = DSLObject._seq_index_int(index.stop, self_obj)
 				if stop_idx == DSLObject.INDEX_ERR:
@@ -8020,6 +9141,7 @@ class DSLTuple extends DSLObject:
 					return null
 				if stop_idx < 0:
 					stop_idx = stop_idx + self_obj.items.size()
+				stop_idx = clampi(stop_idx, -1, self_obj.items.size())
 			var result = DSLTuple.new([])
 			var i = start_idx
 			if step_val > 0:
@@ -8093,6 +9215,10 @@ class DSLTuple extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		var reps_t = -1
 		if other is DSLInteger:
+			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			if (other as DSLInteger).is_big():
+				self_obj.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+				return null
 			reps_t = other.value
 		elif other is DSLBool:
 			reps_t = 1 if other.value else 0
@@ -8542,10 +9668,16 @@ class DSLDict extends DSLObject:
 		if key is DSLBool:
 			return 1 if key.value else 0
 		if key is DSLInteger:
+			# P0-13: 大数键编码为 "i:十进制串" (与 int64 整数键值域不重叠)
+			if (key as DSLInteger).is_big():
+				return "i:" + DSLObject._int_dec_of(key)
 			return key.value
 		# 同理, 整数值的浮点键也规范化为整数 (CPython 中 1.0 == 1 为同一个键)
 		if key is DSLFloat:
 			if not is_nan(key.value) and not is_inf(key.value) and key.value == floor(key.value):
+				if abs(key.value) >= 9223372036854775808.0:
+					# P0-13: 超出 int64 的整值浮点与大数键同一编码 (等值同键)
+					return "i:" + DSLObject._int_dec_of(DSLObject._int_from_float_exact(key.value))
 				return int(key.value)
 			return key.value
 		if key is DSLTuple:
@@ -9234,6 +10366,10 @@ class DSLBytes extends DSLObject:
 		var other = args[1]
 		var reps_b = -1
 		if other is DSLInteger:
+			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			if (other as DSLInteger).is_big():
+				last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+				return null
 			reps_b = other.value
 		elif other is DSLBool:
 			reps_b = 1 if other.value else 0
@@ -9831,6 +10967,9 @@ class DSLBytes extends DSLObject:
 	func builtin_center(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var fill = _fill_bytes(args)
+		if args[1] is DSLInteger and (args[1] as DSLInteger).is_big():
+			raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
+			return null
 		var width = args[1].value if args[1] is DSLInteger else raw.data.size()
 		var total = width - raw.data.size()
 		var left = total / 2
@@ -9845,6 +10984,9 @@ class DSLBytes extends DSLObject:
 	func builtin_ljust(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var fill = _fill_bytes(args)
+		if args[1] is DSLInteger and (args[1] as DSLInteger).is_big():
+			raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
+			return null
 		var width = args[1].value if args[1] is DSLInteger else raw.data.size()
 		var res: Array[int] = []
 		res.append_array(raw.data)
@@ -9855,6 +10997,9 @@ class DSLBytes extends DSLObject:
 	func builtin_rjust(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var fill = _fill_bytes(args)
+		if args[1] is DSLInteger and (args[1] as DSLInteger).is_big():
+			raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
+			return null
 		var width = args[1].value if args[1] is DSLInteger else raw.data.size()
 		var res: Array[int] = []
 		for i in range(maxi(width - raw.data.size(), 0)):
@@ -11189,9 +12334,14 @@ class DSLSet extends DSLObject:
 		if obj is DSLBool:
 			return "i:" + ("1" if obj.value else "0")
 		if obj is DSLInteger:
+			# P0-13: 大数键编码为 "i:十进制串"
+			if (obj as DSLInteger).is_big():
+				return "i:" + DSLObject._int_dec_of(obj)
 			return "i:" + str(obj.value)
 		if obj is DSLFloat:
 			if not is_nan(obj.value) and not is_inf(obj.value) and obj.value == floor(obj.value):
+				if abs(obj.value) >= 9223372036854775808.0:
+					return "i:" + DSLObject._int_dec_of(DSLObject._int_from_float_exact(obj.value))
 				return "i:" + str(int(obj.value))
 			return "f:" + str(obj.value)
 		if obj is DSLComplex:
@@ -12238,6 +13388,8 @@ class DSLFunction extends DSLObject:
 	func _dsl_getattribute(attr_name: String) -> DSLObject:
 		if attr_name == "__name__":
 			return DSLString.new(declaration.name)
+		if attr_name == "__qualname__":
+			return DSLString.new(qualname if qualname != "" else declaration.name)
 		if attr_name == "__annotations__":
 			return annotations
 		return super._dsl_getattribute(attr_name)
@@ -15417,6 +16569,11 @@ class DSLEnvironment:
 	var function_locals: Dictionary = {}
 	## 类体作用域标记: nonlocal 绑定搜索需跳过类作用域 (CPython 类体不是 nonlocal 目标)
 	var is_class_scope: bool = false
+	## 类体作用域上正在构建的类对象 (P0-25): 类体内 def 语句组装方法时定位定义类
+	var building_class: DSLClass = null
+	## 类体内由 def 语句绑定的名字 (P0-25): 收集阶段据此把最终对象归入类方法;
+	## 普通赋值 (set_val) 会清除标记, 与 CPython 的类字典单一名槽语义一致
+	var method_names: Dictionary = {}
 	
 	## 构造作用域环境 [br]
 	## [param p_reporter] 错误报告器实例 [br]
@@ -15481,6 +16638,13 @@ class DSLEnvironment:
 	var comp_scope: bool = false
 
 	func set_val(name: String, value: DSLObject):
+		if comp_scope and enclosing:
+			# PEP 572: 推导式内的赋值表达式绑定在包含作用域 (推导式自身的循环变量走 define, 不经此处)
+			enclosing.set_val(name, value)
+			return
+		if is_class_scope:
+			# 类体内的普通赋值 (P0-25): 清除方法标记, 名槽归普通类属性 (CPython 单一名槽)
+			method_names.erase(name)
 		if comp_scope and enclosing:
 			# PEP 572: 推导式内的赋值表达式绑定在包含作用域 (推导式自身的循环变量走 define, 不经此处)
 			enclosing.set_val(name, value)
@@ -17470,15 +18634,23 @@ class Parser:
 			# 紧贴负号的溢出字面量按最小整数折叠, 保留 -9223372036854775807 - 1 的字面书写
 			if op.type == TokenType.MINUS and check(TokenType.INTEGER) and peek().literal_overflow:
 				advance()
-				return Literal.new(-9223372036854775807 - 1)
+				# P0-13: 溢出字面量的负号折叠为大数负字面量 (CPython: 负号属于字面量常量折叠)
+				var neg_lit = Literal.new(0)
+				neg_lit.overflow = true
+				neg_lit.big_value = previous().literal_big
+				neg_lit.big_neg = true
+				return neg_lit
 			# 常量折叠: ± 紧贴整数字面量时折叠为字面量 (CPython 语义, 使负字面量同样驻留)
-			if (op.type == TokenType.MINUS or op.type == TokenType.PLUS) and check(TokenType.INTEGER) and not peek().literal_overflow:
+			# 后随 ** 时不得折叠: -10**30 在 CPython 是 -(10**30), 折叠会变成 (-10)**30 (P0-13 显形)
+			if (op.type == TokenType.MINUS or op.type == TokenType.PLUS) and check(TokenType.INTEGER) and not peek().literal_overflow and current + 1 < tokens.size() and tokens[current + 1].type != TokenType.STARSTAR:
 				var lit_tok = advance()
 				var folded: int = lit_tok.literal
 				if op.type == TokenType.MINUS:
 					folded = -folded
 				return Literal.new(folded)
-			return Unary.new(op, unary())
+			# P0-13 显形修正: 一元操作数取完整 power 表达式 (CPython 文法 u_expr → power),
+			# 使 -10**30 解析为 -(10**30) 而非 (-10)**30
+			return Unary.new(op, power())
 		return primary()
 		
 	## 解析基本表达式 (字面量, 变量, 括号组, 列表, 字典, lambda, f-string, super) [br]
@@ -17489,6 +18661,7 @@ class Parser:
 		if match_types([TokenType.INTEGER, TokenType.FLOAT, TokenType.IMAGINARY, TokenType.TRUE, TokenType.FALSE, TokenType.NULL]):
 			var lit = Literal.new(previous().literal)
 			lit.overflow = previous().literal_overflow
+			lit.big_value = previous().literal_big
 			if previous().type == TokenType.IMAGINARY:
 				lit.is_imag = true
 			return finish_call_or_index(lit)
@@ -17746,6 +18919,11 @@ class Parser:
 			elif stmt is DelStmt:
 				for t in stmt.targets:
 					_walk_yield_expr(t, scope, "")
+			elif stmt is AnnotatedAssign:
+				# 注解与值表达式同样受 yield/await 作用域规则约束 (类体 scope=0 一并报错)
+				_walk_yield_expr(stmt.annotation, scope, "")
+				if stmt.value != null and _walk_yield_expr(stmt.value, scope, ""):
+					found = true
 		return found
 
 	## 递归遍历表达式, 检测 yield 用法 (对标 CPython 3.12) [br]
@@ -19968,38 +21146,7 @@ class Interpreter:
 				right.last_error = ""
 				return rr
 		return _call_magic_or_fallback(left, dunder, [right], fallback)
-	
-	## 在类体作用域内预求值方法的默认参数 (定义期一次, 结果存入语句元数据) [br]
-	## [param fstmt] 方法声明 [br]
-	## [param class_env] 类体作用域
-	func _fill_method_defaults(fstmt: FunctionStmt, class_env: DSLEnvironment):
-		var vals: Array = []
-		for p in fstmt.params:
-			if p.is_args or p.is_kwargs:
-				vals.append(null)
-				continue
-			if p.default_value != null:
-				var prev_env = environment
-				environment = class_env
-				var val = evaluate(p.default_value)
-				environment = prev_env
-				vals.append(val)
-			else:
-				vals.append(null)
-		fstmt.set_meta("_defaults", vals)
-	
-	## 把预求值的默认参数写入函数对象 (无缓存时按参数表填 null) [br]
-	## [param fstmt] 方法声明 [br]
-	## [param func_obj] 目标函数对象
-	func _apply_method_defaults(fstmt: FunctionStmt, func_obj: DSLFunction):
-		if fstmt.has_meta("_defaults"):
-			var vals = fstmt.get_meta("_defaults")
-			for v in vals:
-				func_obj.default_values.append(v)
-		else:
-			for p in fstmt.params:
-				func_obj.default_values.append(null)
-	
+
 	## 检查异常是否匹配 except 子句中指定的类型 [br]
 	## [param exc] 被抛出的异常实例 [br]
 	## [param type_expr] except 子句的类型表达式 [br]
@@ -20778,6 +21925,7 @@ class Interpreter:
 		_define_exception("UnboundLocalError", "NameError")
 		_define_exception("RecursionError", "RuntimeError")
 		_define_exception("NotImplementedError", "RuntimeError")
+		_define_exception("MemoryError")
 		_define_exception("OSError")
 		_define_exception("FileNotFoundError", "OSError")
 		_define_exception("UnsupportedOperation", "OSError")
@@ -24146,6 +25294,20 @@ class Interpreter:
 					module_ann = DSLDict.new()
 					globals.define("__annotations__", module_ann)
 				module_ann._dsl_setitem(DSLString.new(stmt.name), ann_val)
+			elif not _future_annotations and environment.is_class_scope:
+				# 类体注解 (P0-25, CPython): 注解求值并入类体作用域的 __annotations__
+				# (收集阶段随普通绑定归入类属性); 只查类体自身, 不沿链读到全局同名键
+				var cls_ann_val = evaluate(stmt.annotation)
+				if _suspended:
+					_expr_evaluated = false
+					return ExecResult.SUSPENDED
+				if cls_ann_val == null:
+					return ExecResult.ERROR
+				var cls_ann = environment.values.get("__annotations__")
+				if not (cls_ann is DSLDict):
+					cls_ann = DSLDict.new()
+					environment.define("__annotations__", cls_ann)
+				(cls_ann as DSLDict)._dsl_setitem(DSLString.new(stmt.name), cls_ann_val)
 			if stmt.value != null:
 				var ann_v = evaluate(stmt.value)
 				if _suspended:
@@ -24161,8 +25323,90 @@ class Interpreter:
 		if stmt is FunctionStmt:
 			var func_obj = DSLFunction.new(stmt, environment)
 			func_obj._cls_interp = self
+			if environment.is_class_scope and environment.building_class != null:
+				# 类体内的 def (P0-25, CPython 同序): 闭包沿外层非类作用域链解析 (方法体
+				# 不可见类体名字), 默认参数与注解在类体作用域 def 时求值, method_type
+				# 组装与装饰器链即时完成, 最终对象 (函数/property/包装) 绑定类体作用域
+				var cls_obj = environment.building_class
+				var closure_env = environment
+				while closure_env.is_class_scope and closure_env.enclosing != null:
+					closure_env = closure_env.enclosing
+				func_obj.closure = closure_env
+				func_obj._defining_class = cls_obj
+				var cls_target = stmt.name
+				for p in stmt.params:
+					if p.is_args or p.is_kwargs:
+						func_obj.default_values.append(null)
+						continue
+					if p.default_value != null:
+						var cls_dv = evaluate(p.default_value)
+						if _suspended:
+							return ExecResult.SUSPENDED
+						if cls_dv == null:
+							return ExecResult.ERROR
+						func_obj.default_values.append(cls_dv)
+					else:
+						func_obj.default_values.append(null)
+				_eval_function_annotations(func_obj, environment)
+				if _suspended:
+					return ExecResult.SUSPENDED
+				if stmt.method_type == 3:
+					# @property getter: 内建包装在此构造; 有任意装饰器时先绑原函数,
+					# property 包装由装饰器链按链序产出
+					if stmt.decorators.is_empty():
+						environment.define(stmt.name, DSLProperty.new(stmt.name, func_obj, self))
+					else:
+						environment.define(stmt.name, func_obj)
+				elif stmt.method_type == 4 or stmt.method_type == 5:
+					# @name.setter / @name.deleter: 挂入既有 property (getter 先行时同源组装)
+					var prop_name = stmt.get_meta("_property_name", stmt.name)
+					cls_target = prop_name
+					if environment.values.has(prop_name) and environment.values[prop_name] is DSLProperty:
+						var bound_prop = environment.values[prop_name] as DSLProperty
+						if stmt.method_type == 4:
+							bound_prop.setter(func_obj)
+						else:
+							bound_prop.deleter(func_obj)
+					else:
+						# Create property with just setter/deleter (unusual but valid)
+						var lone_prop = DSLProperty.new(prop_name, null, self)
+						if stmt.method_type == 4:
+							lone_prop.setter(func_obj)
+						else:
+							lone_prop.deleter(func_obj)
+						environment.define(prop_name, lone_prop)
+				else:
+					# Regular method, @classmethod, @staticmethod (绑定语义由 __get__ 按 method_type 分派)
+					environment.define(stmt.name, func_obj)
+				if not stmt.decorators.is_empty():
+					var cls_dec_val = null
+					if stmt.method_type == 1 or stmt.method_type == 2 or stmt.method_type == 3:
+						var builtin_apply := Callable(self, "_apply_builtin_decorator").bind(stmt.method_type, cls_obj, stmt.name)
+						var below = stmt.get_meta("_builtin_below", 0)
+						cls_dec_val = _apply_decorators(stmt.decorators, environment.values[cls_target], below, builtin_apply)
+					else:
+						cls_dec_val = _apply_decorators(stmt.decorators, environment.values[cls_target])
+					if _suspended:
+						_expr_evaluated = false
+						return ExecResult.SUSPENDED
+					if cls_dec_val == null:
+						return ExecResult.RAISE if report.has_error else ExecResult.ERROR
+					environment.values[cls_target] = cls_dec_val
+				# 登记 def 绑定的名字: 收集阶段归入类方法 (普通赋值会经 set_val 清除标记)
+				environment.method_names[cls_target] = true
+				# 类方法限定名 (CPython __qualname__): Class.method 形态 (P2-2)
+				var cls_final = environment.values[cls_target]
+				var cls_qfn: DSLFunction = null
+				if cls_final is DSLFunction:
+					cls_qfn = cls_final
+				elif cls_final is DSLStaticMethodWrapper or cls_final is DSLClassMethodWrapper:
+					cls_qfn = cls_final.wrapped
+				elif cls_final is DSLProperty:
+					cls_qfn = cls_final.fget
+				if cls_qfn is DSLFunction and cls_qfn.qualname == "":
+					cls_qfn.qualname = cls_obj.name + "." + cls_target
+				return ExecResult.NORMAL
 			# 嵌套 def 的限定名 (CPython __qualname__): outer.<locals>.inner 链 (P2-55)
-			# 类体内的 def 由类创建钩子补 Class.method 形态, 此处跳过
 			if not environment.is_class_scope and _current_function != null:
 				var ef = _current_function
 				var prefix = ef.qualname if ef.qualname != "" else ef.declaration.name
@@ -24222,6 +25466,22 @@ class Interpreter:
 			return ExecResult.NORMAL
 			
 		if stmt is NonlocalStmt:
+			if environment.is_class_scope:
+				# 类体内的 nonlocal (CPython 3.12 合法, P0-25): 沿外层链找函数作用域绑定,
+				# 跳过嵌套链上的类作用域; 找不到时报 CPython 文案的 SyntaxError
+				for nl_name in stmt.names:
+					var nl_env = environment.enclosing
+					var found_env = null
+					while nl_env != null and nl_env != globals:
+						if not nl_env.is_class_scope and nl_env.values.has(nl_name):
+							found_env = nl_env
+							break
+						nl_env = nl_env.enclosing
+					if found_env == null:
+						raise_exception("SyntaxError", "no binding for nonlocal '%s' found" % nl_name)
+						return ExecResult.RAISE
+					environment.mark_nonlocal(nl_name, found_env)
+				return ExecResult.NORMAL
 			for name in stmt.names:
 				var env = environment.enclosing
 				while env and env != globals:
@@ -25109,9 +26369,9 @@ class Interpreter:
 		if expr is AwaitExpr:
 			return _eval_await(expr)
 		if expr is Literal:
-			if expr.overflow:
-				raise_exception("OverflowError", "integer literal exceeds 64-bit range")
-				return null
+			# P0-13: 大数字面量 (原溢出报错语义被自动升级取代)
+			if expr.big_value != "":
+				return DSLInteger.pooled_literal_big(expr.big_value, expr.big_neg)
 			# 虚数字面量 → complex 实部 0 (P1-56)
 			if expr.is_imag:
 				return DSLComplex.new(0.0, expr.value)
@@ -27337,11 +28597,11 @@ class Interpreter:
 	## 求值函数定义的参数与返回注解, 存入 __annotations__ (CPython 在 def 时求值) [br]
 	## from __future__ import annotations 生效时跳过求值 (P2-44) [br]
 	## [param func_obj] 函数对象 (closure 为定义环境)
-	func _eval_function_annotations(func_obj: DSLFunction) -> void:
+	func _eval_function_annotations(func_obj: DSLFunction, eval_env: DSLEnvironment = null) -> void:
 		if _future_annotations:
 			return
 		var prev_env = environment
-		environment = func_obj.closure
+		environment = eval_env if eval_env != null else func_obj.closure
 		for p in func_obj.declaration.params:
 			if p.annotation != null:
 				var v = evaluate(p.annotation)
@@ -27754,10 +29014,22 @@ class Interpreter:
 		return ExecResult.NORMAL
 
 	## 执行类定义语句 [br]
-	## 解析超类, 方法体与类属性, 构造 DSLClass 并注册到当前环境 [br]
+	## 解析超类并构造 DSLClass 骨架 (P0-25), 类体整块交由通用块执行后收集类属性与方法, [br]
+	## 注册到当前环境 [br]
 	## [param stmt] ClassStmt AST 节点 [br]
 	## [returns] 执行结果状态
 	func execute_class(stmt: ClassStmt) -> ExecResult:
+		# 挂起重入 (P0-25): 类体挂起后语句整句重放, 依赖外层块帧 resume_info 恢复
+		# 类体作用域与类骨架, 基类求值与骨架重建在恢复轮跳过
+		var cls_frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
+		var cls_ri = cls_frame.get("resume_info", {}) if cls_frame is Dictionary else {}
+		var cls_stage: String = cls_ri.get("class_stage", "")
+		var cls_env = cls_ri.get("class_env") if cls_stage != "" else null
+		var cls_skel = cls_ri.get("class_obj") if cls_stage != "" else null
+		if not (cls_env is DSLEnvironment) or not (cls_skel is DSLClass):
+			cls_stage = ""
+		if cls_stage != "":
+			return _execute_class_finish(stmt, cls_stage, cls_env, cls_skel)
 		var base_objs: Array = []
 		for base_expr in stmt.bases:
 			if base_expr is StarredExpr:
@@ -27809,8 +29081,6 @@ class Interpreter:
 					raise_exception("TypeError", "duplicate base class %s" % base_objs[i].name)
 					return ExecResult.RAISE
 		var superclass_obj = base_objs[0] if base_objs.size() > 0 else null
-		var methods = {}
-		var class_attrs = {}
 		# 类体作用域: 方法默认参数与类体内推导式等定义期求值可读取类体变量,
 		# 方法体本身仍只沿外层作用域解析 (CPython 的类作用域细则)
 		var class_env = DSLEnvironment.new(report, environment)
@@ -27831,164 +29101,41 @@ order (MRO) for bases %s" % ", ".join(names))
 		if _has_layout_conflict(base_objs):
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
 			return ExecResult.RAISE
-		for body_stmt in stmt.body:
-			if body_stmt is FunctionStmt:
-				var target_name = body_stmt.name
-				_fill_method_defaults(body_stmt, class_env)
-				if _suspended:
-					return ExecResult.SUSPENDED
-				if body_stmt.method_type == 3:
-					# @property getter
-					var func_obj = DSLFunction.new(body_stmt, environment)
-					func_obj._cls_interp = self
-					func_obj._defining_class = class_obj
-					_apply_method_defaults(body_stmt, func_obj)
-					if body_stmt.decorators.is_empty():
-						var prop = DSLProperty.new(body_stmt.name, func_obj, self)
-						methods[body_stmt.name] = prop
-					else:
-						# 与任意装饰器组合: getter 入链, property 包装按链序构造
-						methods[body_stmt.name] = func_obj
-				elif body_stmt.method_type == 4:
-					# @name.setter
-					var func_obj = DSLFunction.new(body_stmt, environment)
-					func_obj._cls_interp = self
-					func_obj._defining_class = class_obj
-					_apply_method_defaults(body_stmt, func_obj)
-					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
-					target_name = prop_name
-					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
-						(methods[prop_name] as DSLProperty).setter(func_obj)
-					else:
-						# Create property with just setter (unusual but valid)
-						var prop = DSLProperty.new(prop_name, null, self)
-						prop.setter(func_obj)
-						methods[prop_name] = prop
-				elif body_stmt.method_type == 5:
-					# @name.deleter
-					var func_obj = DSLFunction.new(body_stmt, environment)
-					func_obj._cls_interp = self
-					func_obj._defining_class = class_obj
-					_apply_method_defaults(body_stmt, func_obj)
-					var prop_name = body_stmt.get_meta("_property_name", body_stmt.name)
-					target_name = prop_name
-					if methods.has(prop_name) and methods[prop_name] is DSLProperty:
-						(methods[prop_name] as DSLProperty).deleter(func_obj)
-					else:
-						var prop = DSLProperty.new(prop_name, null, self)
-						prop.deleter(func_obj)
-						methods[prop_name] = prop
-				else:
-					# Regular method, @classmethod, @staticmethod
-					var func_obj = DSLFunction.new(body_stmt, environment)
-					func_obj._cls_interp = self
-					func_obj._defining_class = class_obj
-					_apply_method_defaults(body_stmt, func_obj)
-					methods[body_stmt.name] = func_obj
-				if not body_stmt.decorators.is_empty():
-					var dec_val = null
-					if body_stmt.method_type == 1 or body_stmt.method_type == 2 or body_stmt.method_type == 3:
-						var builtin_apply := Callable(self, "_apply_builtin_decorator").bind(body_stmt.method_type, class_obj, body_stmt.name)
-						var below = body_stmt.get_meta("_builtin_below", 0)
-						dec_val = _apply_decorators(body_stmt.decorators, methods[target_name], below, builtin_apply)
-					else:
-						dec_val = _apply_decorators(body_stmt.decorators, methods[target_name])
-					if _suspended:
-						return ExecResult.SUSPENDED
-					if dec_val == null:
-						return ExecResult.RAISE if report.has_error else ExecResult.ERROR
-					methods[target_name] = dec_val
-			elif body_stmt is ClassStmt:
-				# 嵌套类: 在类体作用域中执行并挂入类属性 (Outer.Inner 可达)
-				var prev_env_c = environment
-				environment = class_env
-				var cres = execute_class(body_stmt)
-				environment = prev_env_c
-				if cres == ExecResult.SUSPENDED:
-					return ExecResult.SUSPENDED
-				if cres != ExecResult.NORMAL:
-					return cres
-				var inner_cls = class_env.get_val_safe(body_stmt.name)
-				if inner_cls != null:
-					class_attrs[body_stmt.name] = inner_cls
-			elif body_stmt is AnnotatedAssign:
-				# 类体注解 (CPython): 注解求值并入类 __annotations__; 带值时同 Assign 语义
-				if not _future_annotations:
-					var cls_ann_val = evaluate(body_stmt.annotation)
-					if _suspended:
-						return ExecResult.SUSPENDED
-					if cls_ann_val == null:
-						return ExecResult.ERROR
-					var cls_ann = class_attrs.get("__annotations__")
-					if not (cls_ann is DSLDict):
-						cls_ann = DSLDict.new()
-						class_attrs["__annotations__"] = cls_ann
-						class_env.define("__annotations__", cls_ann)
-					(cls_ann as DSLDict)._dsl_setitem(DSLString.new(body_stmt.name), cls_ann_val)
-				if body_stmt.value != null:
-					var cls_prev = environment
-					environment = class_env
-					var cls_v = evaluate(body_stmt.value)
-					environment = cls_prev
-					if _suspended:
-						return ExecResult.SUSPENDED
-					if cls_v == null:
-						return ExecResult.ERROR
-					if class_env.global_vars.has(body_stmt.name) or class_env.nonlocal_bindings.has(body_stmt.name):
-						class_env.set_val(body_stmt.name, cls_v)
-					else:
-						class_attrs[body_stmt.name] = cls_v
-						class_env.define(body_stmt.name, cls_v)
-			elif body_stmt is GlobalStmt:
-				# 类体内的 global 声明 (P0-24): 后续赋值经 set_val 写模块全局, 不落类属性
-				for gname in body_stmt.names:
-					class_env.mark_global(gname)
-			elif body_stmt is NonlocalStmt:
-				# 类体内的 nonlocal 声明 (CPython 3.12 合法): 沿外层链找函数作用域绑定,
-				# 跳过嵌套链上的类作用域; 找不到时报 CPython 文案的 SyntaxError
-				for name in body_stmt.names:
-					var nl_env = class_env.enclosing
-					var found_env = null
-					while nl_env != null and nl_env != globals:
-						if not nl_env.is_class_scope and nl_env.values.has(name):
-							found_env = nl_env
-							break
-						nl_env = nl_env.enclosing
-					if found_env == null:
-						raise_exception("SyntaxError", "no binding for nonlocal '%s' found" % name)
-						return ExecResult.RAISE
-					class_env.mark_nonlocal(name, found_env)
-			elif body_stmt is ExpressionStmt and body_stmt.expression is Assign:
-				var assign = body_stmt.expression as Assign
-				var prev_env = environment
-				environment = class_env
-				var val = evaluate(assign.value)
-				environment = prev_env
-				if _suspended:
-					return ExecResult.SUSPENDED
-				if val == null:
-					return ExecResult.ERROR
-				if class_env.global_vars.has(assign.name) or class_env.nonlocal_bindings.has(assign.name):
-					# global/nonlocal 声明的名字: 写入目标作用域, 不落类属性 (CPython 类体作用域)
-					class_env.set_val(assign.name, val)
-				else:
-					class_attrs[assign.name] = val
-					class_env.define(assign.name, val)
-		# 类体方法的参数 / 返回注解在类体命名空间求值 (CPython 语义)
-		if not _future_annotations:
-			var prev_env_ann = environment
-			environment = class_env
-			for mname in methods:
-				var mfn = methods[mname]
-				if mfn is DSLFunction:
-					_eval_function_annotations(mfn)
-					if _suspended:
-						environment = prev_env_ann
-						return ExecResult.SUSPENDED
-					if report.has_error:
-						environment = prev_env_ann
-						return ExecResult.ERROR
-			environment = prev_env_ann
+		# 类体作用域上登记构建中类对象: 类体内 def 语句组装方法时定位定义类 (super() / 装饰器链)
+		class_env.building_class = class_obj
+		return _execute_class_finish(stmt, "fresh", class_env, class_obj)
+
+	## 类体整块执行与收尾 (P0-25): 类体是完整代码块, 整块交给通用块执行, [br]
+	## 所有语句复用解释器既有语义, 名字绑定落入类体作用域; 方法组装在 def 语句 [br]
+	## 执行时即时完成, 体执行完成后从类体作用域收集类属性与方法, 再走钩子/注册/装饰器 [br]
+	## 挂起重入: 体进度记录在外层块帧 resume_info (class_stage = body 体执行中 / [br]
+	## tail 体已完成), 语句重放由此恢复类体作用域与类骨架, 跳过已完成阶段, [br]
+	## 已完成副作用由既有重放窗口 (_call_retired 等) 吸收 [br]
+	## [param stmt] ClassStmt AST 节点 [br]
+	## [param stage] fresh = 首次进入 (执行类体), body = 体挂起恢复, tail = 体已完成续收尾 [br]
+	## [param class_env] 类体作用域 [br]
+	## [param class_obj] 类骨架 (多基类与 MRO 已就绪) [br]
+	## [returns] 执行结果状态
+	func _execute_class_finish(stmt: ClassStmt, stage: String, class_env: DSLEnvironment, class_obj: DSLClass) -> ExecResult:
+		if stage != "tail":
+			if _exec_stack.size() > 0:
+				_exec_stack.back().resume_info = {"class_stage": "body", "class_env": class_env, "class_obj": class_obj}
+			var body_res = exec_block(stmt.body, class_env)
+			if body_res == ExecResult.SUSPENDED:
+				return ExecResult.SUSPENDED
+			if body_res != ExecResult.NORMAL:
+				return body_res
+		# 体已完成 (或恢复至收尾段): 从类体作用域收集类属性与方法 (insertion 序与源序一致;
+		# def 语句绑定的名字归入方法, 其余绑定——赋值/嵌套类/import/循环变量等——归入类属性)
+		if _exec_stack.size() > 0:
+			_exec_stack.back().resume_info = {"class_stage": "tail", "class_env": class_env, "class_obj": class_obj}
+		var methods = {}
+		var class_attrs = {}
+		for cname in class_env.values:
+			if class_env.method_names.has(cname):
+				methods[cname] = class_env.values[cname]
+			else:
+				class_attrs[cname] = class_env.values[cname]
 		class_obj.methods = methods
 		class_obj.class_attrs = class_attrs
 		class_obj.klass = globals.get_val_safe("type")
@@ -28602,6 +29749,10 @@ order (MRO) for bases %s" % ", ".join(names))
 			if not (a is DSLInteger):
 				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % a._type_name())
 				return null
+			# P0-13: range 参数为索引位 (CPython Py_ssize_t 同构)
+			if (a as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return null
 		var start = 0
 		var stop = 0
 		var step = 1
@@ -28703,7 +29854,8 @@ order (MRO) for bases %s" % ", ".join(names))
 			var hi = builtin_hash([DSLFloat.new(obj.imag)] as Array[DSLObject], {} as Dictionary[String, DSLObject]).value
 			return DSLInteger.pooled(hr + 1000003 * hi)
 		if obj is DSLInteger:
-			return DSLInteger.pooled(obj.value)
+			# P0-13: 对齐 CPython int 哈希 (模 2^61-1, -1 映射 -2), 快慢路径同算法
+			return DSLInteger.pooled((obj as DSLInteger)._big_hash())
 		if obj is DSLFloat:
 			# 数值相等的值哈希相等 (CPython 不变量): 整值浮点与对应整数同哈希
 			var fv = obj.value
@@ -28755,10 +29907,12 @@ order (MRO) for bases %s" % ", ".join(names))
 			if method != null:
 				return obj.klass._invoke_func(method, [obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if obj is DSLInteger:
-			if obj.value == -9223372036854775807 - 1:
-				raise_exception("OverflowError", "integer absolute exceeds 64-bit range")
-				return null
-			return DSLInteger.pooled(abs(obj.value))
+			# P0-13: 大数与最小整数的绝对值自动升级
+			if obj.is_big():
+				if not obj.big_neg:
+					return obj
+				return DSLInteger.from_big(false, obj.big_limbs)
+			return DSLInteger.from_big(false, DSLBigInt.mag_of_i64_abs(obj.value))
 		if obj is DSLFloat:
 			return DSLFloat.new(abs(obj.value))
 		if obj is DSLComplex:
@@ -29055,6 +30209,67 @@ order (MRO) for bases %s" % ", ".join(names))
 		return total
 	
 	## pow(x, y, mod) - 幂运算
+	## 大数域模幂 (P0-13): 指数按位走, 负指数先求模逆 (扩展欧几里得, CPython 同语义) [br]
+	## 模数取绝对值参与运算, 结果落在 [0, |m|), 模数为负时结果符号随 m
+	func _big_modpow(b: DSLInteger, e: DSLInteger, m: DSLInteger) -> DSLObject:
+		var m_mag: Array[int] = m._pair()[1]
+		var m_neg: bool = m.big_neg if m.is_big() else m.value < 0
+		var exp_neg: bool = e.big_neg if e.is_big() else e.value < 0
+		var base_mag: Array[int] = b._pair()[1]
+		if exp_neg:
+			var inv = _big_modinv(base_mag, m_mag)
+			if inv == null:
+				raise_exception("ValueError", "base is not invertible for the given modulus")
+				return null
+			base_mag = inv
+		# base 归约到 [0, |m|)
+		base_mag = DSLBigInt.divmod(false, base_mag, false, m_mag)[3]
+		var result: Array[int] = [1]
+		var cur: Array[int] = base_mag
+		var limbs: Array[int] = e._pair()[1]
+		var total_bits = DSLBigInt.mag_bitlen(limbs)
+		for bit in range(total_bits):
+			if ((limbs[bit / 32] >> (bit % 32)) & 1) == 1:
+				result = DSLBigInt.mul(false, result, false, cur)[1]
+				result = DSLBigInt.divmod(false, result, false, m_mag)[3]
+			cur = DSLBigInt.mul(false, cur, false, cur)[1]
+			cur = DSLBigInt.divmod(false, cur, false, m_mag)[3]
+		# 指数为零等情形: 结果亦需落回 [0, |m|) (pow(x, 0, 1) == 0)
+		result = DSLBigInt.divmod(false, result, false, m_mag)[3]
+		if result.is_empty():
+			return DSLInteger.pooled(0)
+		if m_neg:
+			# 模数为负: 结果符号随 m (r - |m| 形态)
+			return DSLInteger.from_big(true, DSLBigInt.mag_sub(m_mag, result))
+		return DSLInteger.from_big(false, result)
+
+	## 扩展欧几里得求模逆 (P0-13): gcd(a, |m|) == 1 时返回 a 模 |m| 的逆, 否则 null
+	func _big_modinv(a_mag: Array[int], m_mag: Array[int]):
+		var old_r = [false, a_mag.duplicate()]
+		var r = [false, m_mag.duplicate()]
+		var old_s = [false, ([1] as Array[int])]
+		var s = [false, ([0] as Array[int])]
+		while not (r[1] as Array[int]).is_empty():
+			var dm = DSLBigInt.divmod(old_r[0], old_r[1], r[0], r[1])
+			var q = [dm[0], dm[1]]
+			var rem = [dm[2], dm[3]]
+			# old_r, r = r, old_r - q*r
+			var qr = DSLBigInt.mul(q[0], q[1], r[0], r[1])
+			var nr = DSLBigInt.sub(old_r[0], old_r[1], qr[0], qr[1])
+			old_r = r
+			r = nr
+			# old_s, s = s, old_s - q*s
+			var qs = DSLBigInt.mul(q[0], q[1], s[0], s[1])
+			var ns = DSLBigInt.sub(old_s[0], old_s[1], qs[0], qs[1])
+			old_s = s
+			s = ns
+		var g: Array[int] = old_r[1]
+		if not DSLBigInt.mag_is_one(g):
+			return null
+		# 逆元归一到 [0, |m|)
+		var rem2 = DSLBigInt.divmod(old_s[0], old_s[1], false, m_mag)
+		return rem2[3]
+
 	func builtin_pow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 2:
 			raise_exception("TypeError", "pow() takes at least 2 arguments")
@@ -29064,6 +30279,16 @@ order (MRO) for bases %s" % ", ".join(names))
 		if args.size() >= 3:
 			var mod = args[2]
 			if base is DSLInteger and exp_ is DSLInteger and mod is DSLInteger:
+				# P0-13: 任一操作数为大数 → 大数域模幂 (CPython 同语义, 支持巨指数)
+				var mb = mod as DSLInteger
+				var bb = base as DSLInteger
+				var eb = exp_ as DSLInteger
+				if mb.is_big() or bb.is_big() or eb.is_big():
+					var m_zero = DSLBigInt.mag_is_zero(mb.big_limbs) if mb.is_big() else mb.value == 0
+					if m_zero:
+						raise_exception("ValueError", "pow() 3rd argument cannot be 0")
+						return null
+					return _big_modpow(bb, eb, mb)
 				# 整数模幂: 平方乘避免中间结果溢出; 负指数先求模逆 (对齐 CPython)
 				var m: int = mod.value
 				if m == 0:
@@ -29503,6 +30728,10 @@ order (MRO) for bases %s" % ", ".join(names))
 		if obj is DSLBool:
 			obj = DSLInteger.pooled(1 if obj.value else 0)
 		if obj is DSLInteger:
+			# P0-13: 大数码点超 C int (CPython 同文案)
+			if (obj as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C int")
+				return null
 			if obj.value < 0 or obj.value > 0x10FFFF:
 				raise_exception("ValueError", "chr() arg not in range(0x110000)")
 				return null
@@ -29529,6 +30758,9 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		var obj = args[0]
 		if obj is DSLInteger:
+			# P0-13: 大数十六进制
+			if obj.is_big():
+				return DSLString.new(("-0x" if obj.big_neg else "0x") + DSLBigInt.mag_to_base(obj.big_limbs, 16))
 			if obj.value < 0:
 				return DSLString.new("-0x" + _int_to_hex(-obj.value))
 			return DSLString.new("0x" + _int_to_hex(obj.value))
@@ -29542,6 +30774,8 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		var obj = args[0]
 		if obj is DSLInteger:
+			if obj.is_big():
+				return DSLString.new(("-0o" if obj.big_neg else "0o") + DSLBigInt.mag_to_base(obj.big_limbs, 8))
 			if obj.value == 0:
 				return DSLString.new("0o0")
 			var n = abs(obj.value)
@@ -29564,6 +30798,8 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		var obj = args[0]
 		if obj is DSLInteger:
+			if obj.is_big():
+				return DSLString.new(("-0b" if obj.big_neg else "0b") + DSLBigInt.mag_to_base(obj.big_limbs, 2))
 			if obj.value == 0:
 				return DSLString.new("0b0")
 			var n = abs(obj.value)
@@ -29891,20 +31127,14 @@ order (MRO) for bases %s" % ", ".join(names))
 		if text == "":
 			raise_exception("ValueError", "invalid literal for int() with base %d: '%s'" % [base, s])
 			return null
-		var value = 0
-		var digits_n = text.length()
-		for i in digits_n:
+		# P0-13: 大数累加 (原 int64 回绕报错被自动升级取代)
+		for i in text.length():
 			var d = _digit_value(text[i])
 			if d < 0 or d >= base:
 				raise_exception("ValueError", "invalid literal for int() with base %d: '%s'" % [base, s])
 				return null
-			var nv = value * base + d
-			# 累加回绕即超界, 唯一例外是负值书写恰在末位折叠成最小整数
-			if nv < 0 and not (neg and i == digits_n - 1 and nv == -9223372036854775807 - 1):
-				raise_exception("OverflowError", "integer string exceeds 64-bit range")
-				return null
-			value = nv
-		return DSLInteger.pooled(-value if neg else value)
+		var pr = DSLBigInt.from_digits(text, base, neg)
+		return DSLInteger.from_big(pr[0], pr[1])
 
 	## 返回字符的数字值 (0-9a-z), 非法字符返回 -1
 	func _digit_value(ch: String) -> int:
@@ -29946,6 +31176,13 @@ order (MRO) for bases %s" % ", ".join(names))
 		if arg is DSLBool:
 			return DSLFloat.new(1.0 if arg.value else 0.0)
 		if arg is DSLInteger:
+			# P0-13: 大数转 double (53 位半到偶舍入), 越界报 CPython 同文案
+			if arg.is_big():
+				var conv = DSLBigInt.mag_to_float(arg.big_neg, arg.big_limbs)
+				if not conv[0]:
+					raise_exception("OverflowError", "int too large to convert to float")
+					return null
+				return DSLFloat.new(conv[1])
 			return DSLFloat.new(float(arg.value))
 		if arg is DSLString:
 			var parsed = _parse_py_float(arg.value)
@@ -30070,6 +31307,26 @@ order (MRO) for bases %s" % ", ".join(names))
 		return DSLFloat.new(sign * result)
 
 	## 整数按 10^a 半到偶舍入 (a ≤ 18 走 int64 精确路径)
+	## 大数按 10^a 半到偶舍入 (P0-13, round(x, -a))
+	func _round_big_scaled(v: DSLInteger, a: int) -> DSLInteger:
+		# 幅值域半到偶舍入 (round(-x, n) == -round(x, n), CPython 对称), 符号原样保留
+		var pmag = DSLBigInt.big_pow(false, [10], a)
+		if pmag == null:
+			raise_exception("MemoryError: ", "")
+			return null
+		var vp = v._pair()
+		var dm = DSLBigInt.mag_divmod(vp[1], pmag[1])
+		var q_mag: Array[int] = dm[0]
+		var r_mag: Array[int] = dm[1]
+		var half = DSLBigInt.mag_shr(pmag[1], 1)[0]
+		var cmp = DSLBigInt.mag_cmp(r_mag, half)
+		var bump = cmp > 0 or (cmp == 0 and not q_mag.is_empty() and (q_mag[0] & 1) == 1)
+		if bump:
+			q_mag = DSLBigInt.mag_add(q_mag, [1])
+		# 结果 = (可能进位的商) × 10^a, 符号随原值
+		var scaled = DSLBigInt.mul(vp[0], q_mag, false, pmag[1])
+		return DSLInteger.from_big(scaled[0], scaled[1])
+
 	func _round_int_scaled(iv: int, a: int) -> int:
 		var sign = 1 if iv >= 0 else -1
 		var v = abs(iv)
@@ -30112,10 +31369,12 @@ order (MRO) for bases %s" % ", ".join(names))
 			elif args[1] is DSLFloat:
 				n = int(args[1].value)
 		if val is DSLInteger:
-			# 整数入参: n >= 0 原样返回, n < 0 按 10^|n| 半到偶舍入
+			# 整数入参: n >= 0 原样返回, n < 0 按 10^|n| 半到偶舍入 (P0-13: 大数走大数舍入)
 			if n >= 0:
-				return DSLInteger.pooled(val.value)
-			return DSLInteger.pooled(_round_int_scaled(val.value, -n))
+				return val
+			if not val.is_big() and -n <= 18:
+				return DSLInteger.pooled(_round_int_scaled(val.value, -n))
+			return _round_big_scaled(val, -n)
 		if not (val is DSLFloat):
 			raise_exception("TypeError", "type %s doesn't define __round__ method" % val._type_name())
 			return null
@@ -30131,12 +31390,9 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception("OverflowError", "cannot convert float infinity to integer")
 			return null
 		if not has_ndigits:
+			# P0-13: 精确整数结果 (原 int64 越界报错被取代)
 			var rf = _round_float_scaled(num, 0)
-			var iv = int(rf.value)
-			if rf.value >= 9223372036854775807.0 or rf.value <= -9223372036854775808.0:
-				raise_exception("OverflowError", "integer result exceeds 64-bit range")
-				return null
-			return DSLInteger.pooled(iv)
+			return DSLObject._int_from_float_exact(rf.value)
 		return _round_float_scaled(num, n)
 
 	## input(prompt) - 读取用户输入
@@ -30664,7 +31920,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if arg is DSLBool:
 			return DSLInteger.pooled(1 if arg.value else 0)
 		if arg is DSLInteger:
-			return DSLInteger.pooled(arg.value)
+			return arg
 		if arg is DSLFloat:
 			if is_nan(arg.value):
 				raise_exception("ValueError", "cannot convert float NaN to integer")
@@ -30672,10 +31928,8 @@ order (MRO) for bases %s" % ", ".join(names))
 			if is_inf(arg.value):
 				raise_exception("OverflowError", "cannot convert float infinity to integer")
 				return null
-			if arg.value >= 9223372036854775808.0 or arg.value < -9223372036854775808.0:
-				raise_exception("OverflowError", "integer result exceeds 64-bit range")
-				return null
-			return DSLInteger.pooled(int(arg.value))
+			# P0-13: 向零截断的精确大数转换 (原 int64 越界报错被取代)
+			return DSLObject._int_from_float_exact(arg.value)
 		if arg is DSLString:
 			return _parse_int_with_base(arg.value, 10)
 		# 用户类 __int__ / __index__ 协议 (与 __len__ 同一桥接模式)
@@ -30726,6 +31980,13 @@ order (MRO) for bases %s" % ", ".join(names))
 		if arg is DSLBool:
 			return DSLFloat.new(1.0 if arg.value else 0.0)
 		if arg is DSLInteger:
+			# P0-13: 大数转 double, 越界报 OverflowError
+			if arg.is_big():
+				var convf = DSLBigInt.mag_to_float(arg.big_neg, arg.big_limbs)
+				if not convf[0]:
+					raise_exception("OverflowError", "int too large to convert to float")
+					return null
+				return DSLFloat.new(convf[1])
 			return DSLFloat.new(float(arg.value))
 		if arg is DSLString:
 			var parsed = _parse_py_float(arg.value)
@@ -30777,6 +32038,10 @@ order (MRO) for bases %s" % ", ".join(names))
 		if call_args.size() == 1:
 			var raw = DSLObject._unwrap_dsl(call_args[0])
 			if raw is DSLInteger:
+				# P0-13: 分配长度为索引位 (CPython Py_ssize_t 同构)
+				if (raw as DSLInteger).is_big():
+					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
+					return null
 				for i in range(maxi(raw.value, 0)):
 					out.append(0)
 				return DSLByteArray.new(out)
@@ -30905,6 +32170,10 @@ order (MRO) for bases %s" % ", ".join(names))
 			var arg = args[1]
 			var raw = arg._wrapped if arg._wrapped != null else arg
 			if raw is DSLInteger:
+				# P0-13: 分配长度为索引位 (CPython Py_ssize_t 同构)
+				if (raw as DSLInteger).is_big():
+					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
+					return null
 				for i in range(maxi(raw.value, 0)):
 					out.append(0)
 			elif raw is DSLBytes:

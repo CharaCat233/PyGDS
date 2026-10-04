@@ -1214,9 +1214,35 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 
 ### type_int_overflow
 
-- 职责: 64 位整数边界、移位与溢出报错类型
+- 职责: 整数边界、移位与负指数幂语义 (P0-13 后溢出报错已被自动升级取代, 本例改为双端一致断言)
 - 比对: `same_output`
 - 源文件: [ci/cases/type_int_overflow.py](../../ci/cases/type_int_overflow.py)
+
+### type_int_big
+
+- 职责: 任意精度 int 运算矩阵与快慢路径混合 (P0-13): 字面量升级、增强赋值、bool 共享路径、与 float 的精确比较、divmod 符号、大数模幂、真除越界
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_big.py](../../ci/cases/type_int_big.py)
+
+### type_int_big_bits
+
+- 职责: 任意精度 int 的负数位运算 (无限二补数)、跨 limb 移位、右移向负无穷取整、CPython 模 2^61-1 哈希、大数字典/集合键、进制串与位方法
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_big_bits.py](../../ci/cases/type_int_big_bits.py)
+
+### type_int_big_convert
+
+- 职责: 任意精度 int 的字面量形态 (进制/下划线) 与转换: int() 串转 (按进制大数累加)、float 截断的精确十进制展开、round 大数半到偶、float() 越界 OverflowError、to_bytes
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_big_convert.py](../../ci/cases/type_int_big_convert.py)
+
+### type_int_big_index
+
+- 职责: 任意精度 int 在索引位的收敛 (CPython Py_ssize_t 同构): 下标 IndexError、切片分量钳制、重复计数/宽度/chr/bytes 的 OverflowError、巨移位 too many digits、to_bytes 长度不足
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_big_index.py](../../ci/cases/type_int_big_index.py)
+
+说明: `range(10**30)` 在 CPython 中惰性构造成功, PyGDS 的 range 参数按索引位收敛为 int64 报 `OverflowError`, 属已文档化限制 (usage.md 与已知问题清单同步)。
 
 ### type_list
 
@@ -1513,6 +1539,30 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: 类定义、类变量与类方法/静态方法
 - 比对: `same_output`
 - 源文件: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
+
+### class_body_methods
+
+- 职责: 类体方法组装即时性 (P0-25): def 语句即时完成 method_type 组装与装饰器链, property / setter / deleter / classmethod / staticmethod 语义, `Class.method` 限定名, `__set_name__` → `__init_subclass__` 次序, 类与方法装饰器, super 定位
+- 比对: `same_output`
+- 源文件: [ci/cases/class_body_methods.py](../../ci/cases/class_body_methods.py)
+
+### class_body_scope
+
+- 职责: 类体作用域细则 (P0-25): 方法闭包跳过类作用域（方法体不可见类体名字, 嵌套类同）, 方法默认参数与类体推导式定义期可读类体变量, 嵌套类绑定, 类体 nonlocal（跳过类作用域找函数绑定）, walrus 落类字典
+- 比对: `same_output`
+- 源文件: [ci/cases/class_body_scope.py](../../ci/cases/class_body_scope.py)
+
+### class_body_statements
+
+- 职责: 类体完整语句执行 (P0-25): 表达式调用副作用, if / for / while 流控与绑定, 增强赋值, del, try / except / finally, import, 注解求值入 `__annotations__`, global 写模块全局, 断言, match
+- 比对: `same_output`
+- 源文件: [ci/cases/class_body_statements.py](../../ci/cases/class_body_statements.py)
+
+### class_body_suspend
+
+- 职责: 类体挂起重放 (P0-25): 类体内 sleep 挂起后已完成语句副作用不重复, 循环 / try / with / 生成器消费器在类体内挂起, 函数内类体与基类求值重放, 类体在生成器函数内按步执行
+- 比对: `same_output`
+- 源文件: [ci/cases/class_body_suspend.py](../../ci/cases/class_body_suspend.py)
 
 ### class_binding_errors
 

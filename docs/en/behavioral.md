@@ -1214,9 +1214,35 @@ Pragmatic support covers one-dimensional B-format views only; bytes-backed views
 
 ### type_int_overflow
 
-- Responsibility: 64-bit integer boundaries, shifts and overflow error types
+- Responsibility: integer boundaries, shifts and negative-exponent power semantics (after P0-13 the overflow errors are replaced by automatic promotion; this case asserts dual-end identical results)
 - Comparison: `same_output`
 - Source: [ci/cases/type_int_overflow.py](../../ci/cases/type_int_overflow.py)
+
+### type_int_big
+
+- Responsibility: arbitrary-precision int operation matrix with mixed fast/slow paths (P0-13): literal promotion, augmented assignment, bool shared paths, exact comparison with float, divmod signs, big modular exponentiation, truediv overflow
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_big.py](../../ci/cases/type_int_big.py)
+
+### type_int_big_bits
+
+- Responsibility: arbitrary-precision int negative bitwise ops (infinite two's complement), cross-limb shifts, floor-toward-negative-infinity right shift, CPython mod 2^61-1 hashing, big dict/set keys, base strings and bit methods
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_big_bits.py](../../ci/cases/type_int_big_bits.py)
+
+### type_int_big_convert
+
+- Responsibility: arbitrary-precision int literal forms (bases/underscores) and conversions: int() string parsing (per-base big accumulation), exact decimal expansion for float truncation, round half-to-even on bigs, float() overflow, to_bytes
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_big_convert.py](../../ci/cases/type_int_big_convert.py)
+
+### type_int_big_index
+
+- Responsibility: arbitrary-precision int convergence at index positions (CPython Py_ssize_t isomorphism): subscript IndexError, slice component clamping, repeat/width/chr/bytes OverflowError, huge shift too-many-digits, to_bytes short buffer
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_big_index.py](../../ci/cases/type_int_big_index.py)
+
+Note: `range(10**30)` constructs lazily in CPython, while PyGDS converges range arguments to int64 raising `OverflowError` — a documented limitation (see usage.md and the known-issues list).
 
 ### type_list
 
@@ -1513,6 +1539,30 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: Class definitions, class variables and class/static methods
 - Comparison: `same_output`
 - Source: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
+
+### class_body_methods
+
+- Responsibility: in-statement method assembly (P0-25): def statements complete method_type assembly and decorator chains immediately; property / setter / deleter / classmethod / staticmethod semantics; `Class.method` qualified names; `__set_name__` → `__init_subclass__` order; class and method decorators; super() positioning
+- Comparison: `same_output`
+- Source: [ci/cases/class_body_methods.py](../../ci/cases/class_body_methods.py)
+
+### class_body_scope
+
+- Responsibility: class-body scope rules (P0-25): method closures skip class scopes (method bodies cannot see class-body names, nested classes alike); method defaults and class-body comprehensions read class attributes at definition time; nested class binding; nonlocal in class bodies (skipping class scopes for function bindings); walrus landing in the class dict
+- Comparison: `same_output`
+- Source: [ci/cases/class_body_scope.py](../../ci/cases/class_body_scope.py)
+
+### class_body_statements
+
+- Responsibility: full class-body statement execution (P0-25): expression call side effects, if / for / while control flow and bindings, augmented assignment, del, try / except / finally, import, annotations into `__annotations__`, global writing module globals, assert, match
+- Comparison: `same_output`
+- Source: [ci/cases/class_body_statements.py](../../ci/cases/class_body_statements.py)
+
+### class_body_suspend
+
+- Responsibility: class-body suspension replay (P0-25): completed-statement side effects not repeated after in-body sleep suspension; loops / try / with / generator consumers suspending inside class bodies; class bodies inside functions and base-class evaluation replay; class bodies stepped inside generator functions
+- Comparison: `same_output`
+- Source: [ci/cases/class_body_suspend.py](../../ci/cases/class_body_suspend.py)
 
 ### class_binding_errors
 

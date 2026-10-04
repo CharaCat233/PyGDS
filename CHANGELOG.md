@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.5] - 2026-10-04
+
+本版合并交付两项 v0.8.0 排期的 P0 主任务（经使用者决定合并为一个版本）：P0-13 任意精度 int（消除与 CPython 的最大单项语义差异）与 P0-25 类体完整语句执行。实现期连带修复巨指数幂优先级解析偏差、除法零判断与大数分派次序、`_int_from_float_exact` 零值死循环等问题
+
+### 新增
+
+- **任意精度 int（P0-13）**：混合表示——`DSLInteger` 增加 `big` 字段（符号 + 32 位 limbs 小端幅值），int64 快路径零扰动，超界自动升级、落回可缩回（缩回走驻留池）。核心算法为纯静态函数组 `DSLBigInt`（加 / 减 / 乘 / Knuth 长除法 / 幂 / 无限二补数位运算 / 移位 / 进制串互转 / 53 位半到偶 double 转换 / CPython 模 2^61-1 哈希），中位乘积以基 2^16 数字化保证 int64 安全；正确性由 1614 例随机大数双端探针（含 int64 边界夹逼 / 全负 / 零）钉死。接入面：整数字面量（十进制与 2/8/16 进制，负号常量折叠）、全部算术与比较魔术方法（快路径回绕自动升级）、`DSLBool` 共享算术与位运算路径、`int()` 串转（按进制大数累加，原回绕报错撤销）与浮点截断（复用 P2-25 精确十进制展开）、`float()` 53 位半到偶舍入（越界报 CPython 同文案）、`round`（大数按 10^a 幅值域半到偶舍入）、`abs` / `hex` / `oct` / `bin` / `bit_length` / `bit_count` / `to_bytes`、`%` 格式化与 `str.format` 的整数转换、`divmod` / `sum` / 增强赋值经魔术方法自动继承、3 参 `pow` 大数模幂与扩展欧几里得模逆、字典 / 集合的大数键编码（`i:十进制串`，整值浮点键超 int64 同编码保证等值同键）
+- **索引位收敛（P0-13 决策点）**：按 CPython `Py_ssize_t` 同构收敛——直接下标超出报 `IndexError: cannot fit 'int' into an index-sized integer`（`_seq_index_int` 集中守卫，切片分量按 CPython 钳制语义不报错），序列重复计数与 `bytes(n)` 报 `OverflowError: cannot fit...`，`str` 宽度参数报 `Python int too large to convert to C ssize_t`，`expandtabs` / `chr()` 报 `C int` 形态，巨移位报 `too many digits in integer`；`range()` 参数按索引位收敛为 int64 报 `OverflowError`（既定限制：CPython 可惰性构造，见 usage 整数范围小节）；结果幅值超约 400 万二进制位报 `MemoryError`（已注册异常类，防宿主端不可控巨量分配）
+- **类体完整语句执行（P0-25）**：类体不再逐语句分发收集（原仅方法 / 嵌套类 / 类级赋值三形态，其余静默跳过），改为整块交给通用块执行器执行——表达式调用、if / for / while、增强赋值、del、try / except / finally、import、注解（入类 `__annotations__`）、global、nonlocal（跳类作用域搜索）、断言、match、walrus 等全部复用解释器既有语义，名字绑定落入类体作用域，执行完成后按 def 绑定名字收集为方法、其余收集为类属性；类体内 def 语句即时完成 method_type 组装与装饰器链（CPython 同序），方法闭包沿外层非类作用域链解析（方法体不可见类体名字，连带修正嵌套类方法可见外层类属性的既有偏差），限定名 `Class.method` 在 def 时补全；挂起重放经外层块帧 resume_info 恢复类体作用域与类骨架（class_stage = body / tail），基类求值与骨架重建在恢复轮跳过，类体内 sleep / with / 循环 / 生成器消费器挂起副作用不重复（探针实测）；`__set_name__` / `__init_subclass__` 钩子、限定名补全等固定钩子保留
+
+### 修复
+
+- **幂与一元负号的优先级（既有解析偏差，P0-13 显形）**：`-10 ** 30` 原被解析为 `(-10) ** 30`（一元负号先于幂折叠），CPython 文法为 `-(10 ** 30)`；一元操作数改为取完整 power 表达式，连带修正 `-10**30` 等大数结果的符号
+- **大数除法的零判断次序**：`magic_floordiv` / `magic_mod` / `magic_div` 的零判断先于大数分派执行，而大数形态 `value` 恒为 0，巨数除数被误判为零除；大数分派移到零判断之前
+- **`_int_from_float_exact` 零值死循环**：`_decompose_double` 的规格化循环对 0 不终止（既有函数依赖调用方先挡零），`round(0.5)` 等站点首次触达；入口补零值短路
+- **`int.__qualname__` 属性暴露**：`DSLFunction` 补 `__qualname__` 读取（P2-2 限定名的属性面，CPython 对齐）
+
+### 测试
+
+- 全量回归 **325/325** 通过（新增 8 例：`type_int_big` / `type_int_big_bits` / `type_int_big_convert` / `type_int_big_index` 与 `class_body_statements` / `class_body_scope` / `class_body_methods` / `class_body_suspend` 全部 `same_output`）；behavioral.md 中英同步（325 条）；usage.md 中英整数段改写、README 中英 P0 段同步（P0-13 / P0-25 条目移除）；已知问题清单移除 P0-13 并新登记 P0-NEW-1（range 参数索引位收敛）与 P1-72（类基类关键字参数）
+- 挂起套件 **24/24** 通过；大数 + 挂起重放探针与类体挂起探针实测通过（陷阱 #9）；lint_cases / lint_md / lint_gd 全部 0 问题；引擎 `SCRIPT ERROR` 保持 0；ObjectDB 无泄漏告警维持
+
 ## [0.8.0-alpha.4] - 2026-10-03
 
 本版完成 v0.8.0-alpha 的三项遗留能力并登记一项暂缓：括号化管理器列表（3.10 语法）、async generator（解除 alpha.2 的「async def 内 yield 拒绝」既定边界）与异常组完整运行时（P1-41，`except*` / `ExceptionGroup` / `BaseExceptionGroup`）；`contextlib` 经评估登记为暂不投入（P1-71）。实现期发现并修复 except 处理器体挂起后 `last_exception` 未清的既有缺口
