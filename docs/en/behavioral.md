@@ -1158,6 +1158,12 @@ Pragmatic support covers one-dimensional B-format views only; bytes-backed views
 - Comparison: `same_output`
 - Source: [ci/cases/type_ctor_args.py](../../ci/cases/type_ctor_args.py)
 
+### type_ctor_kwargs
+
+- Responsibility: remaining builtin type constructor kwargs and deque maxlen semantics (set/frozenset/slice keyword rejection and argument counting, explicit None iterable argument error, deque maxlen keyword and positional effectiveness / overflow trimming / type and negative and bignum validation / concatenation and repetition and augmented assignment keeping the cap / repr and read-only attribute and insert and ordered comparison)
+- Comparison: `same_output`
+- Source: [ci/cases/type_ctor_kwargs.py](../../ci/cases/type_ctor_kwargs.py)
+
 ### type_dict
 
 - Responsibility: `dict` construction and access/iteration/mutation methods
@@ -1446,6 +1452,30 @@ Equality between two OrderedDicts is key-order sensitive, while comparison again
 
 `version`/`version_info` are pinned to the aligned CPython 3.12 form (the platform value maps to the host OS, compared via membership); `sys.exit` raises `SystemExit` (a BaseException subclass); uncaught, PyGDS has no process-exit semantics and enters the error state
 
+### module_random_mt
+
+- Responsibility: MT19937 alignment of the random module (int-seed init_by_array path / random / randint / randrange / choice / shuffle / sample / uniform / gauss / getrandbits / getstate / setstate matching CPython sequences value by value, engine random source for no-arg seed, string-seed sha512 difference documented)
+- Comparison: `same_output`
+- Source: [ci/cases/module_random_mt.py](../../ci/cases/module_random_mt.py)
+
+### module_dynamic_eval
+
+- Responsibility: eval / exec / compile dynamic evaluation and globals / locals / vars / sys.modules (single-expression check and SyntaxError message / exec-mode code passthrough / code metadata / globals argument snapshot writeback / globals() live view and function-local locals snapshot / vars instance dict / dynamic top-level cannot suspend while functions defined via exec suspend normally)
+- Comparison: `same_output`
+- Source: [ci/cases/module_dynamic_eval.py](../../ci/cases/module_dynamic_eval.py)
+
+### module_user_import
+
+- Responsibility: user file `import` (sys.path resolution and module cache idempotency / member and `as` alias binding / `__name__` / class and function definitions inside modules / miss `ImportError`) and the CPython message for partially initialized modules on circular import (terminal error)
+- Comparison: `same_error`
+- Source: [ci/cases/module_user_import.py](../../ci/cases/module_user_import.py)
+
+### module_contextlib
+
+- Responsibility: the contextlib module (contextmanager decorator generator driving and exception injection / `generator didn't yield` / `didn't stop` / `didn't stop after throw()` / exception passthrough and suppression, closing, suppress with multiple exceptions and missed-type propagation, ExitStack callback ordering / enter_context / pop_all / close, nullcontext, suspend replay across generator sleep stages)
+- Comparison: `same_output`
+- Source: [ci/cases/module_contextlib.py](../../ci/cases/module_contextlib.py)
+
 ### module_collections
 
 - Responsibility: `Counter` counting and `defaultdict` factory defaults
@@ -1629,6 +1659,24 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: compile-time SyntaxError for duplicate class-header keywords (P1-72, CPython message `keyword argument repeated: k`)
 - Comparison: `same_error`
 - Source: [ci/cases/class_dup_kw.py](../../ci/cases/class_dup_kw.py)
+
+### comprehension_await
+
+- Responsibility: await inside comprehensions (element / key-value / condition / nested comprehension / first-clause iterable await legal within async functions, sync contexts report `asynchronous comprehension outside of an asynchronous function`, sleep suspend replay)
+- Comparison: `same_output`
+- Source: [ci/cases/comprehension_await.py](../../ci/cases/comprehension_await.py)
+
+### class_metaclass
+
+- Responsibility: custom metaclass mechanics (metaclass= `__new__` / `__init__` class-creation hooks with ns mutation writeback / `__call__` instance-creation override / metaclass methods and attributes resolved via type(cls) / instance attribute access not leaking through the metaclass / two-metaclass conflict / `__prepare__` call side effects / implicit `__module__` and `__qualname__` in the namespace)
+- Comparison: `same_output`
+- Source: [ci/cases/class_metaclass.py](../../ci/cases/class_metaclass.py)
+
+### class_builtin_init
+
+- Responsibility: user `__init__` of builtin type subclasses and constructor layering (mutable subclasses allocate empty in `__new__` and fill via init, immutable subclasses strictly consume args in `__new__` then still call init, init signature errors carry the `L.__init__` qualified name, subclass instance dicts and attribute access, set/deque/frozenset subclass repr with class name, deque via `super().__init__` forwarding, bool/range/slice/memoryview/NoneType not subclassable, suspend replay inside init without duplicated side effects); strict message for user `__iter__` returning a non-iterator (for / iter() / comprehension / list() / star expansion / sorted / genexp consumption share the message, `in` uses the argument-of-type message, suspend replay falls back leniently without looping)
+- Comparison: `same_output`
+- Source: [ci/cases/class_builtin_init.py](../../ci/cases/class_builtin_init.py)
 
 ### class_reflect_same_type
 

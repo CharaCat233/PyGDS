@@ -213,7 +213,7 @@ P2-45 (re-checked as a false positive), P2-46 (`%#o` and f-string `#` prefix lay
 
 | ID | Item | Details |
 | :--- | :--- | :--- |
-| D1 (was P2-1) | `random` sequences differ from CPython | PyGDS uses its own xorshift32 PRNG, so drawn values differ (argument type rules are aligned, and `seed()` makes sequences reproducible within PyGDS) — the own PRNG is an intentional choice guaranteeing internal reproducibility |
+| D1 (was P2-1) | `random` sequences differ from CPython | Aligned to MT19937 in alpha.8: int-seeded draw sequences match CPython value by value (`random` / `randint` / `randrange` / `choice` / `shuffle` / `sample` / `getrandbits` / `getstate` / `setstate` / `gauss` etc.); string-seeded sequences differ due to CPython's sha512 handling (documented difference) |
 | D2 (was P2-4) | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match (int hashing is aligned to modulo 2^61-1) |
 | D3 (was P2-40) | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
 | D4 (was P0-NEW-1) | `range()` arguments converge to int64 index width | CPython can lazily construct `range(10**30)`; PyGDS converges at construction and raises `OverflowError: Python int too large to convert to C ssize_t` (a convergence decision of the arbitrary-precision landing, see the integer-range section of usage) |

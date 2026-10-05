@@ -213,7 +213,7 @@ v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| D1（原 P2-1） | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现）——自有 PRNG 为有意选择，保证内部可复现性 |
+| D1（原 P2-1） | `random` 随机序列与 CPython 不同 | 已于 alpha.8 对齐 MT19937：int 种子的抽样序列与 CPython 逐值一致（`random` / `randint` / `randrange` / `choice` / `shuffle` / `sample` / `getrandbits` / `getstate` / `setstate` / `gauss` 等），字符串种子因 CPython 的 sha512 处理序列不同（文档化差异） |
 | D2（原 P2-4） | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致（int 哈希已对齐模 2^61-1） |
 | D3（原 P2-40） | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
 | D4（原 P0-NEW-1） | `range()` 参数按索引位收敛为 int64 | CPython 可惰性构造 `range(10**30)`，PyGDS 构造时收敛并报 `OverflowError: Python int too large to convert to C ssize_t`（任意精度落地的收敛决策，见 usage 整数范围小节） |

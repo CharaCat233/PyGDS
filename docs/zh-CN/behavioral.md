@@ -1158,6 +1158,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 比对: `same_output`
 - 源文件: [ci/cases/type_ctor_args.py](../../ci/cases/type_ctor_args.py)
 
+### type_ctor_kwargs
+
+- 职责: 残余内建类型构造器 kwargs 与 deque maxlen 语义 (set/frozenset/slice 拒绝关键字与个数校验, 可迭代初值显式 None 报错, deque 的 maxlen 关键字与位置参数生效 / 超限收敛 / 类型与负数与大数校验 / 拼接与重复与增强赋值保留上限 / repr 与只读属性与 insert 与有序比较)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_ctor_kwargs.py](../../ci/cases/type_ctor_kwargs.py)
+
 ### type_dict
 
 - 职责: `dict` 构造与取值/遍历/增删方法
@@ -1446,6 +1452,30 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 
 `version`/`version_info` 固定为对齐目标 CPython 3.12 的形态 (platform 值随宿主 OS 映射, 比对用成员判定), `sys.exit` 抛 `SystemExit` (BaseException 子类), 未捕获时 PyGDS 无进程退出语义, 进入错误终态
 
+### module_random_mt
+
+- 职责: random 模块的 MT19937 对齐 (int 种子 init_by_array 路径 / random / randint / randrange / choice / shuffle / sample / uniform / gauss / getrandbits / getstate / setstate 与 CPython 序列逐值一致, 无参种子引擎随机源, 字符串种子 sha512 差异文档化)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_random_mt.py](../../ci/cases/module_random_mt.py)
+
+### module_dynamic_eval
+
+- 职责: eval / exec / compile 动态求值与 globals / locals / vars / sys.modules (单表达式判定与 SyntaxError 文案 / exec-mode code 对象透传 / code 元数据 / globals 实参快照写回 / globals() 活视图与函数内 locals 快照 / vars 实例字典 / 动态代码顶层禁挂起而 exec 内定义的函数体挂起正常)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_dynamic_eval.py](../../ci/cases/module_dynamic_eval.py)
+
+### module_user_import
+
+- 职责: 用户文件 `import` (sys.path 解析与模块缓存幂等 / 成员与 `as` 别名绑定 / `__name__` / 模块内类与函数定义 / 未命中 `ImportError`) 及循环导入的部分初始化模块 CPython 文案 (终止报错)
+- 比对: `same_error`
+- 源文件: [ci/cases/module_user_import.py](../../ci/cases/module_user_import.py)
+
+### module_contextlib
+
+- 职责: contextlib 模块 (contextmanager 装饰器的生成器驱动与异常注入 / `generator didn't yield` / `didn't stop` / `didn't stop after throw()` / 异常穿透与抑制, closing, suppress 多异常与未命中传播, ExitStack 的 callback 栈序 / enter_context / pop_all / close, nullcontext, 生成器各阶段 sleep 挂起重放)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_contextlib.py](../../ci/cases/module_contextlib.py)
+
 ### module_collections
 
 - 职责: `Counter` 计数与 `defaultdict` 各工厂缺省
@@ -1629,6 +1659,24 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: 类头关键字参数重复的编译期 SyntaxError (P1-72, CPython 同文案 `keyword argument repeated: k`)
 - 比对: `same_error`
 - 源文件: [ci/cases/class_dup_kw.py](../../ci/cases/class_dup_kw.py)
+
+### comprehension_await
+
+- 职责: 推导式内 await (async 函数体内 list / dict / set 推导式的元素 / 键值 / 条件 / 嵌套推导式 / 首子句可迭代中的 await 合法, 同步上下文报 `asynchronous comprehension outside of an asynchronous function`, sleep 挂起重放)
+- 比对: `same_output`
+- 源文件: [ci/cases/comprehension_await.py](../../ci/cases/comprehension_await.py)
+
+### class_metaclass
+
+- 职责: 自定义元类机制 (metaclass= 的 `__new__` / `__init__` 建类钩子与 ns 修改回填 / `__call__` 定制实例化 / 元类方法与属性经 type(cls) 查找 / 实例属性不穿透元类 / 双元类 conflict / `__prepare__` 调用副作用 / 隐式 `__module__` 与 `__qualname__` 进 ns)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_metaclass.py](../../ci/cases/class_metaclass.py)
+
+### class_builtin_init
+
+- 职责: 内建类型子类的用户 `__init__` 与构造分层 (可变子类 `__new__` 纯分配由 init 填充, 不可变子类 `__new__` 严格消费实参后 init 仍调用, init 签名错误带 `L.__init__` 限定名, 子类实例字典与属性读写, set/deque/frozenset 子类 repr 带类名, deque 经 `super().__init__` 转发, bool/range/slice/memoryview/NoneType 不可继承, init 内挂起重放副作用不重复); 用户 `__iter__` 返回非迭代对象的严格文案 (for / iter() / 推导式 / list() / 星形展开 / sorted / genexp 消费同文案, in 的 argument of type 文案, 挂起消费下重放轮宽松回退不循环)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_builtin_init.py](../../ci/cases/class_builtin_init.py)
 
 ### class_reflect_same_type
 
