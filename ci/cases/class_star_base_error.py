@@ -73,3 +73,19 @@ def mk_star_class():
         pass
     return C.__name__
 try_build("star-class", mk_star_class)
+
+# int 基类: 胜出候选 int 按 (名字, 基类元组, 属性字典) 三参调用,
+# int 只收 2 参报 "int() takes at most 2 arguments (3 given)" (I2-58 文案对齐后入册)
+def mk_int_base():
+    class C(1):
+        pass
+    return "ok"
+try_build("int-base", mk_int_base)
+
+# str 基类: 胜出候选 str 三参调用走 encoding 类型校验,
+# 报 "str() argument 'encoding' must be str, not tuple" (I2-58 文案对齐后入册)
+def mk_str_base():
+    class C(*["abc"]):
+        pass
+    return "ok"
+try_build("str-base", mk_str_base)

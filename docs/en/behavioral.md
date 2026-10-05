@@ -266,6 +266,36 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_fstring_pep701.py](../../ci/cases/syntax_fstring_pep701.py)
 
+### syntax_future
+
+- Responsibility: `_Feature` binding for `from __future__` imports (repr tuple form / attributes / `as` aliases / multi-feature imports / docstring position exemption)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_future.py](../../ci/cases/syntax_future.py)
+
+### syntax_future_docstring
+
+- Responsibility: the docstring exemption covers only the first string statement, a future import after a second string statement raises the position error
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_future_docstring.py](../../ci/cases/syntax_future_docstring.py)
+
+### syntax_future_names
+
+- Responsibility: `all_feature_names` is a module inventory helper, not an importable feature (raises `future feature all_feature_names is not defined`)
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_future_names.py](../../ci/cases/syntax_future_names.py)
+
+### syntax_future_nested
+
+- Responsibility: a `from __future__` import nested inside a function body raises the position error as well
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_future_nested.py](../../ci/cases/syntax_future_nested.py)
+
+### syntax_future_position
+
+- Responsibility: a mid-file `from __future__` import raises `SyntaxError: from __future__ imports must occur at the beginning of the file`
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_future_position.py](../../ci/cases/syntax_future_position.py)
+
 ### syntax_generic
 
 - Responsibility: PEP 695 `type` aliases and generic class/function syntax acceptance
@@ -1122,6 +1152,12 @@ Pragmatic support covers one-dimensional B-format views only; bytes-backed views
 - Comparison: `same_output`
 - Source: [ci/cases/type_bytes_range.py](../../ci/cases/type_bytes_range.py)
 
+### type_ctor_args
+
+- Responsibility: builtin type constructor argument-count / keyword / base validation (int's `takes at most` counting message and `base` keyword, float/bool/list/tuple keyword rejection, indexability and the 0-or-2..36 legal domain of base, subclass constructors sharing the same validation)
+- Comparison: `same_output`
+- Source: [ci/cases/type_ctor_args.py](../../ci/cases/type_ctor_args.py)
+
 ### type_dict
 
 - Responsibility: `dict` construction and access/iteration/mutation methods
@@ -1303,6 +1339,12 @@ Note: `range(10**30)` constructs lazily in CPython, while PyGDS converges range 
 - Responsibility: `slice` object construction, attributes, indexing
 - Comparison: `same_output`
 - Source: [ci/cases/type_slice.py](../../ci/cases/type_slice.py)
+
+### type_str_decode
+
+- Responsibility: the `str(object, encoding, errors)` decoding path (bytes and bytearray decoding / str input rejection / bytes-like message / encoding and errors type validation / argument counting and name-position duplicate binding / subclass decoding)
+- Comparison: `same_output`
+- Source: [ci/cases/type_str_decode.py](../../ci/cases/type_str_decode.py)
 
 ### type_str_format
 
@@ -1596,7 +1638,7 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 
 ### class_star_base_error
 
-- Responsibility: metaclass-candidate resolution and call messages for non-class bases (CPython uses the base value's type as a metaclass candidate, the winner is invoked with three arguments producing its own message; direct and star forms agree, mixing class and non-class bases or distinct candidates raises `metaclass conflict` without calling, a non-callable explicit metaclass reports the call error first; a star-unpacked genuine class base still builds normally)
+- Responsibility: metaclass-candidate resolution and call messages for non-class bases (CPython uses the base value's type as a metaclass candidate, the winner is invoked with three arguments producing its own message; direct and star forms agree, mixing class and non-class bases or distinct candidates raises `metaclass conflict` without calling, a non-callable explicit metaclass reports the call error first; a star-unpacked genuine class base still builds normally; int and str bases report their type-specialized messages)
 - Comparison: `same_output`
 - Source: [ci/cases/class_star_base_error.py](../../ci/cases/class_star_base_error.py)
 

@@ -266,6 +266,36 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_fstring_pep701.py](../../ci/cases/syntax_fstring_pep701.py)
 
+### syntax_future
+
+- 职责: `from __future__` 导入的 `_Feature` 绑定 (repr 三元组形态 / 属性 / as 别名 / 多特性一次导入 / 文档字符串位置豁免)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_future.py](../../ci/cases/syntax_future.py)
+
+### syntax_future_docstring
+
+- 职责: 文档字符串豁免仅对首个字符串语句成立, 第二个字符串语句之后的 future 导入报位置错误
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_future_docstring.py](../../ci/cases/syntax_future_docstring.py)
+
+### syntax_future_names
+
+- 职责: `all_feature_names` 是模块清单辅助而非可导入特性 (报 `future feature all_feature_names is not defined`)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_future_names.py](../../ci/cases/syntax_future_names.py)
+
+### syntax_future_nested
+
+- 职责: 嵌套于函数体内的 `from __future__` 导入同样报位置错误
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_future_nested.py](../../ci/cases/syntax_future_nested.py)
+
+### syntax_future_position
+
+- 职责: 文件中部 `from __future__` 导入报 `SyntaxError: from __future__ imports must occur at the beginning of the file`
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_future_position.py](../../ci/cases/syntax_future_position.py)
+
 ### syntax_generic
 
 - 职责: PEP 695 `type` 别名与泛型类/函数语法接受
@@ -1122,6 +1152,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 比对: `same_output`
 - 源文件: [ci/cases/type_bytes_range.py](../../ci/cases/type_bytes_range.py)
 
+### type_ctor_args
+
+- 职责: 内建类型构造器参数个数 / 关键字 / base 校验 (int 的 `takes at most` 计数文案与 `base` 关键字, float/bool/list/tuple 拒绝关键字参数, base 可索引化与合法域 0 或 2..36, 子类构造共享同一校验)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_ctor_args.py](../../ci/cases/type_ctor_args.py)
+
 ### type_dict
 
 - 职责: `dict` 构造与取值/遍历/增删方法
@@ -1303,6 +1339,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 职责: `slice` 对象构造/属性/索引
 - 比对: `same_output`
 - 源文件: [ci/cases/type_slice.py](../../ci/cases/type_slice.py)
+
+### type_str_decode
+
+- 职责: `str(object, encoding, errors)` 编码解码路径 (bytes 与 bytearray 解码 / str 输入拒绝 / bytes-like 文案 / encoding 与 errors 类型校验 / 参数个数与名称位置重复绑定 / 子类解码)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_str_decode.py](../../ci/cases/type_str_decode.py)
 
 ### type_str_format
 
@@ -1596,7 +1638,7 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 
 ### class_star_base_error
 
-- 职责: 非类基类的元类候选解析与调用文案 (CPython 以基类类型作元类候选, 胜出者按三参调用报自身文案; 直接/星参形态一致, 混排与多候选、显式 metaclass 并存报 `metaclass conflict`, 非可调用元类先报调用错误; 星参真类基类正常建类)
+- 职责: 非类基类的元类候选解析与调用文案 (CPython 以基类类型作元类候选, 胜出者按三参调用报自身文案; 直接/星参形态一致, 混排与多候选、显式 metaclass 并存报 `metaclass conflict`, 非可调用元类先报调用错误; 星参真类基类正常建类; int / str 基类报各自类型特化文案)
 - 比对: `same_output`
 - 源文件: [ci/cases/class_star_base_error.py](../../ci/cases/class_star_base_error.py)
 

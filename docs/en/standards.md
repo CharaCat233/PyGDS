@@ -118,26 +118,26 @@ Git commit messages should satisfy the following rules
 2. On release, rename `Unreleased` to the concrete version number and date (for example `## [1.2.0] - 2024-06-01`), then recreate an empty `## [Unreleased]` at the top
 3. Follow the Keep a Changelog and Semantic Versioning conventions as much as possible (see the `CHANGELOG.md` document for versions)
 
-### Known Issues List
+### Differences List
 
-The [Known Issues List](issues.md) document should satisfy the following rules
+The [Differences List](differences.md) document should satisfy the following rules
 
-***Issue Summary Table***
+***Entry Summary Table***
 
-Its rules are written at the top of the corresponding section (see [Issue Summary Table](./issues.md#issue-summary-table)); below is an example row of the table
+Its rules are written at the top of the corresponding section (see [Entry Summary Table](./differences.md#entry-summary-table)); below is an example row of the table
 
 ```markdown
 | ID | Status | Date | Version | Brief Description |
 | :--- | :--- | :--- | :--- | :--- |
-| [P0-0](#p0-0-example-issue) | Won't fix | 2026-09-29 | `v0.6.0-alpha.1` | Brief description of the issue |
+| [I2-0](#i2-0-example-issue) | Deferred | 2026-09-29 | `v0.6.0-alpha.1` | Brief description of the issue |
 ```
 
-***Issue Section Format***
+***Entry Section Format***
 
-Issue sections should be written following the sample below
+Entry sections should be written following the sample below
 
 ````markdown
-### P0-0 Example Issue
+### I2-0 Example Issue
 
 ***Brief Description***
 

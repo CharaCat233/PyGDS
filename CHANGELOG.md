@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.7] - 2026-10-05
+
+本版为文档与修复混合版本：差异清单体系重构（Issue / Design / Platform 三系），I2-58（`int()` / `str()` 等内建类型构造器对齐）与 I2-41（`from __future__` 对齐）修复，并完成推导式内 await 的可行性评估（结论：急切推导式可实现待排期，genexp 异步生成器与 `async for` 子句维持既定边界）
+
+### 文档
+
+- **差异清单体系重构**：原「已知问题清单」（`docs/*/issues.md`，空模板）退役，新建 `docs/zh-CN/differences.md` 与英文版，按「差异由谁决定」判据分三系——Issue（I 编号，语言核心对齐缺口，按优先级 0 / 1 / 2 分级）、Design（D 编号，有意的替代模型）、Platform（P 编号，宿主平台限制）；开放条目改标新系编号（原 P1-8 → I1-8 等），原 P2-1 / P2-4 / P2-40 / P0-NEW-1 转为 D1 ~ D4，原 P2-27 / P2-52 与两条平台限制（NUL 字符、`\N` 名称表）并入 P1 ~ P4，原 P 编号全部退役不复用；新登记 I2-58（`int()` / `str()` 等类型的三参调用文案），补回 I2-43（v0.7.0-alpha.9 回退登记）
+- `standards.md` 中英的「已知问题清单」节改写为「差异清单」节（名称、链接、表格样例与条目章节样例同步新编号）；`README` 中英「已知问题与限制」节重构为「已知差异与限制」三系结构并收录 I2-58 条目，详细文档索引表收录差异清单；本地工作清单同步三系重组
+
+### 修复
+
+- **内建类型构造器的参数个数与类型特化文案（I2-58）**：`int` 的参数个数文案改为 CPython 的 `int() takes at most 2 arguments (N given)` 计数形态（N 为位置与关键字实参合计，主类与子类构造共享）；`str` 按其真实语义改造——`str(object, encoding, errors)` 在 CPython 是编码解码路径而非三参报错：encoding / errors 给定即须为 `str`（显式 `None` 同样拒绝，报 `str() argument 'encoding' must be str, not X`），str 输入报 `decoding str is not supported`，bytes / bytearray 输入复用 `bytes.decode` 机制解码成功（同错误通道：`UnicodeDecodeError` / `LookupError: unknown encoding`），其余类型报 `decoding to str: need a bytes-like object, X found`，未给待转换值时直接返回空串（CPython 同），4 参报 `str() takes at most 3 arguments (N given)`，同名参数以名称与位置重复给定报 `argument for str() given by name ('encoding') and position (2)`；子类构造共享同一校验，str 子类解码结果携带子类标记（`type(S(b"ab", "utf-8"))` 为 `S`，CPython 同）
+- **内建类型构造器的关键字参数静默忽略（I2-58 连带，静默错值级）**：原实现静默忽略关键字参数——`int("ff", base=16)` 返回 11 而非 CPython 的 255、`int("11", 2.5)` 按 base 2 解析而 CPython 报 `'float' object cannot be interpreted as an integer`、`str(object=5)` 返回空串等；修复：`int` 支持 `base` 关键字（与位置 base 合计计数、未知关键字报 `'x' is an invalid keyword argument for int()`、base 给定而无待转换值报 `int() missing string argument`、base 须经索引化收敛仅接受 int / bool 且大数 base 报 range 文案，`_parse_int_with_base` 合法域修正为 0 或 2..36 补上 base 1 漏洞）、`str` 支持 `object` / `encoding` / `errors` 关键字（未知关键字与重复绑定报 CPython 同文案）、`float` / `bool` / `list` / `tuple` 按 CPython 报 `X() takes no keyword arguments`（子类用户 `__init__` 覆写时 kwargs 转交 init 不拒绝，CPython 同）；list / tuple / float / bool 子类的多余位置参数补个数校验（`list expected at most 1 argument, got 2` 等，CPython 子类同报）
+- **`from __future__` 的位置报错与 `_Feature` 绑定（I2-41）**：①解析期位置检查——文档字符串 / 注释 / 空行 / 其他 future 导入以外的语句先行后，`from __future__ import ...` 报 CPython 同文案 `SyntaxError: from __future__ imports must occur at the beginning of the file`（锁定先于语句体解析使 def / class / if 体内嵌套形态同样报错；位置错误先于特性名错误，`braces` 的 `not a chance` 与星号导入文案仅在文件头部形态触发；文档字符串豁免仅首个纯字符串字面量语句成立，bytes 与 f-string 形态不算，相邻字符串字面量合并后算）；②执行期绑定 `_Feature` 形态对象——导入后特性名绑定 `_Feature` 实例（repr 对齐 CPython 文本 `_Feature((3, 7, 0, 'beta', 1), None, 16777216)`，构造器参数序按 CPython 为可选版本 / 强制版本 / 编译器标志，`mandatory` / `optional` / `compiler_flag` 属性可访问，`type()` 返回内部 `_Feature` 类，不进全局命名空间），`as` 别名按别名绑定，同一特性复用同一实例；③`all_feature_names` 是模块清单辅助而非可导入特性，从合法特性名表移除（报 `future feature all_feature_names is not defined`）
+
+### 测试
+
+- 新增 7 例：`type_str_decode`（str 编码解码路径全形态）与 `type_ctor_args`（构造器个数 / 关键字 / base 校验全形态）`same_output`，`syntax_future`（`_Feature` 绑定与 repr / 属性 / 别名 / 文档字符串豁免）`same_output` 与 `syntax_future_position` / `syntax_future_nested` / `syntax_future_docstring` / `syntax_future_names`（位置与特性名报错四形态）`same_error`；`class_star_base_error` 补 int / str 基类两形态（胜出候选三参调用报各自类型特化文案）；behavioral.md 中英同步（339 条）；已知问题清单移除 I2-58 / I2-41，新登记 I1-73（内建类型子类用户 `__init__` 覆写不被调用）与 I2-59（残余内建类型构造器 kwargs 静默忽略）
+- 全量回归 **339/339** 通过（0 跳过）；挂起套件 24/24 通过；lint 三件套 0 问题；引擎 SCRIPT ERROR 保持 0；ObjectDB 无泄漏告警维持；任意精度核心随机向量探针 1614/1614 通过
+
 ## [0.8.0-alpha.6] - 2026-10-05
 
 本版为语法层收尾小版本：类定义基类关键字参数（P1-72，PEP 487 的 kw 转发形态）与 `@` 矩阵乘运算符（P2-16），并在同一版本内完成四项 P2 修复（P2-57 / P2-42 / P2-56 / P2-37）

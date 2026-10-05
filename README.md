@@ -173,55 +173,59 @@ dsl.run()
 >
 > **⚠️ 破坏性变更（v0.8.0-alpha.1）**：`with` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；若旧代码以 `with` 命名变量，需改名
 >
-> 已知的行为差异与功能缺失（含 `yield` 恢复重复求值、`send` / `throw` 不转发、多重赋值目标、用户类迭代协议等）已移至下方「已知问题与限制」章节
+> 已知的行为差异与功能缺失（含 `yield` 恢复重复求值、`send` / `throw` 不转发、多重赋值目标、用户类迭代协议等）已移至下方「已知差异与限制」章节
 
 ---
 
-## 已知问题与限制
+## 已知差异与限制
 
-以下列出 PyGDS 当前与 CPython 不一致、或尚未实现的行为。**P0 = 静默错值**（最危险，优先修复）、**P1 = 明确报错或功能缺失**、**P2 = 边缘差异**
+以下列出 PyGDS 当前与 CPython 的已知差异与限制，按成因分为三系：**Issue（I 编号，语言核心对齐缺口）**、**Design（D 编号，有意的替代模型）**、**Platform（P 编号，宿主平台限制）**，编号规则与完整清单见 [差异清单](docs/zh-CN/differences.md)。Issue 按优先级分级：**I0 = 静默错值**（最危险，优先修复）、**I1 = 明确报错或功能缺失**、**I2 = 边缘差异**；开放条目的编号已于 v0.8.0-alpha.7 起改标（如原 P1-8 → I1-8、原 P2-1 → D1）
 
-### P0 — 静默错值
+### 优先级 0（I0，静默错值）
 
 v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节；v0.7.0-alpha.7 审计新发现的 P1-68（增强赋值 `&=` `^=` `<<=` `>>=`）、P1-69（dict 视图集合运算）、P1-70（旧式迭代的 `in` 判定）已在 v0.7.0-alpha.8 修复。P0-13（整数超出 int64 范围静默环绕）已在 v0.6.0-alpha.7 修复为明确报 `OverflowError`，并在 v0.8.0-alpha.5 升级为**任意精度整数**：算术与转换超界自动升级大数、落回可缩回，`hash(int)` 对齐 CPython 的模 `2^61-1` 算法，与 CPython 的 `int` 语义一致；仍保留索引位边界（下标 / 重复计数 / `chr` / `bytes(n)` / `range` 参数等按 CPython `Py_ssize_t` 同构报错）与性能上限（万位十进制数字内流畅），详见 `docs/zh-CN/usage.md` 的整数范围小节。v0.7.0-alpha.7 全项目审计新发现的两条 P0 已在 v0.7.0-alpha.8 修复：P0-28（`nonlocal` 声明的绑定搜索死循环——跨多级闭包链时解释器挂死）、P0-29（跨容器类型相等语义：`[1] == (1,)` 曾判 `True`）。既定限制（经评估暂缓）：P0-25（类体仅支持方法、嵌套类与类级赋值三种语句形态）已在 v0.8.0-alpha.5 修复：类体作为完整代码块整块执行，表达式调用、if / for / while、增强赋值、del、try、import、注解等全部生效，名字绑定落入类字典，方法组装与 `__set_name__` / `__init_subclass__` 钩子次序、类体内挂起重放均与 CPython 对齐
 
-### P1 — 明确报错或功能缺失
+### 优先级 1（I1，明确报错或功能缺失）
 
-下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**；P1-33（`raise ... from` 异常链）、P1-34（任意装饰器与带参装饰器）、P1-35（`__name__`）、P1-39（泛型类型参数语法）已在 v0.6.0-alpha.3 修复；P1-40（f-string 同引号嵌套，PEP 701）已在 v0.6.0-alpha.4 修复；P1-42（类的多继承）已在 v0.6.0-alpha.5 修复；P0-14（`and` / `or` 短路）、P0-15（增强赋值静默终止）、P0-16（`del` 括号元组目标）、P1-36（`...` 字面量）、P1-37（`collections.namedtuple`）、P1-44（反射运算符）、P1-45（类体作用域）、P1-46（property 内 `super()`）、P1-47（用户自定义描述符）、P1-48（`min` / `max` 的 `default`）、P1-49（`__getitem__` 旧式迭代）已在 v0.6.0-alpha.6 修复；P1-7（`with` 语句与上下文管理器协议，含挂起重放的进入标记）已在 v0.8.0-alpha.1 实现；P1-9（`async` / `await`，方案 C 协程对象模拟，含 `aiter` / `anext` 内建）已在 v0.8.0-alpha.2 实现并附既定边界（`yield from` 与推导式内 await 不支持、`import asyncio` 不可用）；P1-41（`except*` 异常组）已在 v0.8.0-alpha.4 实现（括号化管理器列表与 async generator 一并落地，`contextlib` 经评估登记为 P1-71 暂不投入），详见 `CHANGELOG` 的对应版本节
-
-| 编号 | 问题 | 说明 |
-| :--- | :--- | :--- |
-| P1-8 | 用户文件 `import` 不支持 | 经评估暂缓：当前嵌入式单文件场景内无实现价值（非难度问题）；共享代码请使用 `set_preset_script` 与 API 注册。仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time / sys） |
-| P1-32 | 内建函数缺口残余 | `eval` / `exec` / `compile`（动态求值，与挂起重放机制纠缠）、`globals` / `locals` / `vars`（作用域字典，与单解释器模型冲突）暂不投入；`aiter` / `anext` 已随 v0.8.0-alpha.2 的异步任务实现 |
-| P1-38 | `metaclass=` 参数不支持 | 类头的元类关键字参数在解析期报语法错误（CPython 语法合法），暂不投入 |
-| P1-71 | `contextlib` 模块不支持 | 纯工具性封装（`contextmanager` / `closing` / `suppress` / `ExitStack` 等），用户类直接实现 `__enter__` / `__exit__`（或异步协议）可等价替代；`import contextlib` 报 `ImportError`，暂不投入 |
-
-### P2 — 边缘差异
+下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**；P1-33（`raise ... from` 异常链）、P1-34（任意装饰器与带参装饰器）、P1-35（`__name__`）、P1-39（泛型类型参数语法）已在 v0.6.0-alpha.3 修复；P1-40（f-string 同引号嵌套，PEP 701）已在 v0.6.0-alpha.4 修复；P1-42（类的多继承）已在 v0.6.0-alpha.5 修复；P0-14（`and` / `or` 短路）、P0-15（增强赋值静默终止）、P0-16（`del` 括号元组目标）、P1-36（`...` 字面量）、P1-37（`collections.namedtuple`）、P1-44（反射运算符）、P1-45（类体作用域）、P1-46（property 内 `super()`）、P1-47（用户自定义描述符）、P1-48（`min` / `max` 的 `default`）、P1-49（`__getitem__` 旧式迭代）已在 v0.6.0-alpha.6 修复；P1-7（`with` 语句与上下文管理器协议，含挂起重放的进入标记）已在 v0.8.0-alpha.1 实现；P1-9（`async` / `await`，方案 C 协程对象模拟，含 `aiter` / `anext` 内建）已在 v0.8.0-alpha.2 实现并附既定边界（`yield from` 与推导式内 await 不支持、`import asyncio` 不可用）；P1-41（`except*` 异常组）已在 v0.8.0-alpha.4 实现（括号化管理器列表与 async generator 一并落地，`contextlib` 经评估登记为 P1-71 暂不投入）；P1-72（类定义基类关键字参数，PEP 487 的 kw 转发形态）已在 v0.8.0-alpha.6 实现，详见 `CHANGELOG` 的对应版本节
 
 | 编号 | 问题 | 说明 |
 | :--- | :--- | :--- |
-| P2-1 | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现） |
-| P2-4 | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致 |
-| P2-16 | `@` 矩阵乘运算符语法不接受 | `1 @ 2` 在 CPython 中语法合法（运行时报 `TypeError`），PyGDS 在解析期报语法错误；纯 Python 语义下无实际用途，暂不投入 |
-| P2-27 | Godot 字符串↔浮点转换的极端精度边界 | 部分难例不做正确舍入（如 `9007199254740993.0` 字面量解析），源自宿主层字符串解析器，暂不投入 |
-| P2-37 | `it.close()` 的参数值在子生成器 `finally` 完成前返回 | 仅行序差异，最终输出行集合一致（挂起恢复的异步续做模型） |
-| P2-38 | 生成器对象被丢弃时不执行 `finally` 清理 | CPython 依赖引用计数回收时隐式 `close()`；PyGDS 无宿主 finalizer 语义，需显式 `close()` |
-| P2-40 | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
-| P2-41 | `from __future__` 的对齐边界 | 文件中部导入 CPython 报错而 PyGDS 接受；CPython 绑定 `_Feature` 对象而 PyGDS 不绑定名字（no-op 对齐的边界，接受即忽略） |
-| P2-42 | 类创建的非类星参基类错误文案 | `class C(*[1])` CPython 报元类路径文案（如 `int() takes at most 2 arguments (3 given)`），PyGDS 报 `all bases must be classes`（双方均为 `TypeError`） |
-| P2-43 | `__iter__` 返回非迭代对象的错误文案 | 部分形态报 `'X' object is not iterable` 而非 CPython 的 `iter() returned non-iterator of type '...'`（严格文案与挂起重放机制冲突，已回退） |
-| P2-52 | 深递归叠加深表达式可能触及引擎 VM 调用栈硬上限（2048 帧 GDScript 帧），引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`） | alpha.9 测量 P2-50 时发现；PyGDS 的 `MAX_CALL_DEPTH=256` 只约束调用深度，表达式求值/解析的 GDScript 帧深不受其约束 |
+| I1-8 | 用户文件 `import` 不支持 | 经评估暂缓：当前嵌入式单文件场景内无实现价值（非难度问题）；共享代码请使用 `set_preset_script` 与 API 注册。仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time / sys） |
+| I1-32 | 内建函数缺口残余 | `eval` / `exec` / `compile`（动态求值，与挂起重放机制纠缠）、`globals` / `locals` / `vars`（作用域字典，与单解释器模型冲突）暂不投入；`aiter` / `anext` 已随 v0.8.0-alpha.2 的异步任务实现 |
+| I1-38 | 自定义元类机制不支持 | 类头关键字语法已随 v0.8.0-alpha.6 接受：`metaclass=type` 合法（默认机制），非可调用元类值按 CPython 报调用错误文案；可调用的自定义元类（`type` 子类或可调用）不实现元类机制，报 `TypeError: metaclass conflict: ...`，暂不投入 |
+| I1-71 | `contextlib` 模块不支持 | 纯工具性封装（`contextmanager` / `closing` / `suppress` / `ExitStack` 等），用户类直接实现 `__enter__` / `__exit__`（或异步协议）可等价替代；`import contextlib` 报 `ImportError`，暂不投入 |
+| I1-73 | 内建类型子类的用户 `__init__` 覆写不被调用 | `class L(list):` 内定义的 `__init__` 静默不执行（CPython 会调用），连带此类构造的多余位置参数被静默忽略、列表被 `__new__` 预填充；v0.8.0-alpha.7 新登记，待排期 |
 
-P2-2（解析期错误文案与函数 repr）与 P2-3（运算符错误文案）已随 **v0.7.0-alpha.9** 的文案对齐专项修复（缺冒号、未结束字符串、`min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` 文案、`print >> x` 迁移提示、函数与绑定方法 repr）；P2-50（`Stack underflow` 日志噪音）已通过项目设置 `debug/settings/gdscript/max_call_stack=2047` 消除（宿主工程同设即可，见 P2-52 说明）；P2-51（退出时 ObjectDB 泄漏与 `resources still in use`）已随 **v0.7.0-alpha.9** 的对象登记表 + 断环回收（`cleanup()` API）修复
+### 优先级 2（I2，边缘差异）
+
+| 编号 | 问题 | 说明 |
+| :--- | :--- | :--- |
+| I2-38 | 生成器对象被丢弃时不执行 `finally` 清理 | CPython 依赖引用计数回收时隐式 `close()`；PyGDS 无宿主 finalizer 语义，需显式 `close()` |
+| I2-43 | `__iter__` 返回非迭代对象的错误文案 | 部分形态报 `'X' object is not iterable` 而非 CPython 的 `iter() returned non-iterator of type '...'`（严格文案与挂起重放机制冲突，已回退） |
+| I2-59 | 残余内建类型构造器的 kwargs 静默忽略 | `set` / `frozenset` / `slice` / `collections.deque` 等构造器忽略关键字参数（CPython 报错或按语义生效，如 `deque` 的 `maxlen`）；int / str / float / bool / list / tuple 已随 I2-58 修复；v0.8.0-alpha.7 新登记，待排期 |
+
+P2-2（解析期错误文案与函数 repr）与 P2-3（运算符错误文案）已随 **v0.7.0-alpha.9** 的文案对齐专项修复（缺冒号、未结束字符串、`min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` 文案、`print >> x` 迁移提示、函数与绑定方法 repr）；P2-50（`Stack underflow` 日志噪音）已通过项目设置 `debug/settings/gdscript/max_call_stack=2047` 消除（宿主工程同设即可，见平台层 P2 条目说明）；P2-51（退出时 ObjectDB 泄漏与 `resources still in use`）已随 **v0.7.0-alpha.9** 的对象登记表 + 断环回收（`cleanup()` API）修复；P2-16（`@` 矩阵乘，语法层全链含 `@=` 与 `operator.matmul`）、P2-37（`close()` 的跨挂起行序升级为语句级重放）、P2-42（非类基类按元类候选解析并转发调用文案）、P2-56（整型常量表达式折叠与驻留）与 P2-57（同类反射运算跳过）已随 **v0.8.0-alpha.6** 修复；I2-58（`int()` / `str()` 构造器的类型特化文案、`str` 编码解码路径与六类型构造器关键字参数）与 I2-41（`from __future__` 的位置报错与 `_Feature` 对象绑定）已随 **v0.8.0-alpha.7** 修复
 
 v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-string `#` 前缀布局）、P2-47（`%c` str 实参）、P2-48（`.N` 有效数字语义）、P2-49（`casefold` 完整折叠）已随 v0.7.0-alpha.8 修复
 
-### 平台限制
+### 设计层差异（Design）
 
-| 限制 | 说明 |
-| :--- | :--- |
-| str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
-| `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号约 200 条（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
+| 编号 | 内容 | 说明 |
+| :--- | :--- | :--- |
+| D1（原 P2-1） | `random` 随机序列与 CPython 不同 | PyGDS 使用自有 xorshift32 PRNG，抽样结果数值不同（参数类型规则已对齐，`seed()` 保证 PyGDS 内部可复现）——自有 PRNG 为有意选择，保证内部可复现性 |
+| D2（原 P2-4） | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致（int 哈希已对齐模 2^61-1） |
+| D3（原 P2-40） | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
+| D4（原 P0-NEW-1） | `range()` 参数按索引位收敛为 int64 | CPython 可惰性构造 `range(10**30)`，PyGDS 构造时收敛并报 `OverflowError: Python int too large to convert to C ssize_t`（任意精度落地的收敛决策，见 usage 整数范围小节） |
+
+### 平台层差异（Platform）
+
+| 编号 | 内容 | 说明 |
+| :--- | :--- | :--- |
+| P1（原 P2-27） | Godot 字符串↔浮点转换的极端精度边界 | 部分难例不做正确舍入（如 `9007199254740993.0` 字面量解析），源自宿主层字符串解析器 |
+| P2（原 P2-52） | 引擎 VM 调用栈 2048 帧硬上限 | 深递归叠加深表达式时引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`）；表达式求值/解析的 GDScript 帧深不受调用深度约束 |
+| P3 | str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
+| P4 | `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号约 200 条（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
 
 ---
 
@@ -389,4 +393,5 @@ dsl.register_api_pair("move_player", func(args, _kwargs):
 | [builtin_types.md](docs/zh-CN/builtin_types.md) | 内置类型详解 |
 | [exception_system.md](docs/zh-CN/exception_system.md) | 异常系统 |
 | [behavioral.md](docs/zh-CN/behavioral.md) | 行为一致性测试逐例说明 |
+| [differences.md](docs/zh-CN/differences.md) | 与 CPython 的差异清单（Issue / Design / Platform 三系） |
 | [usage.md](docs/zh-CN/usage.md) | 使用指南与 API 注册 |

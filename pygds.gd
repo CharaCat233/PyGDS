@@ -14336,6 +14336,45 @@ class DSLModule extends DSLObject:
 			return members[name]
 		return super._dsl_getattribute(name)
 
+## __future__ 特性对象 (I2-41): 对应 CPython __future__._Feature, [br]
+## 由 from __future__ import 绑定, repr 与属性形态对齐 CPython 文本
+class DSLFutureFeature extends DSLObject:
+	## 可选版本元组 (CPython 构造器首参 optionalRelease), 无未定形态时可为 DSLNone
+	var optional: DSLObject
+	## 强制版本元组 (CPython 构造器次参 mandatoryRelease), 无则为 DSLNone
+	var mandatory: DSLObject
+	## 编译器标志位
+	var compiler_flag: int
+
+	## 构造特性对象 (参数序对齐 CPython _Feature.__init__) [br]
+	## [param p_optional] 可选版本元组或 None [br]
+	## [param p_mandatory] 强制版本元组或 None [br]
+	## [param p_flag] 编译器标志位
+	func _init(p_optional: DSLObject, p_mandatory: DSLObject, p_flag: int):
+		super._init()
+		optional = p_optional
+		mandatory = p_mandatory
+		compiler_flag = p_flag
+
+	func _type_name() -> String:
+		return "_Feature"
+
+	## CPython _Feature.__repr__: _Feature(optional, mandatory, compiler_flag) 三元组形态
+	func _dsl_str() -> String:
+		return "_Feature(%s, %s, %d)" % [DSLObject._py_repr(optional), DSLObject._py_repr(mandatory), compiler_flag]
+
+	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
+
+	func _dsl_getattribute(attr_name: String) -> DSLObject:
+		if attr_name == "optional":
+			return optional
+		if attr_name == "mandatory":
+			return mandatory
+		if attr_name == "compiler_flag":
+			return DSLInteger.pooled(compiler_flag)
+		return super._dsl_getattribute(attr_name)
+
 ## DSL 迭代器基类, 对应 Python 迭代器协议 (鸭子类型) [br]
 ## DSLIterator 从未暴露, 无需继承自 DSLObject [br]
 ## 提供 has_next() / next() 接口的子类可 for 循环使用
@@ -16733,12 +16772,13 @@ class DSLEnvironment:
 ## 支持完整的 Python 风格语法: 函数/类定义, 控制流, 表达式, 推导式, 解包等
 class Parser:
 	## __future__ 模块的合法特性名 (CPython 3.12 __future__.py, P1-61) [br]
-	## braces 在 CPython 中固定报 "not a chance", 校验分支单独处理
+	## braces 在 CPython 中固定报 "not a chance", 校验分支单独处理; [br]
+	## all_feature_names 是 __future__ 模块的清单辅助而非可导入特性 (I2-41), 不入列
 	const _FUTURE_FEATURES = {
 		"nested_scopes": true, "generators": true, "division": true,
 		"absolute_import": true, "with_statement": true, "print_function": true,
 		"unicode_literals": true, "generator_stop": true, "annotations": true,
-		"barry_as_FLUFL": true, "all_feature_names": true,
+		"barry_as_FLUFL": true,
 	}
 
 	## 控制台报告器
@@ -16747,6 +16787,10 @@ class Parser:
 	var tokens: Array
 	## 当前处理的 Token 索引
 	var current: int = 0
+	## I2-41: __future__ 导入位置状态, 文档字符串 / 注释 / 空行 / 其他 future 导入以外的语句出现后锁定
+	var _future_locked := false
+	## I2-41: 已解析语句计数, 首个语句为纯字符串字面量时豁免 (即模块文档字符串)
+	var _stmt_count := 0
 	
 	## 构造解析器实例 [br]
 	## [param p_reporter] 控制台报告器实例, 用于输出语法错误 [br]
@@ -16883,10 +16927,35 @@ class Parser:
 		if is_at_end():
 			return null
 		var start_line = peek().line
+		# I2-41: __future__ 导入仅允许文档字符串 / 注释 / 空行 / 其他 future 导入先行
+		# 锁定先于语句体解析, 使嵌套于 def / class / if 体内的 future 导入同样报错
+		if not _future_locked and not _stmt_may_precede_future():
+			_future_locked = true
 		var result = declaration_impl()
 		if result is Stmt:
 			result.line = start_line
+		_stmt_count += 1
+		# 预分发时无法确定形态的语句在此校正: 豁免仅 future 导入与首个纯字符串字面量语句
+		if not _future_locked and not _stmt_is_future_import(result) and not _is_docstring_stmt(result):
+			_future_locked = true
 		return result
+
+	## I2-41: 语句起点能否出现在 future 导入之前 [br]
+	## from 导入可能是 future 导入 (交由 from_statement 判定), 首个语句为字符串字面量时 [br]
+	## 可能是模块文档字符串 (bytes 与 f-string 形态不算, 由解析后校正兜底) [br]
+	## [returns] 可能先于 future 导入时返回 true
+	func _stmt_may_precede_future() -> bool:
+		if check(TokenType.FROM):
+			return true
+		return _stmt_count == 0 and check(TokenType.STRING)
+
+	## I2-41: 语句是否为 from __future__ import (星号形态除外)
+	func _stmt_is_future_import(stmt) -> bool:
+		return stmt is FromImportStmt and stmt.module == "__future__"
+
+	## I2-41: 语句是否为模块文档字符串 (纯字符串字面量表达式语句, bytes / f-string 不算)
+	func _is_docstring_stmt(stmt) -> bool:
+		return stmt is ExpressionStmt and stmt.expression is Literal and stmt.expression.value is String
 
 	## 语句解析分发函数 [br]
 	## 根据当前 Token 类型匹配对应的语法结构 [br]
@@ -17457,6 +17526,10 @@ class Parser:
 			module += "." + sub_tok.lexeme
 		if not match_types([TokenType.IMPORT]):
 			report.error("Expected 'import' in from statement")
+			return null
+		# I2-41: 位置检查先于特性名校验 (CPython 位置错误优先于星号 / braces / 未定义特性错误)
+		if module == "__future__" and _future_locked:
+			report.error("SyntaxError: from __future__ imports must occur at the beginning of the file")
 			return null
 		# 星号导入
 		if match_types([TokenType.STAR]):
@@ -20753,6 +20826,50 @@ class Interpreter:
 	var _suspend_reason: int = SuspendReason.NONE
 	## 内置类型的类对象 (名称 -> DSLClass): 用于 type() 返回等场景 [br]
 	## 主要覆盖那些名字被内置函数占用的类型 (如 range)
+	## __future__ 特性元数据 (I2-41, CPython 3.12 __future__.py): [br]
+	## 特性名 -> [可选版本, 强制版本 (空数组表示 None), 编译器标志] (CPython 构造器参数序)
+	const _FUTURE_FEATURE_META := {
+		"nested_scopes": [[2, 1, 0, "beta", 1], [2, 2, 0, "alpha", 0], 16],
+		"generators": [[2, 2, 0, "alpha", 1], [2, 3, 0, "final", 0], 0],
+		"division": [[2, 2, 0, "alpha", 2], [3, 0, 0, "alpha", 0], 131072],
+		"absolute_import": [[2, 5, 0, "alpha", 1], [3, 0, 0, "alpha", 0], 262144],
+		"with_statement": [[2, 5, 0, "alpha", 1], [2, 6, 0, "alpha", 0], 524288],
+		"print_function": [[2, 6, 0, "alpha", 2], [3, 0, 0, "alpha", 0], 1048576],
+		"unicode_literals": [[2, 6, 0, "alpha", 2], [3, 0, 0, "alpha", 0], 2097152],
+		"barry_as_FLUFL": [[3, 1, 0, "alpha", 2], [4, 0, 0, "alpha", 0], 4194304],
+		"generator_stop": [[3, 5, 0, "beta", 1], [3, 7, 0, "alpha", 0], 8388608],
+		"annotations": [[3, 7, 0, "beta", 1], [], 16777216],
+	}
+	## 已构建的 __future__ 特性对象缓存 (I2-41): 同一特性复用同一实例 (CPython 同为单例)
+	var _future_features: Dictionary = {}
+
+	## 构建 (或取缓存) __future__ 特性对象 (I2-41) [br]
+	## [param name] 特性名 (解析期已校验合法) [br]
+	## [returns] DSLFutureFeature 实例
+	func _make_future_feature(name: String) -> DSLObject:
+		if _future_features.has(name):
+			return _future_features[name]
+		var meta: Array = _FUTURE_FEATURE_META[name]
+		var optional = _make_version_tuple(meta[0])
+		var mandatory = DSLNone.new() if (meta[1] as Array).is_empty() else _make_version_tuple(meta[1])
+		var feat = DSLFutureFeature.new(optional, mandatory, meta[2])
+		# 挂接内部 _Feature 类对象, 使 type() 返回 <class '_Feature'> 而非字符串兜底
+		var feature_cls = _builtin_type_classes.get("_Feature")
+		if feature_cls != null:
+			feat.klass = feature_cls
+		_future_features[name] = feat
+		return feat
+
+	## 版本元组构建: [3, 7, 0, "beta", 1] 形态转为 repr 为 (3, 7, 0, 'beta', 1) 的 DSLTuple
+	func _make_version_tuple(parts: Array) -> DSLTuple:
+		var items: Array[DSLObject] = []
+		for p in parts:
+			if p is String:
+				items.append(DSLString.new(p))
+			else:
+				items.append(DSLInteger.pooled(p))
+		return DSLTuple.new(items)
+
 	var _builtin_type_classes: Dictionary = {}
 	## 当前正在执行步骤的生成器 (生成器体内 yield 定位与 sleep 拦截用)
 	var _current_generator = null
@@ -22003,6 +22120,12 @@ class Interpreter:
 		var dict_items_class = DSLClass.new("dict_items", obj_class, {}, self)
 		dict_items_class.klass = type_class
 		_builtin_type_classes["dict_items"] = dict_items_class
+		
+		# __future__ 特性类 (I2-41): 供 type(feature 实例) 返回 <class '_Feature'>,
+		# 不进入全局命名空间 (CPython 中 _Feature 同样不经 __future__ 导出名暴露)
+		var future_feature_class = DSLClass.new("_Feature", obj_class, {}, self)
+		future_feature_class.klass = type_class
+		_builtin_type_classes["_Feature"] = future_feature_class
 		
 		# 迭代器类型 (list_iterator 等): 仅用于 type() 返回与 isinstance 判定,
 		# 其实例由 iter(list/tuple/str/range/dict/set) 构造
@@ -26064,12 +26187,15 @@ class Interpreter:
 			return ExecResult.NORMAL
 			
 		if stmt is FromImportStmt:
-			# __future__ 是编译器指令 (CPython), PyGDS 按语法空操作处理, 不绑定名字 (P1-61)
+			# __future__ 是编译器指令 (CPython), 合法性与位置已在解析期校验 (P1-61 / I2-41)
 			if stmt.module == "__future__":
-				# annotations 特性生效时注解不求值 (PEP 563 语义)
 				for fe in stmt.names:
+					# annotations 特性生效时注解不求值 (PEP 563 语义)
 					if fe["name"] == "annotations":
 						_future_annotations = true
+					# I2-41: CPython 导入后绑定 _Feature 对象, as 别名按别名绑定
+					var bind_name = fe["alias"] if fe["alias"] != "" else fe["name"]
+					environment.define(bind_name, _make_future_feature(fe["name"]))
 				return ExecResult.NORMAL
 			var mod = _get_module(stmt.module)
 			if mod == null:
@@ -31503,7 +31629,8 @@ order (MRO) for bases %s" % ", ".join(names))
 
 	## 按指定进制解析整数字符串 (支持符号与前缀, base=0 时按 0x/0o/0b 前缀自动识别, 否则十进制)
 	func _parse_int_with_base(s: String, base: int) -> DSLInteger:
-		if base < 0 or base > 36:
+		# I2-58: base 合法域为 0 或 2..36 (base 1 可经 bool 基类到达, CPython 同报 range 文案)
+		if base != 0 and (base < 2 or base > 36):
 			raise_exception("ValueError", "int() base must be >= 2 and <= 36, or 0")
 			return null
 		var text = s.strip_edges()
@@ -32286,34 +32413,53 @@ order (MRO) for bases %s" % ", ".join(names))
 			val = -val
 		return [val, is_imag, pos]
 
-	func api_int_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	func api_int_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var cls = args[0]
+		var real_args: int = args.size() - 1
+		# I2-58: 参数个数按位置实参与关键字实参合计计数, 个数检查先于关键字名校验 (CPython 同序)
+		var total_given: int = real_args + kwargs.size()
+		if total_given > 2:
+			raise_exception("TypeError", "int() takes at most 2 arguments (%d given)" % total_given)
+			return null
+		# I2-58: int 仅接受 base 关键字, 未知关键字按 CPython 文案拒绝 (原先静默忽略)
+		for k in kwargs:
+			if k != "base":
+				raise_exception("TypeError", "'%s' is an invalid keyword argument for int()" % k)
+				return null
+		var x_arg = null
+		if real_args >= 1:
+			x_arg = args[1]
+		var base_val = null
+		if real_args == 2 or kwargs.has("base"):
+			if x_arg == null:
+				# CPython: 给定 base 而无待转换值时的遗留文案
+				raise_exception("TypeError", "int() missing string argument")
+				return null
+			var base_arg = args[2] if real_args == 2 else kwargs["base"]
+			# base 须可索引化: 仅 int/bool 可用 (显式 None / float / str 等均拒绝);
+			# 大数形态的 .value 恒为 0 (陷阱 #24), 超出索引位直接按 range 文案拒绝
+			if base_arg is DSLInteger and base_arg.is_big():
+				raise_exception("ValueError", "int() base must be >= 2 and <= 36, or 0")
+				return null
+			if base_arg is DSLInteger:
+				base_val = base_arg.value
+			elif base_arg is DSLBool:
+				base_val = 1 if base_arg.value else 0
+			else:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % base_arg._type_name())
+				return null
+		if x_arg == null:
+			if cls.name == "int":
+				return DSLInteger.pooled(0)
+			# 子类无参构造同样返回带 klass 的新实例
+			var zero = DSLInteger.new(0)
+			zero.klass = cls
+			return zero
+		var result = _convert_to_int(x_arg, base_val)
+		if result == null:
+			return null
 		if cls.name == "int":
-			if args.size() > 3:
-				raise_exception("TypeError", "int expected at most 2 arguments, got %d" % (args.size() - 1))
-				return null
-			if args.size() >= 2:
-				var base_arg = null
-				if args.size() == 3:
-					base_arg = _num_val(args[2])
-					if base_arg == null:
-						raise_exception("TypeError", "int() base must be an integer")
-						return null
-				return _convert_to_int(args[1], base_arg)
-			return DSLInteger.pooled(0)
-		var result = null
-		if args.size() >= 2:
-			var base_arg2 = null
-			if args.size() == 3:
-				base_arg2 = _num_val(args[2])
-				if base_arg2 == null:
-					raise_exception("TypeError", "int() base must be an integer")
-					return null
-			result = _convert_to_int(args[1], base_arg2)
-			if result == null:
-				return null
-		else:
-			result = DSLInteger.new(0)
+			return result
 		# 子类实例必须携带 klass, 不与驻留池共享
 		var fresh = DSLInteger.new(result.value)
 		fresh.klass = cls
@@ -32369,8 +32515,17 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param args] [cls, value?], cls 为目标类, value 为可选的初始值 [br]
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] DSLFloat 或带 klass 标记的 DSLFloat
-	func api_float_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	func api_float_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var cls = args[0]
+		var real_args: int = args.size() - 1
+		var user_init := false
+		if cls.name != "float":
+			# 子类用户 __init__ 覆写时 kwargs 转交 init, __new__ 不再严格校验 (CPython 同, 陷阱 #26)
+			var init_m = cls._lookup_method("__init__")
+			user_init = init_m is DSLFunction
+		if kwargs.size() > 0 and (cls.name == "float" or not user_init):
+			raise_exception("TypeError", "float() takes no keyword arguments")
+			return null
 		if cls.name == "float":
 			if args.size() > 2:
 				raise_exception("TypeError", "float expected at most 1 argument, got %d" % (args.size() - 1))
@@ -32378,6 +32533,10 @@ order (MRO) for bases %s" % ", ".join(names))
 			if args.size() >= 2:
 				return _convert_to_float(args[1])
 			return DSLFloat.new(0.0)
+		# I2-58: 子类多余位置参数同样拒绝 (CPython float.__new__ 对子类仍按个数校验)
+		if real_args > 1:
+			raise_exception("TypeError", "float expected at most 1 argument, got %d" % real_args)
+			return null
 		var result = _convert_to_float(args[1]) if args.size() >= 2 else DSLFloat.new(0.0)
 		if result == null:
 			return null
@@ -32737,22 +32896,89 @@ order (MRO) for bases %s" % ", ".join(names))
 			out.append(DSLString.new(n))
 		return DSLList.new(out)
 
-	func api_str_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var result: DSLString
+	func api_str_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var cls = args[0]
-		if cls.name == "str":
-			if args.size() > 2:
-				raise_exception("TypeError", "str expected at most 1 argument, got %d" % (args.size() - 1))
+		var real_args: int = args.size() - 1
+		# I2-58: 参数个数按位置实参与关键字实参合计计数, 个数检查先于关键字名校验 (CPython 同序)
+		var total_given: int = real_args + kwargs.size()
+		if total_given > 3:
+			raise_exception("TypeError", "str() takes at most 3 arguments (%d given)" % total_given)
+			return null
+		# I2-58: str 仅接受 object / encoding / errors 关键字, 未知关键字拒绝 (原先静默忽略)
+		for k in kwargs:
+			if k != "object" and k != "encoding" and k != "errors":
+				raise_exception("TypeError", "'%s' is an invalid keyword argument for str()" % k)
 				return null
-			if args.size() >= 2:
-				result = args[1].magic_str([args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-				if result is DSLString:
-					return result
-				return DSLString.new(args[1]._dsl_str())
-			return DSLString.new("")
-		result = DSLString.new("")
-		if args.size() >= 2:
-			result = DSLString.new(args[1]._dsl_str())
+		# 同名参数以名称与位置重复给定 (CPython clinic 绑定文案)
+		if kwargs.has("object") and real_args >= 1:
+			raise_exception("TypeError", "argument for str() given by name ('object') and position (1)")
+			return null
+		if kwargs.has("encoding") and real_args >= 2:
+			raise_exception("TypeError", "argument for str() given by name ('encoding') and position (2)")
+			return null
+		if kwargs.has("errors") and real_args >= 3:
+			raise_exception("TypeError", "argument for str() given by name ('errors') and position (3)")
+			return null
+		var x = null
+		if real_args >= 1:
+			x = args[1]
+		elif kwargs.has("object"):
+			x = kwargs["object"]
+		var encoding_obj = null
+		if real_args >= 2:
+			encoding_obj = args[2]
+		elif kwargs.has("encoding"):
+			encoding_obj = kwargs["encoding"]
+		var errors_obj = null
+		if real_args >= 3:
+			errors_obj = args[3]
+		elif kwargs.has("errors"):
+			errors_obj = kwargs["errors"]
+		# encoding / errors 给定即须为 str, 显式 None 同样拒绝 (CPython clinic 语义, 类型名 None 不带 Type 后缀)
+		if encoding_obj != null and not (encoding_obj is DSLString):
+			var bad_enc = "None" if encoding_obj is DSLNone else encoding_obj._type_name()
+			raise_exception("TypeError", "str() argument 'encoding' must be str, not %s" % bad_enc)
+			return null
+		if errors_obj != null and not (errors_obj is DSLString):
+			var bad_err = "None" if errors_obj is DSLNone else errors_obj._type_name()
+			raise_exception("TypeError", "str() argument 'errors' must be str, not %s" % bad_err)
+			return null
+		if x == null:
+			# CPython: 未给定待转换值时直接返回空串 (即便 encoding / errors 已给定)
+			if cls.name == "str":
+				return DSLString.new("")
+			var empty = DSLString.new("")
+			empty.klass = cls
+			return empty
+		if encoding_obj != null or errors_obj != null:
+			# I2-58: CPython str.__new__ 的解码路径, 复用 bytes.decode 机制 (错误文案同源)
+			var enc_text := "utf-8"
+			var err_text := "strict"
+			if encoding_obj != null:
+				enc_text = encoding_obj.value
+			if errors_obj != null:
+				err_text = errors_obj.value
+			if x is DSLString:
+				raise_exception("TypeError", "decoding str is not supported")
+				return null
+			if x is DSLBytes:
+				var dec = x.builtin_decode([x, DSLString.new(enc_text), DSLString.new(err_text)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if dec == null:
+					raise_exception_from_last_error(x.last_error)
+					x.last_error = ""
+					return null
+				if cls.name != "str":
+					dec.klass = cls
+				return dec
+			raise_exception("TypeError", "decoding to str: need a bytes-like object, %s found" % x._type_name())
+			return null
+		var result: DSLString
+		if cls.name == "str":
+			result = x.magic_str([x] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if result is DSLString:
+				return result
+			return DSLString.new(x._dsl_str())
+		result = DSLString.new(x._dsl_str())
 		result.klass = cls
 		return result
 	
@@ -32761,8 +32987,17 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param args] [cls, iterable?], cls 为目标类, iterable 为可选的可迭代初始值 [br]
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] DSLList 或带 klass 标记的 DSLList
-	func api_list_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	func api_list_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var cls = args[0]
+		var real_args: int = args.size() - 1
+		var user_init := false
+		if cls.name != "list":
+			# 子类用户 __init__ 覆写时实参转交 init, __new__ 不再严格校验 (CPython list 语义, 陷阱 #26)
+			var init_m = cls._lookup_method("__init__")
+			user_init = init_m is DSLFunction
+		if kwargs.size() > 0 and (cls.name == "list" or not user_init):
+			raise_exception("TypeError", "list() takes no keyword arguments")
+			return null
 		if cls.name == "list":
 			if args.size() > 2:
 				raise_exception("TypeError", "list expected at most 1 argument, got %d" % (args.size() - 1))
@@ -32785,6 +33020,10 @@ order (MRO) for bases %s" % ", ".join(names))
 					if it.suspended:
 						break
 			return raw
+		# I2-58: 子类多余位置参数按 CPython list.__init__ 同文案拒绝 (用户 __init__ 覆写时转交)
+		if not user_init and real_args > 1:
+			raise_exception("TypeError", "list expected at most 1 argument, got %d" % real_args)
+			return null
 		var result = DSLList.new()
 		if args.size() >= 2 and not args[1] is DSLNone:
 			var arg = args[1]
@@ -32810,8 +33049,17 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param args] [cls, iterable?], cls 为目标类, iterable 为可选的可迭代初始值 [br]
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] DSLTuple 或带 klass 标记的 DSLTuple
-	func api_tuple_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	func api_tuple_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var cls = args[0]
+		var real_args: int = args.size() - 1
+		var user_init := false
+		if cls.name != "tuple":
+			# 子类用户 __init__ 覆写时 kwargs 转交 init, __new__ 不再校验关键字 (CPython tuple 语义, 陷阱 #26)
+			var init_m = cls._lookup_method("__init__")
+			user_init = init_m is DSLFunction
+		if kwargs.size() > 0 and (cls.name == "tuple" or not user_init):
+			raise_exception("TypeError", "tuple() takes no keyword arguments")
+			return null
 		var arr: Array[DSLObject] = []
 		if cls.name == "tuple":
 			if args.size() > 2:
@@ -32834,6 +33082,10 @@ order (MRO) for bases %s" % ", ".join(names))
 					if it.suspended:
 						break
 			return DSLTuple.new(arr)
+		# I2-58: 子类多余位置参数按 CPython tuple.__new__ 同文案拒绝 (位置校验不因 init 覆写放宽)
+		if real_args > 1:
+			raise_exception("TypeError", "tuple expected at most 1 argument, got %d" % real_args)
+			return null
 		if args.size() >= 2 and not args[1] is DSLNone:
 			var arg = args[1]
 			if arg._wrapped != null:
@@ -32965,8 +33217,17 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param args] [cls, value?], cls 为目标类, value 为可选的初始值 (通过 _dsl_bool() 转换) [br]
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] DSLBool 或带 klass 标记的 DSLBool
-	func api_bool_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	func api_bool_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var cls = args[0]
+		var real_args: int = args.size() - 1
+		var user_init := false
+		if cls.name != "bool":
+			# 子类用户 __init__ 覆写时 kwargs 转交 init, __new__ 不再严格校验 (CPython 同, 陷阱 #26)
+			var init_m = cls._lookup_method("__init__")
+			user_init = init_m is DSLFunction
+		if kwargs.size() > 0 and (cls.name == "bool" or not user_init):
+			raise_exception("TypeError", "bool() takes no keyword arguments")
+			return null
 		if cls.name == "bool":
 			if args.size() > 2:
 				raise_exception("TypeError", "bool expected at most 1 argument, got %d" % (args.size() - 1))
@@ -32974,6 +33235,10 @@ order (MRO) for bases %s" % ", ".join(names))
 			if args.size() >= 2:
 				return DSLBool.new(true if args[1]._dsl_bool() else false)
 			return DSLBool.new(false)
+		# I2-58: 子类多余位置参数同样拒绝 (CPython bool.__new__ 对子类仍按个数校验)
+		if real_args > 1:
+			raise_exception("TypeError", "bool expected at most 1 argument, got %d" % real_args)
+			return null
 		var result = DSLBool.new(false)
 		if args.size() >= 2:
 			result = DSLBool.new(true if args[1]._dsl_bool() else false)
