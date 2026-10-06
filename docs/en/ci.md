@@ -28,9 +28,19 @@ python ci/lint_cases.py
 # Markdown / GDScript mechanical checks
 python ci/lint_md.py
 python ci/lint_gd.py
+
+# Suspension system suite (PyGDS-specific, 24 cases)
+godot --headless --path . --script res://demo/test_suspend_all.gd
+
+# Drive sandbox suite (PyGDS-specific, 48 checks)
+godot --headless --path . --script res://demo/test_sandbox.gd
 ```
 
 The runner auto-detects the CPython command (`python` first on Windows, `python3` first on Linux)
+
+PyGDS-specific capabilities (suspension / sandbox) have no CPython counterpart to compare against, so they stay out of the `ci/cases/` dual-end comparison system and are covered by standalone suites under `demo/` that run in CI (`test_suspend_all.gd` and `test_sandbox.gd`), judged against self-contained expected outputs
+
+File-based cases (open / user import and their fixtures) run inside the `CI` drive sandbox: the runner instantiates `PyGDS.new("CI", true)`, wipes `user://<base_path>/CI/` at startup and copies the `ci/cases/files/` fixtures into the drive; the CPython shim uses the drive root's real path as its working directory, so bare relative paths on both ends land in the same physical directory (data-file leftovers stay inside the drive instead of polluting the project root)
 
 ## Naming Registry
 

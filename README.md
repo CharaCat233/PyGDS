@@ -86,6 +86,21 @@ dsl.write_dsl_script("print('Hello!')")
 dsl.run()
 ```
 
+### 盘符虚拟沙箱（可选）
+
+需要脚本读写文件或加载盘内模块时，实例化时传入盘符与访问开关，脚本可见空间收敛到 `user://<base_path>/<盘符>/`，对真实文件系统零接触：
+
+```gdscript
+var dsl = PyGDS.new("MOD1", true)
+dsl.write_dsl_script("print(open('data.txt').read())")
+dsl.run()
+
+dsl.load_dsl_script("main.py")   # 从盘符读取主文件 (多文件 mod 场景)
+dsl.run()
+```
+
+四种盘符 × 访问组合、路径规则与 `base_path` 基准详见 [usage.md](docs/zh-CN/usage.md) 的「盘符虚拟沙箱」小节
+
 ---
 
 ## Python 兼容性矩阵
@@ -189,21 +204,11 @@ v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容
 
 下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**；P1-33（`raise ... from` 异常链）、P1-34（任意装饰器与带参装饰器）、P1-35（`__name__`）、P1-39（泛型类型参数语法）已在 v0.6.0-alpha.3 修复；P1-40（f-string 同引号嵌套，PEP 701）已在 v0.6.0-alpha.4 修复；P1-42（类的多继承）已在 v0.6.0-alpha.5 修复；P0-14（`and` / `or` 短路）、P0-15（增强赋值静默终止）、P0-16（`del` 括号元组目标）、P1-36（`...` 字面量）、P1-37（`collections.namedtuple`）、P1-44（反射运算符）、P1-45（类体作用域）、P1-46（property 内 `super()`）、P1-47（用户自定义描述符）、P1-48（`min` / `max` 的 `default`）、P1-49（`__getitem__` 旧式迭代）已在 v0.6.0-alpha.6 修复；P1-7（`with` 语句与上下文管理器协议，含挂起重放的进入标记）已在 v0.8.0-alpha.1 实现；P1-9（`async` / `await`，方案 C 协程对象模拟，含 `aiter` / `anext` 内建）已在 v0.8.0-alpha.2 实现并附既定边界（`yield from` 与推导式内 await 不支持、`import asyncio` 不可用）；P1-41（`except*` 异常组）已在 v0.8.0-alpha.4 实现（括号化管理器列表与 async generator 一并落地，`contextlib` 经评估登记为 P1-71 暂不投入）；P1-72（类定义基类关键字参数，PEP 487 的 kw 转发形态）已在 v0.8.0-alpha.6 实现，详见 `CHANGELOG` 的对应版本节
 
-| 编号 | 问题 | 说明 |
-| :--- | :--- | :--- |
-| I1-8 | 用户文件 `import` 不支持 | 经评估暂缓：当前嵌入式单文件场景内无实现价值（非难度问题）；共享代码请使用 `set_preset_script` 与 API 注册。仅支持内置模块（math / random / statistics / functools / itertools / collections / string / operator / time / sys） |
-| I1-32 | 内建函数缺口残余 | `eval` / `exec` / `compile`（动态求值，与挂起重放机制纠缠）、`globals` / `locals` / `vars`（作用域字典，与单解释器模型冲突）暂不投入；`aiter` / `anext` 已随 v0.8.0-alpha.2 的异步任务实现 |
-| I1-38 | 自定义元类机制不支持 | 类头关键字语法已随 v0.8.0-alpha.6 接受：`metaclass=type` 合法（默认机制），非可调用元类值按 CPython 报调用错误文案；可调用的自定义元类（`type` 子类或可调用）不实现元类机制，报 `TypeError: metaclass conflict: ...`，暂不投入 |
-| I1-71 | `contextlib` 模块不支持 | 纯工具性封装（`contextmanager` / `closing` / `suppress` / `ExitStack` 等），用户类直接实现 `__enter__` / `__exit__`（或异步协议）可等价替代；`import contextlib` 报 `ImportError`，暂不投入 |
-| I1-73 | 内建类型子类的用户 `__init__` 覆写不被调用 | `class L(list):` 内定义的 `__init__` 静默不执行（CPython 会调用），连带此类构造的多余位置参数被静默忽略、列表被 `__new__` 预填充；v0.8.0-alpha.7 新登记，待排期 |
+I1 系开放条目已于 **v0.8.0-alpha.9 清零**：I1-8（用户文件 import）随 v0.8.0-alpha.8 实现移除（`sys.path` 逐目录解析 `<名>.py`，沙箱内按盘符路径规则收敛）；I1-32（eval / exec / compile 与 globals / locals / vars、sys 深水面）、I1-38（自定义元类机制）、I1-71（contextlib 模块）与 I1-73（内建类型子类的用户 `__init__`）均已随 v0.8.0-alpha.8 修复移除，详见 `CHANGELOG` 对应版本节
 
 ### 优先级 2（I2，边缘差异）
 
-| 编号 | 问题 | 说明 |
-| :--- | :--- | :--- |
-| I2-38 | 生成器对象被丢弃时不执行 `finally` 清理 | CPython 依赖引用计数回收时隐式 `close()`；PyGDS 无宿主 finalizer 语义，需显式 `close()` |
-| I2-43 | `__iter__` 返回非迭代对象的错误文案 | 部分形态报 `'X' object is not iterable` 而非 CPython 的 `iter() returned non-iterator of type '...'`（严格文案与挂起重放机制冲突，已回退） |
-| I2-59 | 残余内建类型构造器的 kwargs 静默忽略 | `set` / `frozenset` / `slice` / `collections.deque` 等构造器忽略关键字参数（CPython 报错或按语义生效，如 `deque` 的 `maxlen`）；int / str / float / bool / list / tuple 已随 I2-58 修复；v0.8.0-alpha.7 新登记，待排期 |
+I2 系开放条目已于 **v0.8.0-alpha.9 清零**：I2-43（`__iter__` 严格文案）与 I2-59（残余构造器 kwargs）已随 v0.8.0-alpha.8 修复；I2-38（生成器丢弃时的隐式 close）经实测转类 Platform P5；I2-58 / I2-41（v0.8.0-alpha.7）、I2-60 / I2-61 / I2-62（挂起重放缺口，v0.8.0-alpha.9）等均已修复移除，详见 `CHANGELOG` 对应版本节
 
 P2-2（解析期错误文案与函数 repr）与 P2-3（运算符错误文案）已随 **v0.7.0-alpha.9** 的文案对齐专项修复（缺冒号、未结束字符串、`min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` 文案、`print >> x` 迁移提示、函数与绑定方法 repr）；P2-50（`Stack underflow` 日志噪音）已通过项目设置 `debug/settings/gdscript/max_call_stack=2047` 消除（宿主工程同设即可，见平台层 P2 条目说明）；P2-51（退出时 ObjectDB 泄漏与 `resources still in use`）已随 **v0.7.0-alpha.9** 的对象登记表 + 断环回收（`cleanup()` API）修复；P2-16（`@` 矩阵乘，语法层全链含 `@=` 与 `operator.matmul`）、P2-37（`close()` 的跨挂起行序升级为语句级重放）、P2-42（非类基类按元类候选解析并转发调用文案）、P2-56（整型常量表达式折叠与驻留）与 P2-57（同类反射运算跳过）已随 **v0.8.0-alpha.6** 修复；I2-58（`int()` / `str()` 构造器的类型特化文案、`str` 编码解码路径与六类型构造器关键字参数）与 I2-41（`from __future__` 的位置报错与 `_Feature` 对象绑定）已随 **v0.8.0-alpha.7** 修复
 
@@ -213,10 +218,11 @@ v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| D1（原 P2-1） | `random` 随机序列与 CPython 不同 | 已于 alpha.8 对齐 MT19937：int 种子的抽样序列与 CPython 逐值一致（`random` / `randint` / `randrange` / `choice` / `shuffle` / `sample` / `getrandbits` / `getstate` / `setstate` / `gauss` 等），字符串种子因 CPython 的 sha512 处理序列不同（文档化差异） |
 | D2（原 P2-4） | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致（int 哈希已对齐模 2^61-1） |
 | D3（原 P2-40） | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
 | D4（原 P0-NEW-1） | `range()` 参数按索引位收敛为 int64 | CPython 可惰性构造 `range(10**30)`，PyGDS 构造时收敛并报 `OverflowError: Python int too large to convert to C ssize_t`（任意精度落地的收敛决策，见 usage 整数范围小节） |
+
+D1（原 P2-1，`random` 随机序列与 CPython 不同）已于 **v0.8.0-alpha.8** 对齐 MT19937 移除：int 种子的抽样序列与 CPython 逐值一致，字符串种子经 sha512 处理的序列差异文档化
 
 ### 平台层差异（Platform）
 
@@ -226,6 +232,8 @@ v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-
 | P2（原 P2-52） | 引擎 VM 调用栈 2048 帧硬上限 | 深递归叠加深表达式时引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`）；表达式求值/解析的 GDScript 帧深不受调用深度约束 |
 | P3 | str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
 | P4 | `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号约 200 条（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
+| P5（原 I2-38） | 生成器对象丢弃时的隐式 close 不可实现 | Godot 4.x 的 `NOTIFICATION_PREDELETE` 触发时脚本实例已 detach，引用计数回收路径无法驱动 `finally`（alpha.8 批次二实测，理论修复路径被否定）；需要清理逻辑的代码应显式 `close()`；Godot 升级若松动应复核 |
+| P6 | 引擎退出检查对全局类脚本资源图的滞留告警 | 内嵌类方法体内的自引用构造（类 X 体内 `X.new()`）使引擎退出时不释放脚本核心类图并告警；触发构造已于 v0.8.0-alpha.9 经跨类工厂规避（退出告警清零），新增内嵌类应避免该形态；引擎升级若松动应复核 |
 
 ---
 
@@ -348,7 +356,7 @@ godot --headless --path /你的项目路径 --script /pygds路径/ci/run_cases.g
 
 ### 如何从文件加载脚本？
 
-推荐将 DSL 代码写入独立的 `.py` 文件（避免 GDScript 字符串的转义与 Tab 缩进问题），运行时读取并执行：
+推荐将 DSL 代码写入独立的 `.py` 文件（避免 GDScript 字符串的转义与 Tab 缩进问题）。常规方式是宿主自行读取后经 `write_dsl_script` 传入；实例化时传入盘符（如 `PyGDS.new("MOD1", true)`）后可直接经 `load_dsl_script` 从沙箱盘符读取，多文件 mod 场景配合盘内 `import` 使用：
 
 ```gdscript
 func run_script_file(path: String) -> void:
@@ -357,7 +365,14 @@ func run_script_file(path: String) -> void:
     file.close()
     dsl.write_dsl_script(source)
     dsl.run()
+
+# 盘符沙箱方式: 主文件与模块文件位于 user://<base_path>/<盘符>/ 内
+var dsl = PyGDS.new("MOD1", true)
+dsl.load_dsl_script("main.py")
+dsl.run()
 ```
+
+脚本可见路径的收敛规则见 [usage.md](docs/zh-CN/usage.md) 的「盘符虚拟沙箱」小节
 
 ### 如何让脚本与场景/节点交互？
 

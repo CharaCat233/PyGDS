@@ -86,6 +86,21 @@ dsl.write_dsl_script("print('Hello!')")
 dsl.run()
 ```
 
+### Drive-letter virtual sandbox (optional)
+
+To let scripts read and write files or load in-drive modules, pass a drive letter and an access switch at instantiation; the script-visible space converges into `user://<base_path>/<drive>/` with zero contact with the real file system:
+
+```gdscript
+var dsl = PyGDS.new("MOD1", true)
+dsl.write_dsl_script("print(open('data.txt').read())")
+dsl.run()
+
+dsl.load_dsl_script("main.py")   # read the main file from the drive (multi-file mod scenarios)
+dsl.run()
+```
+
+See the "Drive-Letter Virtual Sandbox" section of [usage.md](docs/en/usage.md) for the four drive/access combinations, the path rules and the `base_path` root.
+
 ---
 
 ## Python Compatibility Matrix
@@ -189,21 +204,11 @@ The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nest
 
 Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3 to v0.5.0-alpha.5; P1-10 (`match` / `case`) was implemented in v0.6.0; P1-13 (re-evaluation of prefix subexpressions on `yield` resumption) was fixed in v0.5.0-alpha.7 to v0.5.0-alpha.8; P1-19 to P1-29 found by the same audit (implicit line continuation inside brackets, one-line compound statements, `try`/`else`, slice assignment, genexpr tuple elements, user-class subscript and conversion protocols, sequence ordering comparisons, `None` as a dict key, the `iter()` type name, and `hasattr`) were **all fixed in v0.5.0-alpha.6**; P1-33 (`raise ... from` exception chaining), P1-34 (arbitrary and parameterised decorators), P1-35 (`__name__`) and P1-39 (generic type parameter syntax) were fixed in v0.6.0-alpha.3; P1-40 (f-string same-quote nesting, PEP 701) was fixed in v0.6.0-alpha.4; P1-42 (multiple inheritance) was fixed in v0.6.0-alpha.5; P0-14 (`and` / `or` short-circuit), P0-15 (silent termination on augmented assignment), P0-16 (`del` with parenthesized tuple targets), P1-36 (`...` literal), P1-37 (`collections.namedtuple`), P1-44 (reflected operators), P1-45 (class-body scope), P1-46 (`super()` in properties), P1-47 (user-defined descriptors), P1-48 (`min` / `max` `default`), P1-49 (`__getitem__`-only iteration) were fixed in v0.6.0-alpha.6; P1-7 (the `with` statement and the context manager protocol, including the replay enter-marker for suspensions) was implemented in v0.8.0-alpha.1; P1-9 (`async` / `await`, option-C coroutine-object emulation, including the `aiter` / `anext` builtins) was implemented in v0.8.0-alpha.2 with established boundaries (`yield from` and await in comprehensions unsupported, `import asyncio` unavailable); P1-41 (`except*` exception groups) was implemented in v0.8.0-alpha.4 (parenthesized manager lists and async generators landed alongside; `contextlib` was evaluated and registered as P1-71, deferred); P1-72 (class-header keyword bases, the PEP 487 kw-forwarding form) was implemented in v0.8.0-alpha.6; see the corresponding section of `CHANGELOG`
 
-| ID | Issue | Details |
-| :--- | :--- | :--- |
-| I1-8 | User-file `import` unsupported | Deferred by evaluation: no value in the current embedded single-file scenario (not a difficulty issue); share code via `set_preset_script` and API registration. Only built-in modules are supported (math / random / statistics / functools / itertools / collections / string / operator / time / sys) |
-| I1-32 | Remaining builtin gaps | `eval` / `exec` / `compile` (dynamic evaluation, entangled with the suspension replay machinery) and `globals` / `locals` / `vars` (scope dictionaries, conflicting with the single-interpreter model) are deferred; `aiter` / `anext` were implemented with the v0.8.0-alpha.2 async task |
-| I1-38 | Custom metaclass machinery unsupported | The class-header keyword syntax landed with v0.8.0-alpha.6: `metaclass=type` is legal (the default machinery) and non-callable metaclass values report CPython's call-error message; callable custom metaclasses (`type` subclasses or callables) do not implement metaclass mechanics and raise `TypeError: metaclass conflict: ...`; deferred |
-| I1-71 | `contextlib` module unsupported | Purely utility wrappers (`contextmanager` / `closing` / `suppress` / `ExitStack` etc.); user classes implementing `__enter__` / `__exit__` (or the async protocols) are an equivalent substitute; `import contextlib` raises `ImportError`; deferred |
-| I1-73 | User `__init__` overrides on builtin type subclasses are not invoked | An `__init__` defined in `class L(list):` silently never runs (CPython invokes it); relatedly, extra positional arguments to such constructors are silently ignored and the list is pre-populated by `__new__`; newly registered in v0.8.0-alpha.7, pending scheduling |
+The I1 open-item list was **cleared in v0.8.0-alpha.9**: I1-8 (user-file `import`) was removed with its implementation in v0.8.0-alpha.8 (`<name>.py` resolved directory by directory along `sys.path`, converging into the drive inside a sandbox); I1-32 (eval / exec / compile plus globals / locals / vars and the deep sys surface), I1-38 (custom metaclass machinery), I1-71 (the contextlib module) and I1-73 (user `__init__` on builtin type subclasses) were all fixed and removed in v0.8.0-alpha.8; see the corresponding sections of `CHANGELOG`
 
 ### Priority 2 (I2, Edge Differences)
 
-| ID | Issue | Details |
-| :--- | :--- | :--- |
-| I2-38 | Discarded generator objects skip `finally` cleanup | CPython relies on refcount-driven implicit `close()`; PyGDS has no host finalizer semantics, call `close()` explicitly |
-| I2-43 | `__iter__` non-iterator error message | Some shapes report `'X' object is not iterable` instead of CPython's `iter() returned non-iterator of type '...'` (the strict text conflicts with suspension replay and was reverted) |
-| I2-59 | Keyword arguments silently ignored by remaining builtin type constructors | `set` / `frozenset` / `slice` / `collections.deque` and others ignore keyword arguments (CPython rejects them or applies them, such as `deque`'s `maxlen`); int / str / float / bool / list / tuple were fixed with I2-58; newly registered in v0.8.0-alpha.7, pending scheduling |
+The I2 open-item list was **cleared in v0.8.0-alpha.9**: I2-43 (the `__iter__` strict message) and I2-59 (remaining constructor kwargs) were fixed in v0.8.0-alpha.8; I2-38 (implicit close of discarded generators) was reclassified as Platform P5 after experiments; I2-58 / I2-41 (v0.8.0-alpha.7) and I2-60 / I2-61 / I2-62 (the suspension-replay gaps, v0.8.0-alpha.9) were all fixed and removed; see the corresponding sections of `CHANGELOG`
 
 P2-2 (parse-error messages and function repr) and P2-3 (operator error messages) were fixed by the **v0.7.0-alpha.9** message-alignment effort (missing colon, unterminated strings, `min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` texts, the `print >> x` migration hint, function and bound-method repr); P2-50 (`Stack underflow` log noise) is eliminated by the project setting `debug/settings/gdscript/max_call_stack=2047` (set it in host projects too, see the Platform entry P2); P2-51 (`ObjectDB` leaks at exit and `resources still in use`) was fixed in **v0.7.0-alpha.9** via the object registry + cycle-breaking reclamation (`cleanup()` API); P2-16 (the `@` matrix-multiply operator, full syntax chain with `@=` and `operator.matmul`), P2-37 (the cross-suspension ordering of `close()` upgraded to statement-level replay), P2-42 (non-class bases resolved as metaclass candidates forwarding the call message), P2-56 (integer constant-expression folding and interning) and P2-57 (same-type reflection skip) were fixed in **v0.8.0-alpha.6**; I2-58 (type-specialized constructor messages for `int()` / `str()`, the `str` decoding path and keyword arguments of the six type constructors) and I2-41 (the position error and `_Feature` object binding for `from __future__`) were fixed in **v0.8.0-alpha.7**
 
@@ -213,10 +218,11 @@ P2-45 (re-checked as a false positive), P2-46 (`%#o` and f-string `#` prefix lay
 
 | ID | Item | Details |
 | :--- | :--- | :--- |
-| D1 (was P2-1) | `random` sequences differ from CPython | Aligned to MT19937 in alpha.8: int-seeded draw sequences match CPython value by value (`random` / `randint` / `randrange` / `choice` / `shuffle` / `sample` / `getrandbits` / `getstate` / `setstate` / `gauss` etc.); string-seeded sequences differ due to CPython's sha512 handling (documented difference) |
 | D2 (was P2-4) | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match (int hashing is aligned to modulo 2^61-1) |
 | D3 (was P2-40) | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
 | D4 (was P0-NEW-1) | `range()` arguments converge to int64 index width | CPython can lazily construct `range(10**30)`; PyGDS converges at construction and raises `OverflowError: Python int too large to convert to C ssize_t` (a convergence decision of the arbitrary-precision landing, see the integer-range section of usage) |
+
+D1 (was P2-1, `random` sequences differing from CPython) was removed in **v0.8.0-alpha.8** by aligning MT19937: int-seeded draw sequences match CPython value by value; the string-seeded sequence difference via CPython's sha512 handling is documented
 
 ### Platform-Layer Differences (Platform)
 
@@ -226,6 +232,8 @@ P2-45 (re-checked as a false positive), P2-46 (`%#o` and f-string `#` prefix lay
 | P2 (was P2-52) | Engine VM call-stack hard limit of 2048 frames | Deep recursion combined with deep expressions makes the engine hard-abort the call chain with `Stack overflow`, silently losing the remaining output (CPython either completes or raises a catchable `RecursionError`); the GDScript frame depth of expression evaluation / parsing is not bounded by the call-depth limit |
 | P3 | str literals cannot contain NUL | Godot's String cannot store U+0000 (it would be replaced with U+FFFD), so `'\x00'` / `'\0'` str escapes raise `SyntaxError` at decode time; bytes are unaffected (`b'\x00'` works) |
 | P4 | `\N{...}` supports only the built-in name table | Godot has no Unicode name database; PyGDS ships about 200 names covering printable ASCII full names and common symbols (e.g. `\N{BULLET}',`\N{LATIN CAPITAL LETTER A}'). Names outside the table raise `SyntaxError: unknown Unicode character name` matching CPython's behaviour for unknown names |
+| P5 (was I2-38) | Implicit close of discarded generator objects is unimplementable | At `NOTIFICATION_PREDELETE` time in Godot 4.x the script instance is already detached, so the refcount reclamation path cannot drive `finally` (measured in the alpha.8 second batch, the theoretical fix path was disproved); code needing cleanup should call `close()` explicitly; re-check if a Godot upgrade loosens this |
+| P6 | Engine exit check lingers on the global class script resource graph | A self-referencing construction inside an inner class body (`X.new()` within class X's own methods) makes the engine retain the script's core class graph at exit and emit a warning; the triggering construction was avoided in v0.8.0-alpha.9 via a cross-class factory (exit warnings cleared), new inner classes should avoid that form; re-check if a Godot upgrade loosens this |
 
 ---
 
@@ -348,7 +356,7 @@ The `demo/` directory contains a complete demo scene for the suspend system. Ope
 
 ### How do I load a script from a file?
 
-It is recommended to write DSL code in standalone `.py` files (avoiding GDScript string escaping and Tab indentation issues), then read and execute them at runtime:
+It is recommended to write DSL code in standalone `.py` files (avoiding GDScript string escaping and Tab indentation issues). The usual way is to read the file yourself and pass it through `write_dsl_script`; with a drive passed at instantiation (e.g. `PyGDS.new("MOD1", true)`) you can load the main file directly from the sandbox drive via `load_dsl_script`, combining with in-drive `import` for multi-file mod scenarios:
 
 ```gdscript
 func run_script_file(path: String) -> void:
@@ -357,7 +365,14 @@ func run_script_file(path: String) -> void:
     file.close()
     dsl.write_dsl_script(source)
     dsl.run()
+
+# Drive sandbox: the main file and module files live under user://<base_path>/<drive>/
+var dsl = PyGDS.new("MOD1", true)
+dsl.load_dsl_script("main.py")
+dsl.run()
 ```
+
+See the "Drive-Letter Virtual Sandbox" section of [usage.md](docs/en/usage.md) for the path convergence rules.
 
 ### How do scripts interact with scenes/nodes?
 

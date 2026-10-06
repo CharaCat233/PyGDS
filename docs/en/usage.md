@@ -915,11 +915,11 @@ sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')
 
 `from __future__ import ...` is a compiler directive; PyGDS treats it as a syntactic no-op: valid feature names at the top of the file (`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`) are accepted and ignored without binding any name (annotation semantics below); unknown names raise `SyntaxError: future feature x is not defined`
 
-> **Note**: only built-in modules are currently supported; importing user-authored `.py` files is not. See [Built-in Modules](./builtin.md) for details.
+> **Note**: user-authored `.py` modules are resolved directory by directory along `sys.path` (`import user_module` / `from user_module import x`, a miss raises `ImportError: No module named 'X'`); see [Built-in Modules](./builtin.md) for details. Inside a sandbox, module files must live within the drive directory, see the "Drive-Letter Virtual Sandbox" section
 
 ### `__name__` and `__file__`
 
-At startup the interpreter injects script-level globals into the global scope: `__name__` is always `"__main__"` (single-script execution model, reassignable); `__file__` defaults to an empty string and the host can inject the actual path via `set_script_path(path)` before `run()`. The `if __name__ == "__main__":` entry guard works
+At startup the interpreter injects script-level globals into the global scope: `__name__` is always `"__main__"` (single-script execution model, reassignable); `__file__` defaults to an empty string and the host can inject the actual path via `set_script_path(path)` before `run()`, while a main file loaded through `load_dsl_script` (including the `write_dsl_script` file mode) is injected automatically as `<drive>:/<path inside drive>`, and user modules follow the same form. The `if __name__ == "__main__":` entry guard works
 
 ```python
 print(__name__)                 # __main__
@@ -1267,7 +1267,7 @@ print(f.closed)               # True
 ```
 
 > **Interaction with the suspension system**: `time.sleep` (and active suspension APIs) inside the `with` body, `__enter__` and `__exit__` suspend and resume normally. Resuming a suspended body never re-runs `__enter__` (the enter marker), and an `__exit__` suspension with an exception in flight resumes normally, deciding suppression or propagation by its return value. A `with` inside a generator keeps its entered state across `yield`, and the `GeneratorExit` injected by `close()` passes through the exit path as well
-
+>
 > **Not yet supported**: the `contextlib` module (P1-71). Parenthesized manager lists (3.10) are supported: `with (a as b, c as d):` parses as a manager list (a `with (a, b):` without `as` is also a list), while an `as` after the closing paren falls back to the tuple expression
 
 ### raise ... from Exception Chaining
@@ -1352,7 +1352,7 @@ except StopIteration as e:
 ```
 
 > **Interaction with the suspension system**: `time.sleep` (and active suspension APIs) inside coroutine bodies / `__anext__` / `__aenter__` / `__aexit__` suspend and resume normally, replays never repeat side effects, and interleaved driving of several coroutines stays independent
-
+>
 > **never-awaited warning**: at script end, coroutines created but never started get `RuntimeWarning: coroutine 'x' was never awaited` on the print channel (CPython emits at GC time on stderr — an established difference in channel and timing); started coroutines are never reported
 
 Async generators (PEP 525): `yield` inside an `async def` is legal and the call returns an `async_generator` object; `__aiter__` returns self, and `__anext__` / `asend` / `athrow` / `aclose` return step awaitables whose await drives one step (the produced value is the element and is not auto-awaited); `return` with a value and `yield from` raise `SyntaxError` (CPython message)
@@ -1683,6 +1683,58 @@ dsl.cleanup()
 
 ---
 
+## Drive-Letter Virtual Sandbox
+
+Default instantiation (`PyGDS.new()`) is a pure single-file model: the script has zero contact with the file system (`open` and user `import` are unavailable) and all code comes from the `write_dsl_script` string. To let scripts read and write files or load in-drive modules, pass the **drive-letter sandbox** dual parameters at instantiation:
+
+```gdscript
+var dsl = PyGDS.new("MOD1", true)   # drive MOD1, script may access files inside the drive
+```
+
+- `drive_letter` (default `""`): the drive name, letters only and normalized to upper case (e.g. `"CI"` / `"MOD1"`). Non-letter characters push an error and refuse instantiation; all further API calls are unavailable
+- `path_access` (default `false`): whether the script may actually access files inside the drive (`open` and user `import`)
+
+### Four Combinations
+
+| Drive | path_access | Behavior |
+| :--- | :--- | :--- |
+| Non-empty | `true` | Regular sandbox: the script-visible space is `user://<base_path>/<drive>/`; `open` / user import / `load_dsl_script` all available, directory persists |
+| Non-empty | `false` | Single file with script file access disabled (`open` and user import are refused as file-not-found, built-in import unaffected); `load_dsl_script` available (host-side operation loading the main file from the drive) |
+| Empty | `false` | Pure single file (default); `load_dsl_script` unavailable |
+| Empty | `true` | Temporary sandbox with a random non-repeating drive (picked from A-Z among drives not claimed by live instances); `cleanup()` deletes the drive directory, named drives persist |
+
+`cleanup()` runs when the host calls it, via `reset()`, and on instance release (`free()`) - a random drive's sandbox directory is deleted with it; the interpreter object graph is reclaimed first, so file handles left open by the script close with their objects and deletion works on Windows too. After `cleanup()` the instance can be reused with a new `write_dsl_script`; the drive directory is recreated lazily on the next `run()`.
+
+### Path Rules
+
+Only two path forms are visible to a sandboxed script; after normalization both must remain inside `user://<base_path>/<drive>/`, anything else raises `FileNotFoundError: [Errno 2] No such file or directory: '<path>'` (same message as a truly missing file, never leaking existence outside the drive):
+
+- **Drive prefix** (e.g. `"CI:/data/x.json"`): absolute form, resolved against the drive root; only this instance's drive is accepted (case-insensitive); any other letter-prefixed colon form (including `res:` / `user:` host protocol lookalikes) is refused as a foreign drive
+- **Bare relative path** (e.g. `"data/x.json"`, `"../shared.txt"`): resolved against the **directory of the main script**; `..` must not escape the drive root; `open` inside an imported module uses the same base (no per-module cwd in the sandbox)
+
+`sys.path` starts as `[""]` inside the sandbox, where the empty entry resolves to the main script's directory (CPython's sys.path[0] script-directory semantics; CPython's bare relative path base is the process cwd, which coincides with the script directory in ordinary single-script usage, so the two are equivalent in practice); scripts may append directory entries (e.g. `sys.path.append("lib")`), and out-of-drive entries are skipped during module resolution. `res://` asset access is not provided: the host can pre-place files into the drive or expose them via `register_api`.
+
+### load_dsl_script and the write File Mode
+
+```gdscript
+# Read a file from the drive as the main file (goes through Lexer / Parser, equivalent to the file form of write_dsl_script)
+dsl.load_dsl_script("main.py")      # main file location is the drive root
+dsl.load_dsl_script("mods/extra/main.py")   # main file location is that path's directory
+
+# write_dsl_script file mode: write the code to that path inside the drive first, then load it via load_dsl_script
+dsl.write_dsl_script(source, "mods/extra/main.py")   # requires a non-empty drive and path_access = true
+```
+
+`load_dsl_script(path)` is a host-side operation, not subject to the script access restriction of `path_access` (unavailable with an empty drive); host-side errors (invalid drive / out-of-drive path / missing file / read failure) return `false` and push an error without raising a DSL exception; parse errors of the script itself follow the `write_dsl_script` semantics (via report and the `run()` ERROR state). The return value of `write_dsl_script(source, path)` reports whether the host-side operation succeeded; with a non-empty `path` the main file location is that path's directory, with an empty `path` (string mode) it is the drive root (no location concept without a drive). When the main file is loaded via `load_dsl_script`, `__file__` is injected as `<drive>:/<path inside drive>` (e.g. `"CI:/lib/util.py"`), and user modules follow the same form.
+
+Multiple instances sharing one named drive is allowed (the design intent for several scripts of the same mod); concurrent writes are the host's responsibility.
+
+### The base_path Root
+
+The relative base under `user://` for the sandbox root is the static property `PyGDS.base_path` (default `"PyGDS"`), giving `user://<base_path>/<drive>/`. The property supports deep paths and leading/trailing separators (`"files/PyGDS"` / `"/files/PyGDS/"` are equivalent, mapping to `user://files/PyGDS/`); it should be decided at game initialization and PyGDS takes no responsibility for consequences of changing it at runtime.
+
+---
+
 ## Suspension System
 
 PyGDS provides a suspension mechanism that allows DSL scripts to pause during execution and wait for external conditions to be met before resuming. This is very useful in game development, for example, waiting for an animation to finish, waiting for player input, or implementing delay logic.
@@ -1835,7 +1887,7 @@ func _on_continue_button():
 
 ### Preset Script
 
-`set_preset_script` allows injecting preset code (such as constant definitions, utility functions) before user code. Preset code and user code are **independently parsed**, ensuring accurate error line numbers.
+`set_preset_script` allows injecting preset code (such as constant definitions, utility functions) before user code. Preset code and user code are **independently parsed**, ensuring accurate error line numbers. This is a legacy usage: for multi-file and shared-code scenarios prefer in-drive module packages plus `register_api` (`from package import x` fully covers the wrapping purpose of presets; names injected by presets sit exposed in the main script globals, while names registered via API are visible to imported modules through the builtin layer). The API is kept for compatibility.
 
 ```gdscript
 var dsl = PyGDS.new()
@@ -1863,7 +1915,7 @@ The ASTs of preset code and user code are concatenated after parsing and then ex
 - **complex**: `1j` literals and `complex(re, im)` / `complex(str)` construction; arithmetic, comparison, `abs` / `conjugate` align with CPython; integer powers are exact, non-integer powers use the polar path (libm — prefer `round(..., N)` for cross-platform comparison)
 - **bytearray**: mutable byte sequence with index/slice assignment and `append` / `extend` / `insert` / `pop` / `remove` / `reverse` etc.; unhashable (cannot be dict keys or set members)
 - **memoryview**: one-dimensional B-format view; bytes-backed views are read-only while bytearray-backed views write through; operations after `release()` raise
-- **open(path, mode)**: file object based on the host FileAccess; relative paths resolve against the project root (`res://`); supports `r` / `w` / `a` / `rb` / `wb` / `ab` with `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close`; text writes flush immediately
+- **open(path, mode)**: file object based on the host FileAccess; without a sandbox relative paths resolve against the project root; inside a sandbox instance paths converge into the drive directory under the rules of the "Drive-Letter Virtual Sandbox" section. Supports `r` / `w` / `a` / `rb` / `wb` / `ab` with `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close`; text writes flush immediately
 
 ## Limitations and Notes
 

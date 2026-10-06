@@ -64,7 +64,7 @@ func _init() -> void:
 	, "a\nb\nc\n", null])
 
 	# === D. 控制流中的挂起 ===
-	_test_queue.append(["D1. if 分支内 sleep", func(dsl):
+	_test_queue.append(["D-1. if 分支内 sleep", func(dsl):
 		dsl.write_dsl_script("import time\nif True:\n print('a')\n time.sleep(0.1)\n print('b')\nprint('c')\n")
 	, "a\nb\nc\n", null])
 
@@ -126,7 +126,7 @@ func _init() -> void:
 		dsl.write_dsl_script("greet('world')\n")
 	, "hello\nworld\n", null])
 
-	# === I. 异常在途 x 挂起 (P0-22 回归) ===
+	# === I. 异常在途 x 挂起 ===
 	_test_queue.append(["I1. finally 内 sleep + 在途异常被外层捕获", func(dsl):
 			dsl.write_dsl_script("import time\ndef h():\n try:\n  raise ValueError('v')\n finally:\n  time.sleep(0.1)\n  print('fin')\ntry:\n h()\nexcept ValueError as e:\n print('caught', e)\nprint('after')\n")
 	, "fin\ncaught v\nafter\n", null])
@@ -140,7 +140,7 @@ func _init() -> void:
 
 func _start_next_test():
 	if _test_idx >= _test_queue.size():
-		# 释放最后一个用例的实例: free 触发 PyGDS 的对象图回收 (P2-51),
+		# 释放最后一个用例的实例: free 触发 PyGDS 的对象图回收,
 		# 否则最后一个 run 的解释器对象在退出时报 ObjectDB 泄漏
 		if _dsl != null:
 			_dsl.free()

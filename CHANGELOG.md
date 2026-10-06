@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.10] - 2026-10-06
+
+### 新增
+
+- **盘符虚拟沙箱**：实例化新增双参数 `PyGDS.new(drive_letter = "", path_access = false)`——盘符仅允许字母并统一转大写（含非字母字符时 push_error 拒绝实例化，后续 API 均不可用），`path_access` 决定脚本是否可实际访问盘内文件；四种组合：非空盘符 + 允许访问 = 常规沙箱（脚本可见空间为 `user://<base_path>/<盘符>/`，open / 用户 import / load_dsl_script 全可用，目录持久）、非空盘符 + 禁止访问 = 单文件加脚本文件访问禁用（open 与用户 import 按文件不存在拒绝且不泄露存在性，内置 import 不受影响，load_dsl_script 仍可用）、空盘符 + 禁止访问 = 纯单文件（原字符串用法）、空盘符 + 允许访问 = 随机不重复盘符的临时沙箱（从 A-Z 中避开活跃实例占用项选取，`cleanup()` 时删除盘符目录，26 个并存随机沙箱耗尽时拒绝实例化）；路径规则：盘符前缀形态（`盘符:/...`）仅接受本盘符（其余字母前缀冒号形态含 `res:` / `user:` 等按外来盘符拒绝），裸相对路径以主脚本所在目录为基准（含被 import 模块内的 open，沙箱无 per-module cwd），两形态段级归一化（消费 `.` / `..` 与空段、分隔符统一）后必须仍落在盘符目录内，越界与文件真不存在同报 `FileNotFoundError: [Errno 2] No such file or directory: '<路径>'`；`sys.path` 在沙箱内初始 `[""]`（空项按主脚本所在目录解析，与 CPython 的 sys.path[0] 脚本目录语义对齐；CPython 的裸路径基准是进程 cwd，常规单脚本使用中两者等价，文档注记）；用户模块 `__file__` 与沙箱主文件注入 `盘符:/盘内路径` 形态（不暴露 user:// 真实路径）；多实例共享命名盘符允许，并发写由宿主自理；`PyGDS.base_path`（默认 `"PyGDS"`）决定沙箱根在 `user://` 下的相对基准，支持深层路径与首尾分隔符，应在游戏初始化时确定
+- **`load_dsl_script(path)` 与 `write_dsl_script` 文件模式**：`load_dsl_script` 从盘符读取文件作为主文件（走 Lexer / Parser，等价 write_dsl_script 的文件形态），宿主侧操作不受 `path_access` 约束，空盘符不可用，宿主侧错误（盘符非法 / 路径越界 / 文件不存在 / 读取失败）返回 `false` 并 push_error 不抛 DSL 异常；`write_dsl_script(source, path = "")` 签名扩展，path 非空时先将代码写入盘内该路径再经 load_dsl_script 读取（需要非空盘符且 `path_access = true`），主文件位置为该路径所在目录，path 为空（字符串模式）主文件位置为盘符根，返回值表示宿主侧操作是否成功而脚本解析错误仍经 report 与 `run()` 的 ERROR 状态表达；随机盘符的目录删除并入既有 `cleanup()`（删除前解释器对象图先行回收，脚本未 close 的文件句柄随对象释放关闭），实例可重新 write 复用、盘符目录惰性重建
+
+### 变更
+
+- **CI 文件类用例迁入盘符沙箱**：`ci/run_cases.gd` 以 `PyGDS.new("CI", true)` 实例化，启动时清空 `user://<base_path>/CI/` 并把 `ci/cases/files/` 夹具复制进盘符；`ci/_pyrun.py` 垫片新增可选工作目录参数，CPython 子进程以盘符根的真实路径为 cwd，双端裸相对路径落到同一物理目录；open / DSLFile / 用户 import 用例的脚本零改动，数据文件残留随之留在盘符内（工程根不再产生 `ci_open_case_data*.tmp`，`.gitignore` 相应条目移除）
+- **preset 用法文档降级**：`set_preset_script` 为兼容保留并在文档标注传统用法定位（多文件与共享代码场景建议改用盘内模块包与 `register_api`，`from 包 import x` 可完整覆盖预设的包装用途），行为不变
+
+### 测试
+
+- 新增盘符沙箱套件 `demo/test_sandbox.gd`（48 项：路径收敛正反两向 / open 与 import 与 `load_dsl_script` 组合 / `path_access` 四象限 / close-free 时序与实例重建 / 多实例共享命名盘符与随机盘符唯一性 / 非法盘符拒绝），与挂起套件同型的独立套件并接入 CI 工作流独立步骤——沙箱为宿主侧能力无 CPython 参照端，不进 `ci/cases/` 双端比对体系；ci.md 中英补充两个套件的运行命令与该定位说明
+
+### 文档
+
+- usage.md 中英新增「盘符虚拟沙箱」小节（双参数与四种组合、路径规则与 CPython cwd 注记、load_dsl_script 与 write 文件模式、base_path 基准），import / `__file__` / open 小节与沙箱行为同步，README 中英新增沙箱小节与 FAQ 更新；README 中英「已知差异与限制」刷新至当前状态（Issue 系清零说明、Design 表移除已对齐的 D1 并留档、Platform 表补 P5 / P6）；ci.md 中英补充盘符沙箱运行说明
+
 ## [0.8.0-alpha.9] - 2026-10-06
 
 ### 修复

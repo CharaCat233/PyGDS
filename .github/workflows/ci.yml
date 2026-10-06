@@ -35,3 +35,7 @@ jobs:
       - name: Run suspend system tests
         run: |
           ./Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://demo/test_suspend_all.gd
+
+      - name: Run drive sandbox tests
+        run: |
+          ./Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://demo/test_sandbox.gd

@@ -28,9 +28,19 @@ python ci/lint_cases.py
 # Markdown / GDScript 机械自查
 python ci/lint_md.py
 python ci/lint_gd.py
+
+# 挂起系统套件 (PyGDS 特有能力, 24 例)
+godot --headless --path . --script res://demo/test_suspend_all.gd
+
+# 盘符沙箱套件 (PyGDS 特有能力, 48 项)
+godot --headless --path . --script res://demo/test_sandbox.gd
 ```
 
 运行器自动探测 CPython 命令（Windows 先 `python`，Linux 先 `python3`）
+
+PyGDS 特有能力（挂起 / 沙箱）没有 CPython 参照端，不进 `ci/cases/` 的双端比对体系，以 `demo/` 下的独立套件覆盖并随 CI 运行（`test_suspend_all.gd` 与 `test_sandbox.gd`），判定为套件内自持的期望输出
+
+文件类用例（open / 用户 import 与其夹具）运行在盘符 `CI` 的沙箱内：运行器以 `PyGDS.new("CI", true)` 实例化，启动时清空 `user://<base_path>/CI/` 并把 `ci/cases/files/` 夹具复制进盘符；CPython 垫片以盘符根的真实路径为工作目录，双端的裸相对路径由此落到同一物理目录（数据文件残留也留在盘符内，不污染工程根）
 
 ## 命名注册表
 

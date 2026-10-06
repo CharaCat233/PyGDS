@@ -914,11 +914,11 @@ sorted([(2, "b"), (1, "a")], key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')
 
 `from __future__ import ...` 为编译器指令，PyGDS 按语法空操作处理：位于文件头部的合法特性名（`annotations` / `print_function` / `generator_stop` / `division` / `nested_scopes` / `generators` / `absolute_import` / `with_statement` / `unicode_literals` / `barry_as_FLUFL` / `all_feature_names`）被接受并忽略，不绑定名字（注解语义见下）；未知特性名报 `SyntaxError: future feature x is not defined`
 
-> **注意**：目前仅支持内置模块，不支持导入用户编写的 `.py` 文件，模块详情见 [内置模块文档](./builtin.md)
+> **注意**：用户编写的 `.py` 模块按 `sys.path` 逐目录解析（`import 用户模块` / `from 用户模块 import x`，未命中报 `ImportError: No module named 'X'`），模块详情见 [内置模块文档](./builtin.md)；沙箱内模块文件须位于盘符目录内，路径规则见「盘符虚拟沙箱」小节
 
 ### `__name__` 与 `__file__`
 
-解释器启动时向全局作用域注入脚本级全局名：`__name__` 恒为 `"__main__"`（单脚本运行模型，可重新赋值）；`__file__` 默认为空串，宿主可在 `run()` 之前通过 `set_script_path(path)` 注入实际路径。`if __name__ == "__main__":` 入口守卫可用
+解释器启动时向全局作用域注入脚本级全局名：`__name__` 恒为 `"__main__"`（单脚本运行模型，可重新赋值）；`__file__` 默认为空串，宿主可在 `run()` 之前通过 `set_script_path(path)` 注入实际路径，经 `load_dsl_script`（含 `write_dsl_script` 文件模式）载入主文件时自动注入为 `盘符:/盘内路径` 形态，用户模块的 `__file__` 同形态。`if __name__ == "__main__":` 入口守卫可用
 
 ```python
 print(__name__)                 # __main__
@@ -1265,7 +1265,7 @@ print(f.closed)               # True
 ```
 
 > **与挂起系统交互**：`with` 体、`__enter__` 与 `__exit__` 体内的 `time.sleep`（及主动挂起 API）均可正常挂起推进。体挂起重放后不重复执行 `__enter__`（进入标记），异常在途时 `__exit__` 挂起照常恢复并按返回值决定抑制或传播。生成器体中的 `with` 可跨 `yield` 保持进入状态，`close()` 注入的 `GeneratorExit` 同样经过退出路径
-
+>
 > **暂不支持**：`contextlib` 模块（P1-71）。括号化管理器列表（3.10）已支持：`with (a as b, c as d):` 按管理器列表解析（无 `as` 的 `with (a, b):` 亦为列表），右括号后随 `as` 时回退为元组表达式
 
 ### raise ... from 异常链
@@ -1350,7 +1350,7 @@ except StopIteration as e:
 ```
 
 > **与挂起系统交互**：协程体内 / `__anext__` / `__aenter__` / `__aexit__` 内的 `time.sleep`（及主动挂起 API）均可正常挂起推进，重放不重复执行副作用，多个协程交替驱动互不串扰
-
+>
 > **never-awaited 警告**：脚本收尾时对创建后从未启动的协程经 print 通道发 `RuntimeWarning: coroutine 'x' was never awaited`（CPython 在 GC 时经 stderr 发，通道与时点为既定差异）；已启动的协程不发
 
 异步生成器（PEP 525）：`async def` 体内 `yield` 合法，调用返回 `async_generator` 对象；`__aiter__` 返回自身，`__anext__` / `asend` / `athrow` / `aclose` 返回步可等待对象，await 时驱动一步（产出值即元素，不被自动 await）；带值 `return` 与 `yield from` 报 `SyntaxError`（CPython 同文案）
@@ -1680,6 +1680,58 @@ dsl.cleanup()
 
 ---
 
+## 盘符虚拟沙箱
+
+默认实例化（`PyGDS.new()`）是纯单文件模型：脚本与文件系统零接触（`open` 与用户 `import` 不可用），代码全部来自 `write_dsl_script` 字符串。需要脚本读写文件或加载盘内模块时，实例化时传入**盘符沙箱**双参数：
+
+```gdscript
+var dsl = PyGDS.new("MOD1", true)   # 盘符 MOD1, 允许脚本访问盘内文件
+```
+
+- `drive_letter`（默认 `""`）：盘符名，仅允许字母并统一转大写（如 `"CI"` / `"MOD1"`）。含非字母字符时 push_error 拒绝实例化，后续 API 均不可用
+- `path_access`（默认 `false`）：是否允许脚本实际访问盘内文件（`open` 与用户 `import`）
+
+### 四种组合
+
+| 盘符 | path_access | 行为 |
+| :--- | :--- | :--- |
+| 非空 | `true` | 常规沙箱：脚本可见空间为 `user://<base_path>/<盘符>/`，`open` / 用户 import / `load_dsl_script` 全可用，目录持久 |
+| 非空 | `false` | 单文件 + 脚本文件访问禁用（`open` 与用户 import 按文件不存在拒绝，内置 import 不受影响）；`load_dsl_script` 可用（宿主侧操作，从盘符载入主文件） |
+| 空 | `false` | 纯单文件（默认）；`load_dsl_script` 不可用 |
+| 空 | `true` | 随机不重复盘符的临时沙箱（从 A-Z 中选取未被活跃实例占用的盘符）；`cleanup()` 时删除该盘符目录，命名盘符持久不删 |
+
+`cleanup()` 的调用时机包括宿主主动调用、`reset()` 与实例释放（`free()`）——随机盘符的虚拟沙箱目录随之删除；删除前解释器对象图先行回收，脚本未 `close()` 的文件句柄随对象释放关闭，Windows 上亦可删除。`cleanup()` 之后实例可重新 `write_dsl_script` 复用，盘符目录在下次 `run()` 时惰性重建
+
+### 路径规则
+
+沙箱内脚本可见的路径只有两种形态，归一化后必须仍落在 `user://<base_path>/<盘符>/` 内，越界一律报 `FileNotFoundError: [Errno 2] No such file or directory: '<路径>'`（与文件真不存在同文案，不泄露盘符外的存在性）：
+
+- **盘符前缀**（如 `"CI:/data/x.json"`）：绝对形态，相对盘符根解析；仅接受本实例盘符（大小写不敏感），其余字母前缀冒号形态（含 `res:` / `user:` 等宿主协议字样）按外来盘符拒绝
+- **裸相对路径**（如 `"data/x.json"`、`"../shared.txt"`）：以**主脚本所在目录**为基准解析，`..` 不得越出盘符根；被 import 模块内的 `open` 使用同一基准（沙箱无 per-module cwd）
+
+`sys.path` 在沙箱内初始为 `[""]`，空项按主脚本所在目录解析（CPython 的 sys.path[0] 脚本目录语义；CPython 的裸相对路径基准是进程 cwd，常规单脚本使用中 cwd 与脚本所在目录一致，实践中等价）；脚本可追加目录项（如 `sys.path.append("lib")`），越界的目录项在模块解析时跳过。`res://` 资产访问不提供：宿主可预放文件进盘符，或经 `register_api` 暴露
+
+### load_dsl_script 与 write 文件模式
+
+```gdscript
+# 从盘符读取文件作为主文件 (走 Lexer / Parser, 等价 write_dsl_script 的文件形态)
+dsl.load_dsl_script("main.py")      # 主文件位置为盘符根
+dsl.load_dsl_script("mods/extra/main.py")   # 主文件位置为该路径所在目录
+
+# write_dsl_script 文件模式: 先将代码写入盘内该路径, 再经 load_dsl_script 读取
+dsl.write_dsl_script(source, "mods/extra/main.py")   # 需要非空盘符且 path_access = true
+```
+
+`load_dsl_script(path)` 是宿主侧操作，不受 `path_access` 的脚本访问禁用约束（空盘符时不可用）；路径越界 / 文件不存在 / 盘符非法等宿主侧错误返回 `false` 并 push_error，不抛 DSL 异常；脚本自身的解析错误与 `write_dsl_script` 同语义（经 report 与 `run()` 的 ERROR 状态表达）。`write_dsl_script(source, path)` 的返回值表示宿主侧操作是否成功；`path` 非空时主文件位置为该路径所在目录，`path` 为空（字符串模式）时主文件位置为盘符根（无盘符则无位置概念）。主文件经 `load_dsl_script` 载入时，`__file__` 注入为 `盘符:/盘内路径` 形态（如 `"CI:/lib/util.py"`），用户模块同
+
+多实例共享同一命名盘符允许（同 mod 多脚本共享空间的设计意图）；并发写由宿主自理
+
+### base_path 基准
+
+沙箱根目录在 `user://` 下的相对基准由静态属性 `PyGDS.base_path`（默认 `"PyGDS"`）决定，最终目录为 `user://<base_path>/<盘符>/`。该属性支持深层路径与首尾分隔符（`"files/PyGDS"` / `"/files/PyGDS/"` 等价，映射到 `user://files/PyGDS/`），应在游戏初始化时确定，运行中修改该属性的后果不由 PyGDS 负责
+
+---
+
 ## 挂起系统
 
 PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复执行。这在游戏开发中非常有用，例如等待动画播放完毕、等待玩家输入、或实现延时逻辑
@@ -1832,7 +1884,7 @@ func _on_continue_button():
 
 ### 预设代码
 
-`set_preset_script` 允许在用户代码之前注入预设代码（如常量定义、工具函数），预设代码与用户代码 **独立解析**，确保错误行号准确
+`set_preset_script` 允许在用户代码之前注入预设代码（如常量定义、工具函数），预设代码与用户代码 **独立解析**，确保错误行号准确。属传统用法：多文件与共享代码场景建议改用盘符沙箱的盘内模块包与 `register_api`（`from 包 import x` 可完整覆盖预设的包装用途；预设注入的名字裸露在主脚本全局，而 API 注册的名字经内建层对被导入模块同样可见），本 API 为兼容保留
 
 ```gdscript
 var dsl = PyGDS.new()
@@ -1860,7 +1912,7 @@ print(clamp(150, 0, 100))  # 100
 - **complex**：`1j` 字面量与 `complex(re, im)` / `complex(str)` 构造，四则运算、比较、`abs` / `conjugate` 与 CPython 对齐；整指数幂精确，非整指数走极坐标（libm 路径，跨平台比对建议 `round(..., N)`）
 - **bytearray**：可变字节序列，支持下标/切片赋值与 `append` / `extend` / `insert` / `pop` / `remove` / `reverse` 等；不可哈希（不能作字典键/集合元素）
 - **memoryview**：一维 B 格式视图，bytes 底层只读、bytearray 底层可写透传；`release()` 后操作报错
-- **open(path, mode)**：基于宿主 FileAccess 的文件对象，相对路径按工程根（`res://`）解析；支持 `r` / `w` / `a` / `rb` / `wb` / `ab` 与 `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close`；文本写即时落盘
+- **open(path, mode)**：基于宿主 FileAccess 的文件对象；无沙箱时相对路径按工程根解析；沙箱实例内收敛到盘符目录并按「盘符虚拟沙箱」小节的路径规则约束。支持 `r` / `w` / `a` / `rb` / `wb` / `ab` 与 `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close`；文本写即时落盘
 
 ## 限制与注意事项
 

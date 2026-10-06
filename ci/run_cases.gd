@@ -25,8 +25,15 @@ extends SceneTree
 ## 用法:
 ##  godot --headless --path . --script res://ci/run_cases.gd
 ##  godot --headless --path . --script res://ci/run_cases.gd -- --filter=math
+##
+## 文件类用例 (open / 用户 import) 在盘符沙箱内运行: PyGDS 实例化时传入盘符 CI 并
+## 开启 path_access, 裸相对路径收敛到 user://<base_path>/CI/; CPython 垫片以盘符根的
+## 真实路径为工作目录, 双端的裸相对路径由此落到同一物理目录 (夹具每轮重放)
 
 const CASES_DIR := "res://ci/cases"
+
+## 文件类用例使用的沙箱盘符 (仅字母)
+const DRIVE_LETTER := "CI"
 
 ## 头注键别名: 中英并存, 归一化为英文键 (解析器只认英文键)
 const HEADER_KEY_ALIASES := {
@@ -50,11 +57,16 @@ var _re_main: RegEx
 var _re_parse_err: RegEx
 var _re_cpline: RegEx
 
+## pygds.gd 脚本引用 (实例化传盘符与夹具清盘复用)
+var _pygds_script: GDScript = null
+## 沙箱盘符根的真实路径 (CPython 垫片工作目录)
+var _drive_root_os: String = ""
+
 
 func _init() -> void:
 	_re_addr = RegEx.create_from_string(" at 0x[0-9a-fA-F]+>")
 	_re_main = RegEx.create_from_string("<__main__\\.")
-	# PyGDS 解析器未对齐文案 (P2-2) 的行首格式, 本质仍是 SyntaxError, 提取时归一到
+	# PyGDS 解析器未对齐文案的行首格式, 本质仍是 SyntaxError, 提取时归一到
 	# "SyntaxError: " 前缀, 使类名比对与 CPython 对齐 (消息比对不受影响, 未对齐文案的用例应声明 same_exception 直至文案对齐后升级)
 	_re_parse_err = RegEx.create_from_string("^Line \\d+, Column \\d+: ")
 	# CPython traceback 帧: File "...", line N
@@ -71,6 +83,35 @@ func _init() -> void:
 		quit(1)
 		return
 
+	# 盘符沙箱准备: 清盘后重放夹具, 保证文件类用例的确定性
+	_pygds_script = load("res://pygds.gd")
+	var base: String = _pygds_script.base_path
+	while base.begins_with("/"):
+		base = base.substr(1)
+	while base.ends_with("/"):
+		base = base.substr(0, base.length() - 1)
+	var drive_root := "user://"
+	if base != "":
+		drive_root += base + "/"
+	drive_root += DRIVE_LETTER
+	_pygds_script._remove_dir_recursive(drive_root)
+	var fixture_src := CASES_DIR + "/files"
+	var fixture_dst := drive_root + "/ci/cases/files"
+	DirAccess.make_dir_recursive_absolute(fixture_dst)
+	var fdir := DirAccess.open(fixture_src)
+	if fdir == null:
+		print("ERROR: 夹具目录不存在: %s" % fixture_src)
+		quit(1)
+		return
+	fdir.list_dir_begin()
+	var fname = fdir.get_next()
+	while fname != "":
+		if not fdir.current_is_dir() and not fname.begins_with("."):
+			DirAccess.copy_absolute(fixture_src + "/" + fname, fixture_dst + "/" + fname)
+		fname = fdir.get_next()
+	fdir.list_dir_end()
+	_drive_root_os = ProjectSettings.globalize_path(drive_root)
+
 	var dir := DirAccess.open(CASES_DIR)
 	if dir == null:
 		print("ERROR: 用例目录不存在: %s" % CASES_DIR)
@@ -85,7 +126,7 @@ func _init() -> void:
 
 	print("=".repeat(60))
 	print("PyGDS Behavior Runner (dual-end)")
-	print("cases: %d | python: %s" % [case_names.size(), python_cmd])
+	print("cases: %d | python: %s | drive: %s" % [case_names.size(), python_cmd, _drive_root_os])
 	print("=".repeat(60))
 
 	for case_name in case_names:
@@ -136,6 +177,7 @@ func _run_case(case_name: String, python_cmd: String) -> void:
 		ProjectSettings.globalize_path(PYRUN_PATH),
 		ProjectSettings.globalize_path(path),
 		result_os_path,
+		_drive_root_os,
 	])
 	OS.execute(python_cmd, args, [], false, false)
 
@@ -153,7 +195,7 @@ func _run_case(case_name: String, python_cmd: String) -> void:
 	var cp_error := _cp_last_error(parsed.get("stderr", ""))
 
 	# PyGDS 侧: 进程内执行, 推进挂起直至结束
-	var dsl = load("res://pygds.gd").new()
+	var dsl = _pygds_script.new(DRIVE_LETTER, true)
 	if dsl == null:
 		_fail(case_name, "CASE-ERR", "pygds.gd 加载失败 (解析错误?)")
 		return
@@ -170,7 +212,7 @@ func _run_case(case_name: String, python_cmd: String) -> void:
 	if dsl.state == dsl.State.RUNNING:
 		# run() 未走到终态判定即返回: 引擎 VM 调用栈上限 ("Stack overflow") 会硬中止
 		# GDScript 调用链, interpret 的终态判定整体被跳过; 视作用例环境错误而非双端差异
-		_fail(case_name, "CASE-ERR", "解释器未达终态 (疑似引擎 VM 调用栈硬中止, 见已知问题清单 P2-52)")
+		_fail(case_name, "CASE-ERR", "解释器未达终态 (疑似引擎 VM 调用栈硬中止, 见已知问题清单 P2)")
 		return
 	# 错误信号 = State.ERROR: 解析期错误在 write_dsl_script 后由 run() 置位
 	# 运行期未捕获异常在顶层 fatal_error 确认时会清掉 report.has_error,
