@@ -2094,6 +2094,14 @@ PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的�
 - 比对: `same_output`
 - 源文件: [ci/cases/suspend_finally_raise.py](../../ci/cases/suspend_finally_raise.py)
 
+### suspend_getitem_iter
+
+- 职责: 旧式 `__getitem__` 迭代协议的挂起重放
+- 比对: `same_output`
+- 源文件: [ci/cases/suspend_getitem_iter.py](../../ci/cases/suspend_getitem_iter.py)
+
+`__getitem__` 体内 `sleep` 挂起时, 下标迭代器以 `suspended` 标记交消费器传播并交语句重放, 不按迭代结束处理; 重放轮经帧复用续做被中断的 `__getitem__`, 睡眠去重保证不重复等待。覆盖 list / 推导式 / sum / for 与 zip 双参并行消费形态 (I2-62)
+
 ### suspend_groupby
 
 - 职责: `groupby` 状态机跨语句存活与 `sleep` 重放
@@ -2130,8 +2138,24 @@ PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的�
 - 比对: `same_output`
 - 源文件: [ci/cases/suspend_sideeffect.py](../../ci/cases/suspend_sideeffect.py)
 
+### suspend_user_iter
+
+- 职责: `__iter__` 返回 `self` 的用户迭代器挂起重放
+- 比对: `same_output`
+- 源文件: [ci/cases/suspend_user_iter.py](../../ci/cases/suspend_user_iter.py)
+
+`__next__` 体内 `sleep` 挂起经迭代器 `suspended` 标记向消费器传播; 用户迭代器属一次性迭代器, 产出记入日志并参与语句消费窗口, 重放轮从日志续读已交付元素、仅对新元素继续驱动 `__next__`, 实例状态跨重放轮推进与睡眠去重计数配合逐步收敛 (I2-60)。附 `__iter__` 返回 `iter(生成器)` 形态对照
+
 ### suspend_with_replay
 
 - 职责: `with` 体与 `__exit__` 内挂起的重放 (进入标记不重复执行, P0-22 暂存叠加)
 - 比对: `same_output`
 - 源文件: [ci/cases/suspend_with_replay.py](../../ci/cases/suspend_with_replay.py)
+
+### suspend_zip_multi_arg
+
+- 职责: `zip` 多参消费包装迭代器类的挂起重放
+- 比对: `same_output`
+- 源文件: [ci/cases/suspend_zip_multi_arg.py](../../ci/cases/suspend_zip_multi_arg.py)
+
+zip 逐参消费, 某参数消费中途挂起时立即传播挂起并放弃本次调用, 不在 `_suspended` 置位下继续取下一个参数的迭代器 (用户 `__iter__` 会假挂起返回 null, 被误报 `zip() arg is not iterable`); 重放轮各参数经生成器记忆按出现次序复用 (I2-61)。附单参对照与实例带字段、三参、混合序列形态; 协议驱动的 `__iter__` / `__next__` 不借用 ambient 调用节点参与 retired 完成记录

@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.8.0-alpha.9] - 2026-10-06
+
+### 修复
+
+- **zip 多参数消费包装迭代器类的挂起重放（I2-61）**：`zip(W(), W())`（`W.__iter__` 返回 `iter(生成器)`，生成器体内 `sleep`）消费挂起后原在 `_suspended` 置位下继续取下一个参数的迭代器，用户 `__iter__` 调用假挂起返回 null，被误报 `TypeError: zip() arg is not iterable`——zip 改为逐参消费遇挂起立即传播并放弃本次调用（语句重放后逐参续读，各参数经生成器记忆按出现次序复用）；连带修正协议驱动的 `__iter__` / `__next__` 调用借用 ambient 调用节点参与 retired 完成记录的碰撞（zip 双参同节点两次 `__iter__` 完成记录互相覆盖，重放轮按结构匹配会取到兄弟调用的返回值），协议驱动在途时调用不参与 retired 记录与短路（生成器记忆不受影响，仍按节点与出现次序复用）。挂起停止前的部分结果登记与 `min_len` 收敛先行完成——哨兵初值若带入结果构建循环，逐次挂起调用会放大为百万级空元组分配（含对象登记），曾致双端用例在持续集成环境耗时 50 分钟未终了
+- **`__iter__` 返回 `self` 的用户迭代器挂起重放循环（I2-60）**：`list(SelfIter())`（`__next__` 体内 `sleep`）原不传播迭代器挂起（消费器把挂起当作耗尽或 null 元素），且 `__next__` 完成记录在消费器节点上被多轮驱动互相覆盖、重放轮 retired 短路反复取回同一旧值，步数安全阀触顶——`DSLUserIterator` 改为一次性迭代器产出日志模式（与生成器迭代器同型）：`__next__` 挂起经 `suspended` 标记向消费器传播，产出记入日志并参与语句消费窗口，重放轮从日志续读已交付元素、仅对新元素继续驱动 `__next__`，实例状态跨重放轮推进与睡眠去重计数配合逐步收敛
+- **旧式 `__getitem__` 迭代协议的挂起传播（I2-62，实现期新发现）**：仅定义 `__getitem__` 的对象按连续下标迭代时，`__getitem__` 体内 `sleep` 挂起原被当作迭代结束（null 返回走耗尽路径）——消费器拿到部分结果且语句不重放，后续输出错乱或静默丢失（`list(OldStyle())` 输出 `[]`、推导式反复打印部分列表）；下标迭代器改为识别挂起并经 `suspended` 标记传播，重放轮经帧复用续做被中断的 `__getitem__`；连带修正一次性迭代器 `suspended` 标记的跨轮残留（生成器表达式帧栈跨重放轮持有源迭代器且不参与窗口重置，残留标记使重放轮卡死），标记统一在消费入口清除
+- **生成器形态 `__iter__` 的重放复用保持（I2-61 连带）**：`def __iter__` 本身为生成器函数的形态经协议计数方案保持 ambient 节点借用，生成器记忆按节点与出现次序复用不受协议豁免影响（`list(zip(G(), G2()))` 等形态挂起重放输出与 CPython 一致）
+- **引擎退出检查滞留告警的定位与规避（P6）**：全量与挂起套件退出日志的 `WARNING: 50 ObjectDB instances were leaked` 定位为 pygds.gd 自身脚本的 47 个内部类 GDScript 资源被引擎退出检查滞留（DSL 运行时对象经对象登记回收零泄漏）；经同引擎对 alpha.7 / alpha.8 两版文件对照、diff 分组切除与最小化实验，触发构造锁定为 alpha.8 I1-71 引入的 `DSLExitStack.builtin_pop_all` 类体内自引用构造（`DSLExitStack.new()`），静态变量、类型注解、字节码引用、提及数量等其他形态均排除，`class_name` 全局类注册为必要条件；构造改为经跨类工厂 `Interpreter._new_exit_stack()` 完成，退出告警清零（全量与挂起套件退出日志零告警）
+
+### 测试
+
+- 新增 3 例：`suspend_zip_multi_arg`（zip 双参消费包装迭代器类 / 实例带字段 / 三参 / 混合序列 / `zip(SelfIter, SelfIter)` 交叉形态 / 单参对照）、`suspend_user_iter`（`__iter__` 返回 `self` 的 list / 推导式 / sum / for / `next()` 消费 / 带字段实例 / `__iter__` 返回 `iter(生成器)` 对照）与 `suspend_getitem_iter`（旧式 `__getitem__` 迭代的 list / 推导式 / sum / for / zip 双参形态）`same_output`；behavioral.md 中英同步（350 条）；已知问题清单移除 I2-61 / I2-60 / I2-62（Issue 系清零），ObjectDB 退出告警定位登记 Platform P6 并当版规避（触发构造由 alpha.8 引入，告警清零）
+- 全量回归 **350/350** 通过（0 跳过）；挂起套件 24/24 通过；lint 三件套 0 问题；引擎 SCRIPT ERROR 保持 0；全量与挂起套件退出日志 ObjectDB 零告警
+
+## [0.8.0-alpha.8] - 2026-10-06
+
 ### 修复
 
 - **random 模块的 MT19937 对齐**：PRNG 从自有 xorshift32 替换为 CPython 的 Mersenne Twister——int 种子按 CPython `random_seed` 语义取绝对值分解为 32 位小端字数组经 `init_by_array` 初始化（`seed(42)` 后 `random` / `randint` / `randrange` / `choice` / `shuffle` / `sample` / `getrandbits` / `getstate` / `setstate` / `gauss` / `uniform` 序列与 CPython 逐值一致）；`_randbelow` 换 `getrandbits` 拒绝采样（`k = n.bit_length()`）；`random()` 为 53 位双字组合、`gauss` 换极坐标算法加第二值缓存、`getrandbits` 按 CPython `_randbits` 的低位字先组合；无参 / None 种子用引擎随机源播种（CPython 的 OS 随机源语义）；字符串种子经哈希展开 init_by_array（CPython 3.11+ 的 str 种子经 sha512 处理，序列与 CPython 不同，文档化差异）；D1 由「有意模型」转为已对齐，README 中英同步

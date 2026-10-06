@@ -35,7 +35,7 @@ class Token:
 	var line: int
 	## 所在列
 	var column: int
-	## 字面量转换是否溢出 int64 (P0-13: 溢出不再报错, literal_big 携带精确十进制串)
+	## 字面量转换是否溢出 int64 (literal_big 携带精确十进制串)
 	var literal_overflow: bool = false
 	## 大数十进制数字串 (无符号, literal_overflow 为真时有效; 空 = 快路径)
 	var literal_big: String = ""
@@ -915,7 +915,7 @@ class Lexer:
 			result = result * base + v
 		return result
 
-	## 产出整数字面量 Token (P0-13): 溢出时按原进制数字串精确升级为十进制大串
+	## 产出整数字面量 Token: 溢出时按原进制数字串精确升级为十进制大串
 	func _add_int_token(v: int, digits: String = "", base: int = 10):
 		add_token(TokenType.INTEGER, v)
 		tokens[tokens.size() - 1].literal_overflow = literal_overflow
@@ -928,7 +928,7 @@ class Lexer:
 		while peek().is_valid_identifier() or peek().is_valid_int():
 			advance()
 		var text = source.substr(start, current - start)
-		# 字符串前缀 (f/r/b/u 及组合) 后跟引号 → 扫描带前缀字符串
+		# 字符串前缀 (f/r/b/u 及组合) 后跟引号 -> 扫描带前缀字符串
 		if _is_string_prefix(text) and (peek() == '"' or peek() == "'"):
 			scan_prefixed_string(text)
 			return
@@ -1441,13 +1441,13 @@ class CompClause:
 class Literal extends Expr:
 	## 字面量的实际值 (int/float/String/bool/null)
 	var value
-	## 整数字面量是否溢出 int64 (P0-13: 溢出由 big_value 承载, 不再是错误)
+	## 整数字面量是否溢出 int64 (溢出由 big_value 承载)
 	var overflow: bool = false
 	## 大数十进制数字串 (无符号; 非空 = 大数字面量, value 恒为 0)
 	var big_value: String = ""
 	## 大数符号
 	var big_neg: bool = false
-	## 是否为虚数字面量 (1j 等, P1-56): value 为虚部的浮点值
+	## 是否为虚数字面量 (1j 等): value 为虚部的浮点值
 	var is_imag: bool = false
 	## 构造字面量表达式 [br]
 	## [param v] 字面量的实际值
@@ -1694,7 +1694,7 @@ class Call extends Expr:
 	## [param kw] 关键字参数列表 [br]
 	## [param sa] 星号解包表达式列表 [br]
 	## [param skw] 双星号解包表达式列表 [br]
-	## [param layout] 实参书写顺序表 (可省略, 缺省时按 pos → star → kw → starkw 旧序)
+	## [param layout] 实参书写顺序表 (可省略, 缺省时按 pos -> star -> kw -> starkw 旧序)
 	func _init(c, a, kw = [], sa = [], skw = [], layout = []):
 		callee_expr = c
 		arguments = a
@@ -2038,7 +2038,7 @@ class ClassStmt extends Stmt:
 	var body: Array[Stmt]
 	## 任意装饰器表达式数组 (源码顺序, 最外层在前)
 	var decorators: Array = []
-	## 类头关键字基类 (P1-72, PEP 487): KeywordArg 节点数组 (名字 → 值表达式)
+	## 类头关键字基类 (P1-72, PEP 487): KeywordArg 节点数组 (名字 -> 值表达式)
 	var kw_bases: Array = []
 	## 类头 **字典解包基类表达式数组
 	var starkw_bases: Array = []
@@ -3168,7 +3168,16 @@ class DSLObject:
 		if klass != null:
 			var method = klass._lookup_method("__iter__")
 			if method != null:
+				# I2-61: 协议驱动的 __iter__ 无自身调用节点, 借用 ambient 节点时
+				# 不得参与 retired 完成记录 (zip 双参等同一节点多次调用会互相覆盖,
+				# 重放轮按结构匹配会取到兄弟调用的返回值); 生成器记忆
+				# (_memo_generator 按节点与出现次序复用) 必须保持, 故仅置协议计数
+				var ip_iter = Interpreter.active
+				if ip_iter != null:
+					ip_iter._protocol_call_depth += 1
 				var result = klass._invoke_func(method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if ip_iter != null:
+					ip_iter._protocol_call_depth -= 1
 				if result == null:
 					# null 结果为挂起或已有错误传播, 原样返回 (不得误报为迭代失败)
 					return null
@@ -3598,13 +3607,13 @@ class DSLObject:
 				dg.insert(0, 0)
 		return [dg, frac_len]
 
-	## DSLInteger 的十进制串 (P0-13, 快慢路径统一; 供 dict/set 键编码)
+	## DSLInteger 的十进制串 (快慢路径统一, 供 dict/set 键编码)
 	static func _int_dec_of(obj: DSLInteger) -> String:
 		if obj.is_big():
 			return DSLBigInt.to_dec(obj.big_neg, obj.big_limbs)
 		return str(obj.value)
 
-	## float 的精确整数截断 (P0-13): 复用十进制展开, 向零截断, 支持超出 int64 [br]
+	## float 的精确整数截断: 复用十进制展开, 向零截断, 支持超出 int64 [br]
 	## 零值先行短路: 规格化循环对 0 不终止
 	static func _int_from_float_exact(f: float) -> DSLInteger:
 		if f == 0.0:
@@ -3769,7 +3778,7 @@ class DSLObject:
 	## [returns] 转换后的整数, 失败返回 INDEX_ERR
 	static func _seq_index_int(idx: DSLObject, err_obj: DSLObject = null, clamp_big: bool = true) -> int:
 		if idx is DSLInteger:
-			# P0-13: 大数索引位 (CPython Py_ssize_t 同构)——切片分量钳制到 int64 边界
+			# 大数索引位 (CPython Py_ssize_t 同构)——切片分量钳制到 int64 边界
 			# (CPython 切片对超界分量取钳制语义), 直接下标经 _norm_seq_index 传 false 报 IndexError
 			if (idx as DSLInteger).is_big():
 				if clamp_big:
@@ -3824,7 +3833,7 @@ class DSLObject:
 			_seq_index_fail(idx, err_obj, msg)
 			return null
 		if i == INDEX_ERR:
-			# P0-13: 大数下标是真失败 (返回错误); 快路径整数为哨兵值复用, 原样返回
+			# 大数下标是真失败 (返回错误), 快路径整数为哨兵值复用, 原样返回
 			if (idx as DSLInteger).is_big():
 				_seq_index_fail(idx, err_obj, msg)
 				return null
@@ -4022,7 +4031,7 @@ class DSLBool extends DSLObject:
 		var a = lhs._promote(rhs, op)
 		if a[0] == null:
 			return null
-		# P0-13: 大数操作数分派 (二元算术结果恒为 int/float, bool 不折叠)
+		# 大数操作数分派 (二元算术结果恒为 int/float, bool 不折叠)
 		if a[1] is DSLInteger and (lhs.is_big() or (a[1] as DSLInteger).is_big()):
 			return lhs._binop_big(a[1], op)
 		match op:
@@ -4103,7 +4112,7 @@ class DSLBool extends DSLObject:
 			return _arithmetic_type_error(op, rhs)
 		var rhsi = rhs as DSLInteger
 		if rhsi.is_big():
-			# P0-13: 与大数的位运算走整数路径 (结果恒为 int)
+			# 与大数的位运算走整数路径 (结果恒为 int)
 			return _as_int()._binop_big(rhsi, op)
 		var l = 1 if value else 0
 		var res = 0
@@ -4268,7 +4277,7 @@ class DSLExceptionDescriptor extends DSLObject:
 			return DSLString.new(dname)
 		return super._dsl_getattribute(attr_name)
 
-## 任意精度整数核心 (P0-13): 纯静态函数, 无解释器依赖 [br]
+## 任意精度整数核心: 纯静态函数, 无解释器依赖 [br]
 ## 表示约定: (neg: bool, limbs: Array[int]) —— limbs 为 32 位一组的**小端幅值** [br]
 ## (下标 0 为最低位), 规范化后无前导零 limb; 零表示为空 limbs 且 neg=false [br]
 ## 全部算法与 CPython longobject 同型: floor 除法 / 余数符号随除数 / 无限二补数位运算 / [br]
@@ -4311,7 +4320,7 @@ class DSLBigInt:
 			return mag_of_u64(-v)
 		return mag_of_u64(v)
 
-	## int64 → [neg, limbs]
+	## int64 -> [neg, limbs]
 	static func pair_of_i64(v: int) -> Array:
 		if v >= 0:
 			return [false, mag_of_u64(v)]
@@ -4611,7 +4620,7 @@ class DSLBigInt:
 				u[j + m] = (u[j + m] + carry2) % half
 			q[j] = qhat
 		_strip(q)
-		# 商与余数 16 位数字 → 32 位 limbs
+		# 商与余数 16 位数字 -> 32 位 limbs
 		var q32: Array[int] = []
 		var i32 = 0
 		while i32 < q.size():
@@ -4693,7 +4702,7 @@ class DSLBigInt:
 			carry = t >> 32
 		return out
 
-	## 二补数流 → [neg, limbs] (最高 limb 符号位定号)
+	## 二补数流 -> [neg, limbs] (最高 limb 符号位定号)
 	static func _from_tc(stream: Array[int]) -> Array:
 		var top = stream[stream.size() - 1]
 		if (top & 2147483648) == 0:
@@ -4779,7 +4788,7 @@ class DSLBigInt:
 			return lower.unicode_at(0) - 87
 		return -1
 
-	## 指定进制数字串 → [neg, limbs] (调用方已校验字符合法性与下划线)
+	## 指定进制数字串 -> [neg, limbs] (调用方已校验字符合法性与下划线)
 	static func from_digits(digits: String, base: int, neg: bool) -> Array:
 		var mag: Array[int] = []
 		for ch in digits:
@@ -4797,7 +4806,7 @@ class DSLBigInt:
 			return [false, _zero_limbs()]
 		return [neg, mag]
 
-	## 幅值 → 指定位序的小写进制串 (base ∈ 2/8/16)
+	## 幅值 -> 指定位序的小写进制串 (base ∈ 2/8/16)
 	static func mag_to_base(limbs: Array[int], base: int) -> String:
 		if limbs.is_empty():
 			return "0"
@@ -4845,7 +4854,7 @@ class DSLBigInt:
 		var p = pair_of_i64(v)
 		return hash_of(p[0], p[1])
 
-	## 幅值 → double: 53 位半到偶舍入; 返回 [ok, value], ok=false 表示超出 double 范围
+	## 幅值 -> double: 53 位半到偶舍入; 返回 [ok, value], ok=false 表示超出 double 范围
 	static func mag_to_float(neg: bool, limbs: Array[int]) -> Array:
 		var bits = mag_bitlen(limbs)
 		if bits == 0:
@@ -4883,7 +4892,7 @@ class DSLInteger extends DSLObject:
 	static var _type_class: DSLClass = null
 	## 底层的整数值 (快路径; big_limbs 非空时未定义, 恒为 0)
 	var value: int
-	## 大数幅值 limbs (P0-13): 32 位一组小端, 空数组 = 快路径 (value 有效)
+	## 大数幅值 limbs: 32 位一组小端, 空数组 = 快路径 (value 有效)
 	var big_limbs: Array[int] = []
 	## 大数符号 (big_limbs 非空时有效)
 	var big_neg: bool = false
@@ -4921,7 +4930,7 @@ class DSLInteger extends DSLObject:
 			return obj
 		return DSLInteger.new(v)
 
-	## 是否为大数形态 (P0-13): big_limbs 非空时 value 未定义
+	## 是否为大数形态: big_limbs 非空时 value 未定义
 	func is_big() -> bool:
 		return not big_limbs.is_empty()
 
@@ -4931,7 +4940,7 @@ class DSLInteger extends DSLObject:
 			return [big_neg, big_limbs]
 		return DSLBigInt.pair_of_i64(value)
 
-	## 由大数对构造: 能落回 int64 时缩回快路径并走驻留池 (P0-13)
+	## 由大数对构造: 能落回 int64 时缩回快路径并走驻留池
 	static func from_big(neg: bool, limbs: Array[int]) -> DSLInteger:
 		DSLBigInt._strip(limbs)
 		var v = DSLBigInt.to_i64(neg, limbs)
@@ -4957,7 +4966,7 @@ class DSLInteger extends DSLObject:
 			return DSLBigInt.hash_of(big_neg, big_limbs)
 		return DSLBigInt.hash_i64(value)
 
-	## 大数 → double (53 位半到偶舍入); 越界写 OverflowError 并返回 null
+	## 大数 -> double (53 位半到偶舍入); 越界写 OverflowError 并返回 null
 	func _to_float_checked():
 		if not is_big():
 			return float(value)
@@ -4996,7 +5005,7 @@ class DSLInteger extends DSLObject:
 			res = DSLBigInt.mag_cmp(DSLBigInt.mag_shl(mag, -ep), DSLBigInt.mag_of_u64(m))
 		return -res if my_neg else res
 
-	## 大数二元算术分派 (P0-13): 任一操作数为大数或快路径结果溢出时走此路径 [br]
+	## 大数二元算术分派: 任一操作数为大数或快路径结果溢出时走此路径 [br]
 	## op ∈ "+ - * // % ** << >> & | ^"; DSLBool 由调用方折算为 DSLInteger 传入 [br]
 	## 失败时写 last_error 返回 null (与魔术方法约定一致)
 	func _binop_big(other: DSLInteger, op: String) -> DSLObject:
@@ -5098,7 +5107,7 @@ class DSLInteger extends DSLObject:
 		last_error = "TypeError: unsupported operand type(s)"
 		return null
 
-	## 大数比较分派 (P0-13): op ∈ "== != < > <= >="
+	## 大数比较分派: op ∈ "== != < > <= >="
 	func _cmp_big(other: DSLInteger, op: String) -> DSLBool:
 		var c = DSLBigInt.cmp(_pair()[0], _pair()[1], other._pair()[0], other._pair()[1])
 		match op:
@@ -5148,7 +5157,7 @@ class DSLInteger extends DSLObject:
 			return null
 		elif a[1] is DSLInteger:
 			var oi = a[1] as DSLInteger
-			# P0-13: 任一侧大数或快路径回绕 → 大数路径自动升级
+			# 任一侧大数或快路径回绕 -> 大数路径自动升级
 			if self_obj.is_big() or oi.is_big():
 				return self_obj._binop_big(oi, "+")
 			var bv = oi.value
@@ -5217,7 +5226,7 @@ class DSLInteger extends DSLObject:
 				return null
 			return DSLFloat.new(a[0].value / a[1].value)
 		var oi = a[1] as DSLInteger
-		# P0-13: 大数真除 (零判断移后, 大数的 value 未定义)
+		# 大数真除 (零判断移后, 大数的 value 未定义)
 		if self_obj.is_big() or oi.is_big():
 			if oi.is_big() or oi.value != 0:
 				if oi._pair()[1].is_empty():
@@ -5250,13 +5259,13 @@ class DSLInteger extends DSLObject:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
 			var oi = other as DSLInteger
-			# P0-13: 大数分派先于零判断 (大数形态的 value 未定义, 恒为 0)
+			# 大数分派先于零判断 (大数形态的 value 未定义, 恒为 0)
 			if self_obj.is_big() or oi.is_big():
 				return self_obj._binop_big(oi, "//")
 			if oi.value == 0:
 				self_obj.last_error = "ZeroDivisionError: integer division or modulo by zero"
 				return null
-			# int64min//-1 挂死组合 → 大数路径
+			# int64min//-1 挂死组合 -> 大数路径
 			if self_obj.value == -9223372036854775807 - 1 and oi.value == -1:
 				return self_obj._binop_big(oi, "//")
 			return DSLInteger.pooled(DSLInteger._py_floordiv(self_obj.value, oi.value))
@@ -5280,7 +5289,7 @@ class DSLInteger extends DSLObject:
 			other = DSLInteger.pooled(1 if other.value else 0)
 		if other is DSLInteger:
 			var oi = other as DSLInteger
-			# P0-13: 大数分派先于零判断
+			# 大数分派先于零判断
 			if self_obj.is_big() or oi.is_big():
 				return self_obj._binop_big(oi, "%")
 			if oi.value == 0:
@@ -5318,7 +5327,7 @@ class DSLInteger extends DSLObject:
 		if has_int_exp:
 			var oi: DSLInteger = other if other is DSLInteger else null
 			if oi != null and oi.is_big():
-				# P0-13: 大数指数
+				# 大数指数
 				if oi.big_neg:
 					# 负大指数: 按浮点幂 (底数/指数转 double, 越界报 OverflowError)
 					if not self_obj.is_big() and self_obj.value == 0:
@@ -5347,7 +5356,7 @@ class DSLInteger extends DSLObject:
 				var result = 1
 				var base = self_obj.value
 				var e = exp_int
-				# 结果幅值超界预判: 负底数奇次幂允许恰为最小整数; 超界 → 大数路径自动升级
+				# 结果幅值超界预判: 负底数奇次幂允许恰为最小整数; 超界 -> 大数路径自动升级
 				var fbase = float(base)
 				if fbase < 0.0:
 					fbase = -fbase
@@ -5398,7 +5407,7 @@ class DSLInteger extends DSLObject:
 				return self_obj._cmp_big(DSLInteger.pooled(1 if other.value else 0), "==")
 			return DSLBool.new(self_obj.value == (1 if other.value else 0))
 		if other is DSLFloat:
-			# P0-13: 与浮点的精确比较 (不经 double 有损转换, CPython 同语义)
+			# 与浮点的精确比较 (不经 double 有损转换)
 			return DSLBool.new(self_obj._cmp_with_float(other.value) == 0)
 		return DSLBool.new(false)
 
@@ -5498,7 +5507,7 @@ class DSLInteger extends DSLObject:
 		if self_obj.is_big():
 			return DSLInteger.from_big(not self_obj.big_neg, self_obj.big_limbs)
 		if self_obj.value == -9223372036854775807 - 1:
-			# 最小整数的相反数超出 int64: 升级大数 (P0-13)
+			# 最小整数的相反数超出 int64: 升级大数
 			return DSLInteger.from_big(true, DSLBigInt.mag_of_i64_abs(self_obj.value))
 		return DSLInteger.pooled(-self_obj.value)
 
@@ -5544,7 +5553,7 @@ class DSLInteger extends DSLObject:
 			if v == 0:
 				return DSLInteger.pooled(0)
 			if sh >= 64 or (v > 0 and v > (9223372036854775807 >> sh)) or (v < 0 and v < ((-9223372036854775807 - 1) >> sh)):
-				# 左移越界: 自动升级大数 (P0-13)
+				# 左移越界: 自动升级大数
 				return self_obj._binop_big(oi, "<<")
 			return DSLInteger.pooled(v << sh)
 		return self_obj._arithmetic_type_error("<<", other)
@@ -5854,7 +5863,7 @@ class DSLFloat extends DSLObject:
 			return null
 		return DSLFloat.new(self_obj.value / a[1].value)
 	
-	## 大数操作数转 double (P0-13): 越界报 OverflowError (CPython 同型)
+	## 大数操作数转 double: 越界报 OverflowError (CPython 同型)
 	func _float_of(other: DSLObject) -> float:
 		if other is DSLInteger and (other as DSLInteger).is_big():
 			var conv = (other as DSLInteger)._to_float_checked()
@@ -5926,7 +5935,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLBool:
 			return DSLBool.new(self_obj.value == float(1 if other.value else 0))
 		if other is DSLInteger:
-			# P0-13: 与大数的精确相等比较 (不经 double 有损转换)
+			# 与大数的精确相等比较 (不经 double 有损转换)
 			return DSLBool.new((other as DSLInteger)._cmp_with_float(self_obj.value) == 0)
 		return DSLBool.new(other is DSLFloat and self_obj.value == other.value)
 	
@@ -6013,7 +6022,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return value == other.value
 		if other is DSLInteger:
-			# P0-13: 与大数/大值的精确相等比较
+			# 与大数/大值的精确相等比较
 			return (other as DSLInteger)._cmp_with_float(value) == 0
 		if other is DSLBool:
 			return (value != 0.0) == other.value
@@ -6052,7 +6061,7 @@ class DSLFloat extends DSLObject:
 		if other is DSLBool:
 			return [self, DSLFloat.new(1.0 if other.value else 0.0)]
 		if other is DSLInteger:
-			# P0-13: 大数经 53 位舍入转 double, 越界报 OverflowError
+			# 大数经 53 位舍入转 double, 越界报 OverflowError
 			if (other as DSLInteger).is_big():
 				var convp = (other as DSLInteger)._to_float_checked()
 				if convp == null:
@@ -6188,7 +6197,7 @@ class DSLComplex extends DSLObject:
 	func _type_name() -> String:
 		return "complex"
 
-	## 提取数值实参的实部候选 (int/float/bool → float, 其余 null)
+	## 提取数值实参的实部候选 (int/float/bool -> float, 其余 null)
 	static func _num_part(o: DSLObject) -> Variant:
 		if o is DSLInteger:
 			return float(o.value)
@@ -6210,7 +6219,7 @@ class DSLComplex extends DSLObject:
 			cself.last_error = ""
 		return res
 
-	## 浮点部分的 repr 文本 (CPython complex repr 不强制小数点: 3.0 → 3)
+	## 浮点部分的 repr 文本 (CPython complex repr 不强制小数点: 3.0 -> 3)
 	static func _part_repr(v: float) -> String:
 		var t = DSLObject._py_float_repr(v)
 		if t.ends_with(".0"):
@@ -6509,7 +6518,7 @@ class DSLString extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		var reps = -1
 		if other is DSLInteger:
-			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			# 重复计数为索引位 (CPython Py_ssize_t 同构)
 			if (other as DSLInteger).is_big():
 				self_obj.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
 				return null
@@ -6638,7 +6647,7 @@ class DSLString extends DSLObject:
 			out += one
 		return out
 
-	## 数值格式化的浮点取值 (P0-13): 大数经 53 位舍入转 double, 越界报 OverflowError
+	## 数值格式化的浮点取值: 大数经 53 位舍入转 double, 越界报 OverflowError
 	func _fmt_float_of(val: DSLObject) -> float:
 		if val is DSLInteger and val.is_big():
 			var conv = DSLBigInt.mag_to_float(val.big_neg, val.big_limbs)
@@ -6669,7 +6678,7 @@ class DSLString extends DSLObject:
 				s = r.value if r is DSLString else val._dsl_str()
 			'd', 'i', 'u':
 				is_numeric = true
-				# P0-13: 大数按十进制串格式化
+				# 大数按十进制串格式化
 				if val is DSLInteger and val.is_big():
 					s = DSLObject._int_dec_of(val)
 				else:
@@ -7014,7 +7023,7 @@ class DSLString extends DSLObject:
 			return 0
 		return int(sci.substr(idx + 1))
 
-	## 科学计数 mantissa 去尾零 (1.00e+02 → 1e+02)
+	## 科学计数 mantissa 去尾零 (1.00e+02 -> 1e+02)
 	func _strip_mant_zeros(sci: String) -> String:
 		var idx := sci.find("e")
 		if idx < 0:
@@ -7027,7 +7036,7 @@ class DSLString extends DSLObject:
 				mant = mant.substr(0, mant.length() - 1)
 		return mant + sci.substr(idx)
 
-	## repr 形态的有效位计数 ("10.0" → 3, "0.000123" → 3)
+	## repr 形态的有效位计数 ("10.0" -> 3, "0.000123" -> 3)
 	func _sig_digit_count(s: String) -> int:
 		if s.contains("e"):
 			s = s.substr(0, s.find("e"))
@@ -7037,7 +7046,7 @@ class DSLString extends DSLObject:
 		return 1 if s == "" else s.length()
 
 	## CPython format 规格无类型 + .N: 舍入到 N 位有效数字后取 repr 形态 (P2-48)
-	## (123.0, 3) → "1.23e+02"; (2.0, 3) → "2.0"; (3.14159, 3) → "3.14"
+	## (123.0, 3) -> "1.23e+02"; (2.0, 3) -> "2.0"; (3.14159, 3) -> "3.14"
 	func _sig_float_str(x: float, p: int) -> String:
 		if x == 0.0:
 			return "0.0"
@@ -7201,7 +7210,7 @@ class DSLString extends DSLObject:
 				last_error = "KeyError: '" + idx_str + "'"
 				last_error_args = [DSLString.new(idx_str)] as Array[DSLObject]
 			return ""
-		# 嵌套格式规格: 字段名解析之后、规格应用之前解析 (CPython 顺序, P0-26)
+		# 嵌套格式规格: 字段名解析之后、规格应用之前解析
 		if spec.contains("{"):
 			spec = _resolve_nested_spec(spec, fmt_args, kwargs, idx_box)
 		# 应用转换标志
@@ -7715,7 +7724,7 @@ class DSLString extends DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var tabsize = 8
 		if args.size() >= 2 and args[1] is DSLInteger:
-			# P0-13: tabsize 为索引位
+			# tabsize 为索引位
 			if (args[1] as DSLInteger).is_big():
 				last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
 				return null
@@ -7956,7 +7965,7 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
-			# P0-13: 宽度参数为索引位
+			# 宽度参数为索引位
 			if (args[1] as DSLInteger).is_big():
 				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
 				return null
@@ -7991,7 +8000,7 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
-			# P0-13: 宽度参数为索引位
+			# 宽度参数为索引位
 			if (args[1] as DSLInteger).is_big():
 				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
 				return null
@@ -8017,7 +8026,7 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
-			# P0-13: 宽度参数为索引位
+			# 宽度参数为索引位
 			if (args[1] as DSLInteger).is_big():
 				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
 				return null
@@ -8103,7 +8112,7 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var width = 0
 		if args[1] is DSLInteger:
-			# P0-13: 宽度参数为索引位
+			# 宽度参数为索引位
 			if (args[1] as DSLInteger).is_big():
 				raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
 				return null
@@ -8386,7 +8395,7 @@ class DSLList extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		var reps_l = -1
 		if other is DSLInteger:
-			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			# 重复计数为索引位 (CPython Py_ssize_t 同构)
 			if (other as DSLInteger).is_big():
 				self_obj.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
 				return null
@@ -8414,7 +8423,7 @@ class DSLList extends DSLObject:
 				if not self_obj.items[i]._dsl_eq(other.items[i]):
 					return DSLBool.new(false)
 			return DSLBool.new(true)
-		# 跨容器类型恒不相等 (P0-29): list 与 tuple/set/dict 互比按 CPython 为 False
+		# 跨容器类型恒不相等: list 与 tuple/set/dict 互比按 CPython 为 False
 		return DSLBool.new(false)
 	
 	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -8428,7 +8437,7 @@ class DSLList extends DSLObject:
 				if not self_obj.items[i]._dsl_eq(other.items[i]):
 					return DSLBool.new(true)
 			return DSLBool.new(false)
-		# 跨容器类型恒不相等 (P0-29)
+		# 跨容器类型恒不相等
 		return DSLBool.new(true)
 
 	## 序列字典序比较核心 (list 与 tuple 共用) [br]
@@ -9242,7 +9251,7 @@ class DSLTuple extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		var reps_t = -1
 		if other is DSLInteger:
-			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			# 重复计数为索引位 (CPython Py_ssize_t 同构)
 			if (other as DSLInteger).is_big():
 				self_obj.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
 				return null
@@ -9695,7 +9704,7 @@ class DSLDict extends DSLObject:
 		if key is DSLBool:
 			return 1 if key.value else 0
 		if key is DSLInteger:
-			# P0-13: 大数键编码为 "i:十进制串" (与 int64 整数键值域不重叠)
+			# 大数键编码为 "i:十进制串" (与 int64 整数键值域不重叠)
 			if (key as DSLInteger).is_big():
 				return "i:" + DSLObject._int_dec_of(key)
 			return key.value
@@ -9703,7 +9712,7 @@ class DSLDict extends DSLObject:
 		if key is DSLFloat:
 			if not is_nan(key.value) and not is_inf(key.value) and key.value == floor(key.value):
 				if abs(key.value) >= 9223372036854775808.0:
-					# P0-13: 超出 int64 的整值浮点与大数键同一编码 (等值同键)
+					# 超出 int64 的整值浮点与大数键同一编码 (等值同键)
 					return "i:" + DSLObject._int_dec_of(DSLObject._int_from_float_exact(key.value))
 				return int(key.value)
 			return key.value
@@ -10393,7 +10402,7 @@ class DSLBytes extends DSLObject:
 		var other = args[1]
 		var reps_b = -1
 		if other is DSLInteger:
-			# P0-13: 重复计数为索引位 (CPython Py_ssize_t 同构)
+			# 重复计数为索引位 (CPython Py_ssize_t 同构)
 			if (other as DSLInteger).is_big():
 				last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
 				return null
@@ -12414,7 +12423,7 @@ class DSLExitStack extends DSLContextlibManager:
 		return val
 
 	func builtin_pop_all(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var out = DSLExitStack.new()
+		var out = Interpreter.active._new_exit_stack()
 		out.entries = entries
 		entries = []
 		return out
@@ -12999,7 +13008,7 @@ class DSLSet extends DSLObject:
 		if obj is DSLBool:
 			return "i:" + ("1" if obj.value else "0")
 		if obj is DSLInteger:
-			# P0-13: 大数键编码为 "i:十进制串"
+			# 大数键编码为 "i:十进制串"
 			if (obj as DSLInteger).is_big():
 				return "i:" + DSLObject._int_dec_of(obj)
 			return "i:" + str(obj.value)
@@ -15439,10 +15448,6 @@ class DSLUserIterator extends DSLIterator:
 	var target: DSLObject = null
 	## 所属解释器引用 (调用用户方法需要)
 	var interp: Interpreter = null
-	## 是否已预取下一个值
-	var _has_prefetched: bool = false
-	## 已预取的值
-	var _prefetched: DSLObject = null
 
 	## 构造用户迭代器 [br]
 	## [param obj] 被驱动的用户实例
@@ -15450,48 +15455,91 @@ class DSLUserIterator extends DSLIterator:
 		super._init()
 		target = obj
 		interp = obj.interp
+		# 用户 __next__ 体内可挂起 (sleep 等), 属一次性迭代器:
+		# 产出记入日志并参与语句消费窗口, 重放轮从日志续读已产出元素,
+		# 不再重新驱动 __next__ (用户实例状态跨重放轮单调推进,
+		# 重驱动会与睡眠去重计数失配, 每轮都真实挂起而不收敛)
+		once = true
 
 	## 是否还有下一个元素 [br]
-	## 用户 __next__ 可能有副作用, 不能预取: 这里惰性驱动一次并缓存结果
+	## 日志未读尽时直接回答; 越过日志才惰性驱动一次 __next__ (副作用语义与 CPython 一致) [br]
+	## suspended 在入口清除 (本迭代器可被生成器表达式帧栈跨轮持有)
 	func has_next() -> bool:
+		suspended = false
 		if done:
 			return false
-		if not _has_prefetched:
-			_prefetch()
-		return not done
+		var ip = interp if interp != null else Interpreter.active
+		_begin_use(ip)
+		if _read_pos < _log.size():
+			return true
+		var v = _produce()
+		if suspended:
+			_propagate_suspend(ip)
+			return false
+		return v != null
 
-	## 取下一个元素 (必要时先预取)
+	## 取下一个元素 (必要时先驱动一次 __next__ 并记入日志)
 	func next() -> DSLObject:
+		suspended = false
 		if done:
 			return null
-		if not _has_prefetched:
-			_prefetch()
-		if done:
+		var ip = interp if interp != null else Interpreter.active
+		_begin_use(ip)
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
+			return buffered
+		var v = _produce()
+		if suspended:
+			_propagate_suspend(ip)
 			return null
-		_has_prefetched = false
-		return _prefetched
+		if v == null:
+			return null
+		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
+		return v
 
-	## 驱动一次用户 __next__ 并缓存结果, StopIteration 视为耗尽
-	func _prefetch() -> void:
-		_has_prefetched = true
-		_prefetched = null
+	## 驱动一次用户 __next__: 产出记入日志, 挂起置 suspended 交消费方传播, [br]
+	## StopIteration 视为正常耗尽并清除错误标记, 其余异常保留错误状态交消费方传播
+	func _produce() -> DSLObject:
+		suspended = false
+		if done:
+			return null
 		if target == null or target.klass == null:
 			done = true
-			return
+			return null
 		var next_method = target.klass._lookup_method("__next__")
 		if next_method == null:
 			done = true
-			return
+			return null
+		# I2-61: 协议驱动的 __next__ 无自身调用节点, 不得借用 ambient 节点
+		# 参与 retired 完成记录 (同一消费器节点上多轮驱动会互相覆盖,
+		# 重放轮短路会反复取回同一旧值), 故置协议计数后原样还原
+		var ip = interp if interp != null else Interpreter.active
+		if ip != null:
+			ip._protocol_call_depth += 1
 		var res = target.klass._invoke_func(next_method, [target] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-		if interp != null and interp.report.has_error:
-			# StopIteration 视为正常耗尽并清除错误标记; 其余异常 (ValueError 等)
-			# 必须保留错误状态交消费方传播, 否则异常被当作耗尽吞掉 (P0-27)
-			if interp.last_exception != null and interp.last_exception._type_name() == "StopIteration":
-				interp.report.clear_error()
-				interp.last_exception = null
+		if ip != null:
+			ip._protocol_call_depth -= 1
+		if ip != null and ip.report.has_error:
+			# StopIteration 视为正常耗尽并清除错误标记, 其余异常 (ValueError 等)
+			# 必须保留错误状态交消费方传播, 否则异常被当作耗尽吞掉
+			if ip.last_exception != null and ip.last_exception._type_name() == "StopIteration":
+				ip.report.clear_error()
+				ip.last_exception = null
+				done = true
+			return null
+		if ip != null and ip._suspended:
+			suspended = true
+			return null
+		if res == null:
 			done = true
-			return
-		_prefetched = res
+			return null
+		_log.append(res)
+		return res
 
 ## DSL 一等迭代器对象 (对应 CPython 的 list_iterator / tuple_iterator 等) [br]
 ## iter(seq) 返回它: 持有原容器引用 (活动视图), 内部驱动器首次消费时创建并复用, [br]
@@ -15641,7 +15689,7 @@ class DSLGetItemIterator extends DSLIterator:
 	var pending: DSLObject = null
 	## 预取有效标记
 	var has_pending: bool = false
-	
+
 	## 构造下标迭代器 [br]
 	## [param t] 定义了 __getitem__ 的目标对象
 	func _init(t):
@@ -15649,25 +15697,42 @@ class DSLGetItemIterator extends DSLIterator:
 		target = t
 	
 	func has_next() -> bool:
+		# I2-62: suspended 是「最近一次推进是否挂起」的标记, 生成器表达式帧栈
+		# 会跨重放轮持有本迭代器 (windowed = false, 不参与窗口重置), 必须在
+		# 入口清除上一轮残留, 否则重放轮被旧标记卡死
+		suspended = false
 		if finished or has_pending:
 			return has_pending
 		_fetch()
+		if suspended:
+			_propagate_suspend(Interpreter.active)
+			return false
 		return has_pending
-	
+
 	func next() -> DSLObject:
+		suspended = false
 		if not has_pending:
 			if finished:
 				return DSLNone.new()
 			_fetch()
+			if suspended:
+				_propagate_suspend(Interpreter.active)
+				return null
 		has_pending = false
 		return pending
-	
-	## 取下一个元素: 命中 IndexError (用户 raise 或内部站点) 时结束迭代
+
+	## 取下一个元素: 命中 IndexError (用户 raise 或内部站点) 时结束迭代, [br]
+	## 用户方法体内挂起 (sleep 等) 时置 suspended 交消费方传播 (I2-62, 不得当作耗尽)
 	func _fetch():
 		var v = target._dsl_getitem(DSLInteger.pooled(index))
 		if v == null:
-			# 用户方法内 raise 的 IndexError 经 report / last_exception 通道传播
 			var ip = Interpreter.active
+			# I2-62: 挂起中的 null (无错误无 last_error) 不得按迭代结束处理:
+			# 消费器会把部分结果当作完整输出, 且语句不重放, 后续元素静默丢失
+			if ip != null and ip._suspended and not ip.report.has_error and target.last_error == "":
+				suspended = true
+				return
+			# 用户方法内 raise 的 IndexError 经 report / last_exception 通道传播
 			if ip != null and ip.report.has_error and ip.last_exception != null and ip.last_exception._type_name() == "IndexError":
 				ip.report.clear_error()
 				ip.last_exception = null
@@ -15904,7 +15969,7 @@ class DSLGroupbyState:
 		Interpreter._track(self)
 		# 源迭代器退出语句消费窗口: 状态机的游标 (pending / have_group) 跨语句持久,
 		# 消费中途挂起后由本状态机按自身进度续拉, 若源游标被语句重放回退到窗口起点,
-		# 已消费元素会被再次投递进状态机, 组边界即被污染 (P0-27)
+		# 已消费元素会被再次投递进状态机, 组边界即被污染
 		source.windowed = false
 
 	## 拉取下一个源元素 (优先消费预取) [br]
@@ -17352,14 +17417,14 @@ class DSLEnvironment:
 	var function_locals: Dictionary = {}
 	## 类体作用域标记: nonlocal 绑定搜索需跳过类作用域 (CPython 类体不是 nonlocal 目标)
 	var is_class_scope: bool = false
-	## 类体作用域上正在构建的类对象 (P0-25): 类体内 def 语句组装方法时定位定义类
+	## 类体作用域上正在构建的类对象: 类体内 def 语句组装方法时定位定义类
 	var building_class: DSLClass = null
-	## 类头关键字求值结果 (P1-72): execute_class 求值后挂载, 收尾阶段转发 __init_subclass__
+	## 类头关键字求值结果: execute_class 求值后挂载, 收尾阶段转发 __init_subclass__
 	var class_init_kw: Dictionary = {}
-	## 类体内由 def 语句绑定的名字 (P0-25): 收集阶段据此把最终对象归入类方法;
+	## 类体内由 def 语句绑定的名字: 收集阶段据此把最终对象归入类方法;
 	## 普通赋值 (set_val) 会清除标记, 与 CPython 的类字典单一名槽语义一致
 	var method_names: Dictionary = {}
-	## 类的元类 (I1-38): execute_class 识别 metaclass= 后挂载, 收尾阶段走元类建类钩子
+	## 类的元类: execute_class 识别 metaclass= 后挂载, 收尾阶段走元类建类钩子
 	var meta_class: DSLClass = null
 	
 	## 构造作用域环境 [br]
@@ -17430,7 +17495,7 @@ class DSLEnvironment:
 			enclosing.set_val(name, value)
 			return
 		if is_class_scope:
-			# 类体内的普通赋值 (P0-25): 清除方法标记, 名槽归普通类属性 (CPython 单一名槽)
+			# 类体内的普通赋值: 清除方法标记, 名槽归普通类属性 (CPython 单一名槽)
 			method_names.erase(name)
 		if comp_scope and enclosing:
 			# PEP 572: 推导式内的赋值表达式绑定在包含作用域 (推导式自身的循环变量走 define, 不经此处)
@@ -19637,21 +19702,21 @@ class Parser:
 			# 紧贴负号的溢出字面量按最小整数折叠, 保留 -9223372036854775807 - 1 的字面书写
 			if op.type == TokenType.MINUS and check(TokenType.INTEGER) and peek().literal_overflow:
 				advance()
-				# P0-13: 溢出字面量的负号折叠为大数负字面量 (CPython: 负号属于字面量常量折叠)
+				# 溢出字面量的负号折叠为大数负字面量 (CPython: 负号属于字面量常量折叠)
 				var neg_lit = Literal.new(0)
 				neg_lit.overflow = true
 				neg_lit.big_value = previous().literal_big
 				neg_lit.big_neg = true
 				return neg_lit
-			# 常量折叠: ± 紧贴整数字面量时折叠为字面量 (CPython 语义, 使负字面量同样驻留)
-			# 后随 ** 时不得折叠: -10**30 在 CPython 是 -(10**30), 折叠会变成 (-10)**30 (P0-13 显形)
+			# 常量折叠: ± 紧贴整数字面量时折叠为字面量 (使负字面量同样驻留)
+			# 后随 ** 时不得折叠: -10**30 在 CPython 是 -(10**30), 折叠会变成 (-10)**30
 			if (op.type == TokenType.MINUS or op.type == TokenType.PLUS) and check(TokenType.INTEGER) and not peek().literal_overflow and current + 1 < tokens.size() and tokens[current + 1].type != TokenType.STARSTAR:
 				var lit_tok = advance()
 				var folded: int = lit_tok.literal
 				if op.type == TokenType.MINUS:
 					folded = -folded
 				return Literal.new(folded)
-			# P0-13 显形修正: 一元操作数取完整 power 表达式 (CPython 文法 u_expr → power),
+			# 显形修正: 一元操作数取完整 power 表达式 (CPython 文法 u_expr -> power),
 			# 使 -10**30 解析为 -(10**30) 而非 (-10)**30
 			return Unary.new(op, power())
 		return primary()
@@ -21373,7 +21438,7 @@ class Parser:
 			# 开括号: 增加深度, 根据不同情况设置标志
 			if t.type == TokenType.LPAREN or t.type == TokenType.LBRACKET:
 				if has_target:
-					# `(` 紧跟目标之后是函数调用 (如 D()[2] = 1), 不是解包嵌套 → 走表达式路径
+					# `(` 紧跟目标之后是函数调用 (如 D()[2] = 1), 不是解包嵌套 -> 走表达式路径
 					if t.type == TokenType.LPAREN and idx > 0:
 						var prev_type = tokens[idx - 1].type
 						if prev_type == TokenType.IDENTIFIER or prev_type == TokenType.RPAREN or prev_type == TokenType.RBRACKET:
@@ -21526,7 +21591,7 @@ class Interpreter:
 	var exception_hierarchy: Dictionary[String, String] = {}
 	## 执行栈 (exec_block 递归层级追踪)
 	var _exec_stack: Array = []
-	## 活跃协程对象登记表 (P1-9 never-awaited 警告: 脚本收尾时对未启动者发警告)
+	## 活跃协程对象登记表 (never-awaited 警告: 脚本收尾时对未启动者发警告)
 	var _live_coroutines: Array = []
 	## 函数调用栈
 	var _call_stack: Array = []
@@ -21612,9 +21677,9 @@ class Interpreter:
 	var _sleep_waited: int = 0
 	## 重放根语句标识 (该语句正常结束时睡眠计数全部归零)
 	var _sleep_root_key: int = 0
-	## 挂起边界的在途异常暂存 (P0-22): report 错误通道在挂起期间对其隐身
+	## 挂起边界的在途异常暂存: report 错误通道在挂起期间对其隐身
 	var _parked_unwind_error: String = ""
-	## 挂起中的类构造半成品实例 (I1-73): init 体内挂起后语句整句重放, 重放轮须
+	## 挂起中的类构造半成品实例: init 体内挂起后语句整句重放, 重放轮须
 	## 取回同一实例续做 (init 恢复帧的 self 与返回值一致), 否则 __new__ 重建的
 	## 新实例与恢复帧脱节; 完成或出错后清除
 	var _suspended_ctor_instance: DSLObject = null
@@ -21625,11 +21690,11 @@ class Interpreter:
 	## 挂起中类构造的记录轮语句键 (与 _sleep_root_key 绑定): 实参不匹配未命中时
 	## 残留的记录随重放根语句结束失效, 不串扰后续无关的类构造
 	var _suspended_ctor_key: int = 0
-	## sys.path 的常驻列表引用 (I1-8): 用户模块按它逐目录解析
+	## sys.path 的常驻列表引用: 用户模块按它逐目录解析
 	var _sys_path_list: DSLList = null
-	## 内建层环境 (I1-8): 用户模块环境的父链, 持有 register_builtins 后的内建名
+	## 内建层环境: 用户模块环境的父链, 持有 register_builtins 后的内建名
 	var _builtin_env: DSLEnvironment = null
-	## 待挂载的自定义元类 (I1-38): execute_class 的 metaclass 分支识别后暂存,
+	## 待挂载的自定义元类: execute_class 的 metaclass 分支识别后暂存,
 	## 骨架创建时挂载到 class_env.meta_class
 	var _meta_class_pending: DSLClass = null
 	## 当前正在执行的语句节点标识 (消费窗口按语句隔离)
@@ -21645,6 +21710,11 @@ class Interpreter:
 	## 整句重头重执行的语句内, 无帧且实参匹配的调用直接取缓存, 函数体不再执行 [br]
 	## (副作用不重复), 挂起根语句完成时清空
 	var _call_retired: Dictionary = {}
+	## 协议驱动调用计数 (__iter__ / __next__ 等无自身节点的内部调用在途): [br]
+	## I2-61: 处于协议驱动中的用户调用不得借用 ambient 节点参与 retired 完成记录 [br]
+	## 与短路 (同节点多次调用互相覆盖, 重放轮会取到兄弟调用的返回值), [br]
+	## 生成器记忆 (_memo_generator) 不受影响, 仍按节点与出现次序复用
+	var _protocol_call_depth: int = 0
 	## 生成器迭代器 (推导式 / 生成器表达式编译物) 驱动深度 [br]
 	## 深度大于 0 时的调用求值属于后续元素的新逻辑调用, 不参与短路
 	var _gen_walk_depth: int = 0
@@ -22319,7 +22389,7 @@ class Interpreter:
 	func _try_is_starred(stmt: TryStmt) -> bool:
 		return stmt.except_clauses.size() > 0 and stmt.except_clauses[0].starred
 
-	## except* 的成员匹配 (P1-41): 组逐成员按类型表达式判定, 裸异常整体判定 [br]
+	## except* 的成员匹配: 组逐成员按类型表达式判定, 裸异常整体判定 [br]
 	## [param exc] 在途异常 (组或裸异常) [br]
 	## [param type_expr] 子句类型表达式 [br]
 	## [returns] 命中成员数组 (组型时为成员子集, 裸异常命中时为单元素), 未命中为空
@@ -22385,7 +22455,7 @@ class Interpreter:
 			return _build_group(is_base, msg, rest)
 		return null
 
-	## except* 子句处置 (P1-41 / PEP 654) [br]
+	## except* 子句处置 (PEP 654) [br]
 	## 裸异常自动包装 (消息空串, BaseException 直系用 BaseExceptionGroup); [br]
 	## 逐子句求匹配子组: 命中以子组为在途异常执行处理器体 (as 名绑定并隐式删除), [br]
 	## 体正常完成即吞掉子组并对余量继续后续子句; 体新异常直达 finally (余量丢弃, [br]
@@ -22625,7 +22695,7 @@ class Interpreter:
 	func _build_group(is_base: bool, msg: String, members: Array[DSLObject]) -> DSLObject:
 		var cls = globals.get_val("BaseExceptionGroup" if is_base else "ExceptionGroup")
 		var args: Array[DSLObject] = [DSLString.new(msg), DSLTuple.new(members)]
-		# magic_call 在报告通道有错时跳过 __init__ (P0-22 同源守卫):
+		# magic_call 在报告通道有错时跳过 __init__:
 		# 组构造多发生在在途异常通道非空时, 保存清空后还原
 		var saved_has_error = report.has_error
 		var saved_last_error = report.last_error
@@ -22785,7 +22855,7 @@ class Interpreter:
 		var obj_delattr_desc = DSLMethodDescriptor.new("__delattr__", Callable(self, "_object_delattr"))
 		obj_methods["__delattr__"] = obj_delattr_desc
 		# object.__init_subclass__ 默认空操作 (CPython 隐式 classmethod): 使 super().__init_subclass__()
-		# 链式调用可达, 类创建钩子查找总有终点; PyGDS 类头不支持关键字实参 (P1-38), 无 kwargs 拒收路径
+		# 链式调用可达, 类创建钩子查找总有终点; PyGDS 类头不支持关键字实参, 无 kwargs 拒收路径
 		obj_methods["__init_subclass__"] = _make_builtin("__init_subclass__", Callable(self, "_object_init_subclass"))
 		var obj_class = DSLClass.new("object", null, obj_methods, self)
 		globals.define("object", obj_class)
@@ -22816,7 +22886,7 @@ class Interpreter:
 		_inject_builtin_methods(float_class, "float")
 		globals.define("float", float_class)
 
-		# Create complex class: __new__ 返回 DSLComplex (P1-56)
+		# Create complex class: __new__ 返回 DSLComplex
 		var complex_methods = {}
 		complex_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_complex_new"))
 		var complex_class = DSLClass.new("complex", obj_class, complex_methods, self)
@@ -23168,6 +23238,13 @@ class Interpreter:
 		modules["sys"] = _create_sys_module()
 		modules["time"] = _create_time_module()
 		modules["contextlib"] = _create_contextlib_module()
+
+	## 创建空 ExitStack (P6): 类体内的自引用构造 (DSLExitStack 在自身方法中
+	## DSLExitStack.new()) 会使引擎退出检查滞留整个全局类脚本资源图并告警,
+	## 构造经本跨类工厂完成, 规避该触发形态
+	## [returns] 空 DSLExitStack
+	func _new_exit_stack() -> DSLObject:
+		return DSLExitStack.new()
 
 	## 创建 contextlib 模块 (I1-71) [br]
 	## contextmanager 装饰器 / closing / suppress / ExitStack / nullcontext; [br]
@@ -25911,7 +25988,7 @@ class Interpreter:
 	func _make_builtin(name: String, method: Callable) -> DSLBuiltinFunction:
 		return DSLBuiltinFunction.new(name, method)
 		
-	## 在途异常的挂起暂存 (P0-22): finally 体内挂起时把 report 错误通道移入暂存 [br]
+	## 在途异常的挂起暂存: finally 体内挂起时把 report 错误通道移入暂存 [br]
 	## interpret 收尾与恢复轮的块顶检查都把 has_error 当致命信号, 在途异常须对它们隐身 [br]
 	## last_exception 不动, 恢复后 except 匹配与异常链仍按它进行
 	func _park_unwind_error() -> void:
@@ -25925,14 +26002,14 @@ class Interpreter:
 			report.has_error = false
 			report.last_error = ""
 
-	## 在途异常的还原 (P0-22): finally 恢复后正常完成时把暂存错误写回 report, 恢复正常传播
+	## 在途异常的还原: finally 恢复后正常完成时把暂存错误写回 report, 恢复正常传播
 	func _restore_unwind_error() -> void:
 		if _parked_unwind_error != "":
 			report.has_error = true
 			report.last_error = _parked_unwind_error
 			_parked_unwind_error = ""
 
-	## 在途异常的丢弃 (P0-22): finally 以 return/break/continue 或自身新异常终结时清空暂存
+	## 在途异常的丢弃: finally 以 return/break/continue 或自身新异常终结时清空暂存
 	func _discard_unwind_error() -> void:
 		_parked_unwind_error = ""
 
@@ -25954,7 +26031,7 @@ class Interpreter:
 			# (CPython 在 GC 时发, PyGDS 在收尾时发, 记录为时点差异)
 			_emit_never_awaited_warnings()
 
-	## 脚本收尾时对未启动的协程发 RuntimeWarning (P1-9 never-awaited) [br]
+	## 脚本收尾时对未启动的协程发 RuntimeWarning (never-awaited) [br]
 	## 已启动 (含已结束与仍挂起) 的协程不发, 与 CPython 的 GC 时点语义对齐 [br]
 	## 警告走 print 输出通道 (CPython 走 stderr, 通道与时点均为既定差异), 文案为 [br]
 	## RuntimeWarning: coroutine 'x' was never awaited
@@ -26069,17 +26146,16 @@ class Interpreter:
 					_expr_evaluated = false
 					if _suspend_reason == SuspendReason.SLEEPING and _current_generator == null:
 						# 程序睡眠的语句整句重跑: 睡眠去重按「重放轮遇到次序」计号,
-						# 跳过会使同帧内位于其后的睡眠序号前移而被误去重 (P0-22 修复方向 2);
-						# 重跑时本轮序号小于已等待数, 立即返回, 不重复等待。
+						# 跳过会使同帧内位于其后的睡眠序号前移而被误去重,
+						# 重跑时本轮序号小于已等待数, 立即返回, 不重复等待
 						# 生成器步内除外: 其 sleep 不参与序号去重 (每次遇到都是真等待),
 						# 重跑会翻倍等待, 进度由生成器自身挂起状态保证
 						frame.pc = i - 1
 						frame["replay_head"] = true
 					else:
-						# 其余挂起形态 (如 WAITING) 重执行会重复发起等待, 维持跳过;
+						# 其余挂起形态 (如 WAITING) 重执行会重复发起等待, 维持跳过,
 						# 若本语句是睡眠重放根则立即收尾消费窗口
-						# (根键只靠「根语句完成」归零, 不重放的根语句会使根键泄漏,
-						# 同一重放根之后的独立睡眠会被按序号误去重, P0-22 修复方向 2)
+						# (根键只靠「根语句完成」归零, 不重放的根语句会使根键泄漏, 同一重放根之后的独立睡眠会被按序号误去重)
 						frame.pc = i
 						frame["replay_head"] = false
 						if _suspend_reason != SuspendReason.YIELD and _stmt_key(stmt) == _sleep_root_key:
@@ -26643,7 +26719,7 @@ class Interpreter:
 				if iterable == null or iterable is DSLNone:
 					# 可迭代表达式本身失败 (挂起恢复轮重放尤其如此): null 不代表无错,
 					# 在途异常直接向上传播; 此时再抛防御性 RuntimeError 会让 first-wins
-					# 只保留旧文案而改写 last_exception, 使外层 except 匹配失败 (P0-22 修复方向 3)
+					# 只保留旧文案而改写 last_exception, 使外层 except 匹配失败
 					if report.has_error:
 						return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
 					raise_exception("RuntimeError", "iterable is null in for loop")
@@ -26761,7 +26837,7 @@ class Interpreter:
 					globals.define("__annotations__", module_ann)
 				module_ann._dsl_setitem(DSLString.new(stmt.name), ann_val)
 			elif not _future_annotations and environment.is_class_scope:
-				# 类体注解 (P0-25, CPython): 注解求值并入类体作用域的 __annotations__
+				# 类体注解: 注解求值并入类体作用域的 __annotations__
 				# (收集阶段随普通绑定归入类属性); 只查类体自身, 不沿链读到全局同名键
 				var cls_ann_val = evaluate(stmt.annotation)
 				if _suspended:
@@ -26790,8 +26866,8 @@ class Interpreter:
 			var func_obj = DSLFunction.new(stmt, environment)
 			func_obj._cls_interp = self
 			if environment.is_class_scope and environment.building_class != null:
-				# 类体内的 def (P0-25, CPython 同序): 闭包沿外层非类作用域链解析 (方法体
-				# 不可见类体名字), 默认参数与注解在类体作用域 def 时求值, method_type
+				# 类体内的 def: 闭包沿外层非类作用域链解析 (方法体不可见类体名字)
+				# 默认参数与注解在类体作用域 def 时求值, method_type
 				# 组装与装饰器链即时完成, 最终对象 (函数/property/包装) 绑定类体作用域
 				var cls_obj = environment.building_class
 				var closure_env = environment
@@ -26933,7 +27009,7 @@ class Interpreter:
 			
 		if stmt is NonlocalStmt:
 			if environment.is_class_scope:
-				# 类体内的 nonlocal (CPython 3.12 合法, P0-25): 沿外层链找函数作用域绑定,
+				# 类体内的 nonlocal: 沿外层链找函数作用域绑定,
 				# 跳过嵌套链上的类作用域; 找不到时报 CPython 文案的 SyntaxError
 				for nl_name in stmt.names:
 					var nl_env = environment.enclosing
@@ -27158,7 +27234,7 @@ class Interpreter:
 					_discard_unwind_error()
 					return fin_res_r
 				# finally 正常结束: 进行中的 res (含待传播异常) 继续生效
-				# 在途异常从暂存写回错误通道, 沿正常传播路径离开 (P0-22)
+				# 在途异常从暂存写回错误通道, 沿正常传播路径离开
 				_restore_unwind_error()
 				return res
 			else:
@@ -27225,7 +27301,7 @@ class Interpreter:
 				report.has_error = saved_has_error or report.has_error
 				if fin_res == ExecResult.SUSPENDED:
 					# 挂起交回语句重放, 由 stage=="finally" 恢复路径按 try_pending 续做
-					# 异常在途时先暂存错误通道 (P0-22): interpret 收尾与恢复轮不得误判为致命错误
+					# 异常在途时先暂存错误通道: interpret 收尾与恢复轮不得误判为致命错误
 					_park_unwind_error()
 					return fin_res
 				if fin_res == ExecResult.RETURN or fin_res == ExecResult.BREAK or fin_res == ExecResult.CONTINUE:
@@ -27294,7 +27370,7 @@ class Interpreter:
 
 		return ExecResult.NORMAL
 
-	## 执行 with 语句 (P1-7) [br]
+	## 执行 with 语句 [br]
 	## 语义等价于逐管理器调用 __enter__ 的 try/finally 脱糖: 进入阶段按序调用 [br]
 	## __enter__ 并绑定 as 目标 (元组解包复用赋值目标机制), 体结束后逆序调用 [br]
 	## __exit__(exc_type, exc, tb)——无异常传 (None, None, None), 有异常传异常类对象 / [br]
@@ -27303,7 +27379,7 @@ class Interpreter:
 	## return / break / continue 穿越体同样触发退出 [br]
 	## 挂起重放: resume_info 记录进入进度 (entered) 与退出进度 (exit_idx), [br]
 	## 体挂起重放不重复执行 __enter__ (进入标记), 退出中挂起按 exit_idx 续延, [br]
-	## 在途异常按 P0-22 暂存, 恢复轮的抑制 / 传播 / 新异常三分支分别处置 [br]
+	## 在途异常暂存, 恢复轮的抑制 / 传播 / 新异常三分支分别处置 [br]
 	## [param stmt] with 语句节点 [br]
 	## [returns] 执行结果状态
 	func _exec_with(stmt: WithStmt) -> ExecResult:
@@ -27380,7 +27456,7 @@ class Interpreter:
 		return _exec_with_exit(stmt, entered, entered.size() - 1, res, pending_ret)
 
 	## with 退出路径: 逆序调用已完成进入的管理器的 __exit__ [br]
-	## 在途异常对 __exit__ 体隐身 (调用前清错误通道, P0-22 同型处理), 返回真值抑制 [br]
+	## 在途异常对 __exit__ 体隐身 (调用前清错误通道), 返回真值抑制 [br]
 	## (双通道清位, 后续外层管理器按无异常退出), 假值继续传播; __exit__ 体内新异常 [br]
 	## 取代在途异常传播 (raise 侧已记录 __context__); 挂起时暂存进度与在途异常, [br]
 	## 恢复轮按抑制 / 传播 / 新异常三分支分别处置暂存 [br]
@@ -27855,13 +27931,13 @@ class Interpreter:
 		if expr is AwaitExpr:
 			return _eval_await(expr)
 		if expr is Literal:
-			# P0-13: 大数字面量 (原溢出报错语义被自动升级取代)
+			# 大数字面量
 			if expr.big_value != "":
 				return DSLInteger.pooled_literal_big(expr.big_value, expr.big_neg)
-			# 虚数字面量 → complex 实部 0 (P1-56)
+			# 虚数字面量 -> complex 实部 0
 			if expr.is_imag:
 				return DSLComplex.new(0.0, expr.value)
-			# 字面量驻留: 等值字面量共享实例 (P2-30, 对齐 CPython 同代码对象常量折叠)
+			# 字面量驻留: 等值字面量共享实例 (对齐 CPython 同代码对象常量折叠)
 			if expr.value is String:
 				return DSLString.pooled_literal(expr.value)
 			if expr.value is int:
@@ -27997,7 +28073,7 @@ class Interpreter:
 			var val = evaluate(expr.value)
 			if _suspended:
 				# 求值中途挂起 (如 next() 驱动的迭代器在生成器步内睡眠): null 不代表真值,
-				# 交回语句重放, 不得误报 None 解包错误 (P0-27)
+				# 交回语句重放, 不得误报 None 解包错误
 				return null
 			if val == null or val is DSLNone:
 				raise_exception("TypeError", "cannot unpack non-iterable NoneType object")
@@ -28817,7 +28893,7 @@ class Interpreter:
 
 	## 异步生成器单步可等待对象的 await 驱动 (v0.8.0-alpha.4, 方案 C) [br]
 	## 经共享迭代器推进底层生成器一步: 产出值即 await 结果 (不被自动 await, [br]
-	## CPython 同); return / 耗尽 → StopAsyncIteration, 注入异常原样传播; [br]
+	## CPython 同); return / 耗尽 -> StopAsyncIteration, 注入异常原样传播; [br]
 	## close 模式注入 GeneratorExit, 生成器再 yield 报 ignored, 收尾返回 None; [br]
 	## 体内挂起时状态按节点保留, 恢复轮续延同一迭代器不重复推进 [br]
 	## [param gen] 所属协程 (状态宿主) [br]
@@ -30382,7 +30458,7 @@ class Interpreter:
 		# 无帧可复用时, 若处于「整句重头重执行」的语句中且该节点已有同实参的完成记录,
 		# 直接取缓存的返回值, 不再执行函数体 (兄弟调用的副作用不重复)。
 		# yield 生成器步与推导式元素求值内不短路: 那里的调用是后续元素的新逻辑调用
-		if saved_env == null and _stmt_replay and _current_generator == null and _gen_walk_depth == 0 and call_node != null:
+		if saved_env == null and _stmt_replay and _current_generator == null and _gen_walk_depth == 0 and call_node != null and _protocol_call_depth == 0:
 			var retired = _call_retired.get(call_node)
 			if retired != null and _args_match_structural(retired.get("args", []), args):
 				var retired_val = retired.get("value")
@@ -30460,7 +30536,8 @@ class Interpreter:
 			return null
 		elif res == ExecResult.RETURN:
 			# 完成的调用记录返回值与实参签名 (含帧复用完成), 供重头重执行时短路
-			if call_node != null:
+			# 协议驱动中的调用 (__iter__ / __next__ 等) 不记录 (I2-61: ambient 节点借用)
+			if call_node != null and _protocol_call_depth == 0:
 				_call_retired[call_node] = {"args": args.duplicate(), "value": return_value}
 			return return_value
 		elif res == ExecResult.ERROR or res == ExecResult.RAISE:
@@ -30533,7 +30610,7 @@ class Interpreter:
 		return ExecResult.NORMAL
 
 	## 执行类定义语句 [br]
-	## 解析超类并构造 DSLClass 骨架 (P0-25), 类体整块交由通用块执行后收集类属性与方法, [br]
+	## 解析超类并构造 DSLClass 骨架, 类体整块交由通用块执行后收集类属性与方法, [br]
 	## 注册到当前环境 [br]
 	## [param stmt] ClassStmt AST 节点 [br]
 	## [returns] 执行结果状态
@@ -30585,7 +30662,7 @@ class Interpreter:
 		return true
 
 	func execute_class(stmt: ClassStmt) -> ExecResult:
-		# 挂起重入 (P0-25): 类体挂起后语句整句重放, 依赖外层块帧 resume_info 恢复
+		# 挂起重入: 类体挂起后语句整句重放, 依赖外层块帧 resume_info 恢复
 		# 类体作用域与类骨架, 基类求值与骨架重建在恢复轮跳过
 		var cls_frame = _exec_stack.back() if _exec_stack.size() > 0 else {}
 		var cls_ri = cls_frame.get("resume_info", {}) if cls_frame is Dictionary else {}
@@ -30768,7 +30845,7 @@ order (MRO) for bases %s" % ", ".join(names))
 					return ExecResult.SUSPENDED
 		return _execute_class_finish(stmt, "fresh", class_env, class_obj)
 
-	## 类体整块执行与收尾 (P0-25): 类体是完整代码块, 整块交给通用块执行, [br]
+	## 类体整块执行与收尾: 类体是完整代码块, 整块交给通用块执行, [br]
 	## 所有语句复用解释器既有语义, 名字绑定落入类体作用域; 方法组装在 def 语句 [br]
 	## 执行时即时完成, 体执行完成后从类体作用域收集类属性与方法, 再走钩子/注册/装饰器 [br]
 	## 挂起重入: 体进度记录在外层块帧 resume_info (class_stage = body 体执行中 / [br]
@@ -30872,7 +30949,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				mfn = mval.fget
 			if mfn is DSLFunction and mfn.qualname == "":
 				mfn.qualname = stmt.name + "." + mname
-		# 类创建固定钩子: __set_name__ → __init_subclass__ (先于名字绑定与装饰器, CPython 同语义);
+		# 类创建固定钩子: __set_name__ -> __init_subclass__ (先于名字绑定与装饰器, CPython 同语义);
 		# 类头关键字 (P1-72) 经类体作用域载体转发 __init_subclass__
 		var hook_res = _run_class_fixup_hooks(class_obj, class_attrs, class_env.class_init_kw)
 		if hook_res != ExecResult.NORMAL:
@@ -31471,7 +31548,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			if not (a is DSLInteger):
 				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % a._type_name())
 				return null
-			# P0-13: range 参数为索引位 (CPython Py_ssize_t 同构)
+			# range 参数为索引位 (CPython Py_ssize_t 同构)
 			if (a as DSLInteger).is_big():
 				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
 				return null
@@ -31808,7 +31885,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			var hi = builtin_hash([DSLFloat.new(obj.imag)] as Array[DSLObject], {} as Dictionary[String, DSLObject]).value
 			return DSLInteger.pooled(hr + 1000003 * hi)
 		if obj is DSLInteger:
-			# P0-13: 对齐 CPython int 哈希 (模 2^61-1, -1 映射 -2), 快慢路径同算法
+			# 对齐 CPython int 哈希 (模 2^61-1, -1 映射 -2), 快慢路径同算法
 			return DSLInteger.pooled((obj as DSLInteger)._big_hash())
 		if obj is DSLFloat:
 			# 数值相等的值哈希相等 (CPython 不变量): 整值浮点与对应整数同哈希
@@ -31861,7 +31938,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			if method != null:
 				return obj.klass._invoke_func(method, [obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if obj is DSLInteger:
-			# P0-13: 大数与最小整数的绝对值自动升级
+			# 大数与最小整数的绝对值自动升级
 			if obj.is_big():
 				if not obj.big_neg:
 					return obj
@@ -32170,7 +32247,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		return total
 	
 	## pow(x, y, mod) - 幂运算
-	## 大数域模幂 (P0-13): 指数按位走, 负指数先求模逆 (扩展欧几里得, CPython 同语义) [br]
+	## 大数域模幂: 指数按位走, 负指数先求模逆 (扩展欧几里得, CPython 同语义) [br]
 	## 模数取绝对值参与运算, 结果落在 [0, |m|), 模数为负时结果符号随 m
 	func _big_modpow(b: DSLInteger, e: DSLInteger, m: DSLInteger) -> DSLObject:
 		var m_mag: Array[int] = m._pair()[1]
@@ -32204,7 +32281,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			return DSLInteger.from_big(true, DSLBigInt.mag_sub(m_mag, result))
 		return DSLInteger.from_big(false, result)
 
-	## 扩展欧几里得求模逆 (P0-13): gcd(a, |m|) == 1 时返回 a 模 |m| 的逆, 否则 null
+	## 扩展欧几里得求模逆: gcd(a, |m|) == 1 时返回 a 模 |m| 的逆, 否则 null
 	func _big_modinv(a_mag: Array[int], m_mag: Array[int]):
 		var old_r = [false, a_mag.duplicate()]
 		var r = [false, m_mag.duplicate()]
@@ -32240,7 +32317,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if args.size() >= 3:
 			var mod = args[2]
 			if base is DSLInteger and exp_ is DSLInteger and mod is DSLInteger:
-				# P0-13: 任一操作数为大数 → 大数域模幂 (CPython 同语义, 支持巨指数)
+				# 任一操作数为大数 -> 大数域模幂 (CPython 同语义, 支持巨指数)
 				var mb = mod as DSLInteger
 				var bb = base as DSLInteger
 				var eb = exp_ as DSLInteger
@@ -32576,6 +32653,14 @@ order (MRO) for bases %s" % ", ".join(names))
 			lists.append(zitems)
 			if zitems.size() < min_len:
 				min_len = zitems.size()
+			# I2-61: 挂起也可能发生在 has_next() 内部 (如生成器步进真等待),
+			# 此时 while 以「耗尽」形态退出; 必须识别并停止, 否则继续取下一参数的
+			# 迭代器会在 _suspended 置位下触发假挂起, 被误报 arg is not iterable。
+			# 部分结果登记与 min_len 收敛必须先于本 break: min_len 的哨兵初值
+			# 若带入结果构建循环, 会放大为逐次调用百万级空元组分配 (性能回归)
+			if iter.suspended:
+				any_suspended = true
+				break
 		# 严格模式: 先耗尽的参数决定文案——第 1 个参数耗尽时找首个更长参数,
 		# 其余参数耗尽时报 shorter; 挂起重放时长度不可信, 跳过校验
 		if strict and not any_suspended and args.size() >= 2:
@@ -32699,7 +32784,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if obj is DSLBool:
 			obj = DSLInteger.pooled(1 if obj.value else 0)
 		if obj is DSLInteger:
-			# P0-13: 大数码点超 C int (CPython 同文案)
+			# 大数码点超 C int
 			if (obj as DSLInteger).is_big():
 				raise_exception("OverflowError", "Python int too large to convert to C int")
 				return null
@@ -32729,7 +32814,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		var obj = args[0]
 		if obj is DSLInteger:
-			# P0-13: 大数十六进制
+			# 大数十六进制
 			if obj.is_big():
 				return DSLString.new(("-0x" if obj.big_neg else "0x") + DSLBigInt.mag_to_base(obj.big_limbs, 16))
 			if obj.value < 0:
@@ -33099,7 +33184,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if text == "":
 			raise_exception("ValueError", "invalid literal for int() with base %d: '%s'" % [base, s])
 			return null
-		# P0-13: 大数累加 (原 int64 回绕报错被自动升级取代)
+		# 大数累加 (原 int64 回绕报错被自动升级取代)
 		for i in text.length():
 			var d = _digit_value(text[i])
 			if d < 0 or d >= base:
@@ -33148,7 +33233,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if arg is DSLBool:
 			return DSLFloat.new(1.0 if arg.value else 0.0)
 		if arg is DSLInteger:
-			# P0-13: 大数转 double (53 位半到偶舍入), 越界报 CPython 同文案
+			# 大数转 double (53 位半到偶舍入), 越界报 CPython 同文案
 			if arg.is_big():
 				var conv = DSLBigInt.mag_to_float(arg.big_neg, arg.big_limbs)
 				if not conv[0]:
@@ -33279,7 +33364,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		return DSLFloat.new(sign * result)
 
 	## 整数按 10^a 半到偶舍入 (a ≤ 18 走 int64 精确路径)
-	## 大数按 10^a 半到偶舍入 (P0-13, round(x, -a))
+	## 大数按 10^a 半到偶舍入 (round(x, -a))
 	func _round_big_scaled(v: DSLInteger, a: int) -> DSLInteger:
 		# 幅值域半到偶舍入 (round(-x, n) == -round(x, n), CPython 对称), 符号原样保留
 		var pmag = DSLBigInt.big_pow(false, [10], a)
@@ -33323,7 +33408,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				threshold = 9223372036854775807
 				break
 		if v > threshold:
-			# 进位结果 10^a 超出 int64 (P0-13 同源限制)
+			# 进位结果 10^a 超出 int64
 			raise_exception("OverflowError", "integer result exceeds 64-bit range")
 			return 0
 		return 0
@@ -33341,7 +33426,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			elif args[1] is DSLFloat:
 				n = int(args[1].value)
 		if val is DSLInteger:
-			# 整数入参: n >= 0 原样返回, n < 0 按 10^|n| 半到偶舍入 (P0-13: 大数走大数舍入)
+			# 整数入参: n >= 0 原样返回, n < 0 按 10^|n| 半到偶舍入 (大数走大数舍入)
 			if n >= 0:
 				return val
 			if not val.is_big() and -n <= 18:
@@ -33362,7 +33447,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception("OverflowError", "cannot convert float infinity to integer")
 			return null
 		if not has_ndigits:
-			# P0-13: 精确整数结果 (原 int64 越界报错被取代)
+			# 精确整数结果 (原 int64 越界报错被取代)
 			var rf = _round_float_scaled(num, 0)
 			return DSLObject._int_from_float_exact(rf.value)
 		return _round_float_scaled(num, n)
@@ -33694,7 +33779,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if _has_layout_conflict(base_objs):
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
 			return null
-		# 类创建固定钩子: __set_name__ → __init_subclass__ (type() 三参与 class 语句同语义)
+		# 类创建固定钩子: __set_name__ -> __init_subclass__ (type() 三参与 class 语句同语义)
 		var hook_res = _run_class_fixup_hooks(new_cls, class_attrs_dict, init_sub_kw)
 		if hook_res != ExecResult.NORMAL:
 			return null
@@ -33927,7 +34012,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			if is_inf(arg.value):
 				raise_exception("OverflowError", "cannot convert float infinity to integer")
 				return null
-			# P0-13: 向零截断的精确大数转换 (原 int64 越界报错被取代)
+			# 向零截断的精确大数转换 (原 int64 越界报错被取代)
 			return DSLObject._int_from_float_exact(arg.value)
 		if arg is DSLString:
 			return _parse_int_with_base(arg.value, 10)
@@ -33992,7 +34077,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if arg is DSLBool:
 			return DSLFloat.new(1.0 if arg.value else 0.0)
 		if arg is DSLInteger:
-			# P0-13: 大数转 double, 越界报 OverflowError
+			# 大数转 double, 越界报 OverflowError
 			if arg.is_big():
 				var convf = DSLBigInt.mag_to_float(arg.big_neg, arg.big_limbs)
 				if not convf[0]:
@@ -34050,7 +34135,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		if call_args.size() == 1:
 			var raw = DSLObject._unwrap_dsl(call_args[0])
 			if raw is DSLInteger:
-				# P0-13: 分配长度为索引位 (CPython Py_ssize_t 同构)
+				# 分配长度为索引位 (CPython Py_ssize_t 同构)
 				if (raw as DSLInteger).is_big():
 					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
 					return null
@@ -34232,7 +34317,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			var arg = args[1]
 			var raw = arg._wrapped if arg._wrapped != null else arg
 			if raw is DSLInteger:
-				# P0-13: 分配长度为索引位 (CPython Py_ssize_t 同构)
+				# 分配长度为索引位 (CPython Py_ssize_t 同构)
 				if (raw as DSLInteger).is_big():
 					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
 					return null

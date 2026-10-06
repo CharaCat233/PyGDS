@@ -2094,6 +2094,14 @@ PyGDS-specific suspend/resume mechanics (statement replay after a `time.sleep`-t
 - Comparison: `same_output`
 - Source: [ci/cases/suspend_finally_raise.py](../../ci/cases/suspend_finally_raise.py)
 
+### suspend_getitem_iter
+
+- Responsibility: Suspension replay of the legacy `__getitem__` iteration protocol
+- Comparison: `same_output`
+- Source: [ci/cases/suspend_getitem_iter.py](../../ci/cases/suspend_getitem_iter.py)
+
+When `__getitem__` suspends on `sleep` mid-body, the index iterator raises its `suspended` flag for consumers to propagate and hands control to statement replay instead of treating it as end of iteration; the replay round resumes the interrupted `__getitem__` via frame reuse, with sleep deduplication preventing repeated waits. Covers list / comprehension / sum / for and zip dual-argument parallel consumption (I2-62)
+
 ### suspend_groupby
 
 - Responsibility: `groupby` state machine surviving across statements with `sleep` replay
@@ -2130,8 +2138,24 @@ PyGDS-specific suspend/resume mechanics (statement replay after a `time.sleep`-t
 - Comparison: `same_output`
 - Source: [ci/cases/suspend_sideeffect.py](../../ci/cases/suspend_sideeffect.py)
 
+### suspend_user_iter
+
+- Responsibility: Suspension replay of user iterators whose `__iter__` returns `self`
+- Comparison: `same_output`
+- Source: [ci/cases/suspend_user_iter.py](../../ci/cases/suspend_user_iter.py)
+
+Suspension on `sleep` inside `__next__` propagates to consumers via the iterator's `suspended` flag; a user iterator is a one-shot iterator, so produced values are logged and join the statement consumption window — the replay round re-reads delivered elements from the log and drives `__next__` only for new elements, converging as instance state advances across replay rounds in step with sleep deduplication (I2-60). Includes an `__iter__` returning `iter(generator)` comparison form
+
 ### suspend_with_replay
 
 - Duty: suspension and replay of the `with` body and `__exit__` (enter marker prevents re-entry, P0-22 parking stack-up)
 - Compare: `same_output`
 - Source: [ci/cases/suspend_with_replay.py](../../ci/cases/suspend_with_replay.py)
+
+### suspend_zip_multi_arg
+
+- Responsibility: Suspension replay of `zip` consuming wrapper iterator classes across multiple arguments
+- Comparison: `same_output`
+- Source: [ci/cases/suspend_zip_multi_arg.py](../../ci/cases/suspend_zip_multi_arg.py)
+
+zip consumes argument by argument; when one argument's consumption suspends mid-way it propagates the suspension immediately and abandons the call instead of fetching the next argument's iterator while `_suspended` is set (the user `__iter__` would spuriously suspend and return null, misreported as `zip() arg is not iterable`); replay rounds reuse each argument's generator via the generator memo in occurrence order (I2-61). Includes single-argument comparison plus fielded instances, three arguments, and mixed sequence forms; protocol-driven `__iter__` / `__next__` calls no longer borrow the ambient call node for retired completion records
