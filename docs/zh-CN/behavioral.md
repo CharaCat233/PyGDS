@@ -986,6 +986,14 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_hasattr.py](../../ci/cases/builtin_hasattr.py)
 
+### builtin_hash_identity
+
+- 职责: 身份哈希的模式无关不变量: 同对象哈希稳定 / 等值同哈希 / 对象作字典与集合键
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_hash_identity.py](../../ci/cases/builtin_hash_identity.py)
+
+身份哈希的进程间数值随宿主的 `stable_identity_hash` 开关不同 (稳定默认 / CPython 3.12 随机化), 双端比对只覆盖模式无关的不变量; 用户类定义了 `__eq__` 而未定义 `__hash__` 时不可哈希, 两者皆未定义时按身份哈希, 与 CPython 一致
+
 ### builtin_isinstance
 
 - 职责: `isinstance`/`issubclass` 类型判定
@@ -1218,6 +1226,14 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 比对: `same_output`
 - 源文件: [ci/cases/type_dunder_methods.py](../../ci/cases/type_dunder_methods.py)
 
+### type_float_parse
+
+- 职责: 浮点字符串解析的正确舍入: 难例字面量 / float() 语法校验与下划线 / 次规格数与 inf 边界 / repr 最短往返
+- 比对: `same_output`
+- 源文件: [ci/cases/type_float_parse.py](../../ci/cases/type_float_parse.py)
+
+浮点字面量与 `float()` 字符串走自研的正确舍入解析 (大整数比值 + 半到偶舍入), 难例 (`9007199254740993.0` / `1e23` / 次规格数 `5e-324`) 与 CPython 逐位一致; repr 的最短往返验证亦经同一解析器, 次规格数不再退 17 位兜底; `math.copysign` 补负零的符号位语义
+
 ### type_frozenset
 
 - 职责: `frozenset` 构造、集合运算、可哈希去重
@@ -1339,6 +1355,14 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 职责: 集合方法接受任意可迭代与原地更新族
 - 比对: `same_output`
 - 源文件: [ci/cases/type_set_methods.py](../../ci/cases/type_set_methods.py)
+
+### type_range_big
+
+- 职责: 大数 range 的任意精度语义: 惰性构造 / len 越界 OverflowError / 大数下标与负下标 / 成员判定 / 切片 / 反向 / 等值与真值 / start-stop-step 属性
+- 比对: `same_output`
+- 源文件: [ci/cases/type_range_big.py](../../ci/cases/type_range_big.py)
+
+range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPython 的惰性语义一致); 长度超出索引位宽度的物化 (list / tuple / sorted) 与 len 报 CPython 同文案 OverflowError; 小 range 的越界大数切片钳制与 `start` / `stop` / `step` 只读属性同步对齐
 
 ### type_slice
 

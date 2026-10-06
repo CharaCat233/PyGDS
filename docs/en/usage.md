@@ -278,7 +278,9 @@ int("0x1f", 0)      # 31 (auto-detects the hex prefix)
 int("-ff", 16)      # -255 (signs are supported)
 ```
 
-**Integer range (P0-13 aligned to arbitrary precision)**: PyGDS `int` matches CPython as an arbitrary-precision integer that never overflows — literals and arithmetic (add / sub / mul / truediv / floordiv / mod / pow / shifts / bitwise ops) and `int()` conversions from strings or floats are automatically promoted beyond int64 to a big-integer representation, shrinking back to the fast path when the result fits again, fully transparent to the user; `hash(int)` also aligns with CPython's modulo `2^61 - 1` algorithm (`hash(-1) == -2`). Index positions remain bounded (CPython `Py_ssize_t` isomorphism): a sequence subscript beyond int64 raises `IndexError: cannot fit 'int' into an index-sized integer`, while sequence repetition, `str` width arguments, `chr()`, `bytes(n)`, `range()` arguments and huge shifts (`1 << 2**70` raises `too many digits in integer`) raise `OverflowError` beyond the bound; `float(10 ** 400)` raises `OverflowError` (same as CPython). Documented limitation: CPython constructs `range(10**30)` lazily, while PyGDS converges `range()` arguments to int64 and raises `OverflowError` directly. Performance note: big-integer arithmetic is an O(n²) GDScript implementation (schoolbook multiplication / long division), fluent within ten-thousand decimal digits and noticeably slower beyond; results exceeding roughly 4 million bits (about 1.27 million decimal digits) raise `MemoryError`.
+**Integer range (P0-13 aligned to arbitrary precision)**: PyGDS `int` matches CPython as an arbitrary-precision integer that never overflows — literals and arithmetic (add / sub / mul / truediv / floordiv / mod / pow / shifts / bitwise ops) and `int()` conversions from strings or floats are automatically promoted beyond int64 to a big-integer representation, shrinking back to the fast path when the result fits again, fully transparent to the user; `hash(int)` also aligns with CPython's modulo `2^61 - 1` algorithm (`hash(-1) == -2`). Index positions remain bounded (CPython `Py_ssize_t` isomorphism): a sequence subscript beyond int64 raises `IndexError: cannot fit 'int' into an index-sized integer`, while sequence repetition, `str` width arguments, `chr()`, `bytes(n)`, `range()` arguments and huge shifts (`1 << 2**70` raises `too many digits in integer`) raise `OverflowError` beyond the bound; `float(10 ** 400)` raises `OverflowError` (same as CPython). range arguments likewise keep arbitrary precision (matching CPython's lazy semantics): `range(10**30)` constructs, `len` reports its big length, and subscripts plus membership run big-integer arithmetic; materialising a length beyond the index width (`list` / `tuple` / `sorted` / `random.sample`) and `len()` itself raise `OverflowError: Python int too large to convert to C ssize_t` as in CPython.
+
+**Identity hash mode**: `hash(None)` and other identity-based hashes use stable values by default (an intentional design reproducible across processes, with `hash(None)` fixed at `0`); to align with CPython 3.12's process randomisation, set `dsl.stable_identity_hash = false` before `run()`, after which identity hashes are stable within a process and random across processes (equal objects hash equally, `id()` semantics unaffected). Value-based hashes (`hash(int)` / `hash(str)` / `hash(float)`) are unaffected by the switch and already aligned with CPython. Performance note: big-integer arithmetic is an O(n²) GDScript implementation (schoolbook multiplication / long division), fluent within ten-thousand decimal digits and noticeably slower beyond; results exceeding roughly 4 million bits (about 1.27 million decimal digits) raise `MemoryError`.
 
 ### Dictionary Merge and Unpacking (Python 3.9+)
 
@@ -1691,7 +1693,7 @@ Default instantiation (`PyGDS.new()`) is a pure single-file model: the script ha
 var dsl = PyGDS.new("MOD1", true)   # drive MOD1, script may access files inside the drive
 ```
 
-- `drive_letter` (default `""`): the drive name, letters only and normalized to upper case (e.g. `"CI"` / `"MOD1"`). Non-letter characters push an error and refuse instantiation; all further API calls are unavailable
+- `drive_letter` (default `""`): the drive name, letters only and normalized to upper case (e.g. `"CI"` / `"MOD1"`); the `_` prefix is reserved for temporary drives and unavailable to named drives. Non-letter characters push an error and refuse instantiation; all further API calls are unavailable
 - `path_access` (default `false`): whether the script may actually access files inside the drive (`open` and user `import`)
 
 ### Four Combinations
@@ -1701,15 +1703,15 @@ var dsl = PyGDS.new("MOD1", true)   # drive MOD1, script may access files inside
 | Non-empty | `true` | Regular sandbox: the script-visible space is `user://<base_path>/<drive>/`; `open` / user import / `load_dsl_script` all available, directory persists |
 | Non-empty | `false` | Single file with script file access disabled (`open` and user import are refused as file-not-found, built-in import unaffected); `load_dsl_script` available (host-side operation loading the main file from the drive) |
 | Empty | `false` | Pure single file (default); `load_dsl_script` unavailable |
-| Empty | `true` | Temporary sandbox with a random non-repeating drive (picked from A-Z among drives not claimed by live instances); `cleanup()` deletes the drive directory, named drives persist |
+| Empty | `true` | Sandbox with a random temporary drive (`_` prefix + 12 random letters, namespace-disjoint from named drives); `cleanup()` deletes the drive directory, named drives persist |
 
-`cleanup()` runs when the host calls it, via `reset()`, and on instance release (`free()`) - a random drive's sandbox directory is deleted with it; the interpreter object graph is reclaimed first, so file handles left open by the script close with their objects and deletion works on Windows too. After `cleanup()` the instance can be reused with a new `write_dsl_script`; the drive directory is recreated lazily on the next `run()`.
+`cleanup()` runs when the host calls it, via `reset()`, and on instance release (`free()`) - a random drive's sandbox directory is deleted with it; the interpreter object graph is reclaimed first, so file handles left open by the script close with their objects and deletion works on Windows too. After `cleanup()` the instance can be reused with a new `write_dsl_script`; the drive directory is recreated lazily on the next `run()`. The random temporary drive is a `_`-prefixed 12-letter random combination checked against the live-instance claim registry (retrying on collision); the number of concurrent drives is unbounded in theory and bounded in practice by the operating system's path-length limit. The `_` prefix makes it constructively impossible for a named drive (letters only) to share a name with a temporary drive, so a temporary drive's `cleanup()` deletion can never touch any named drive, regardless of creation order.
 
 ### Path Rules
 
 Only two path forms are visible to a sandboxed script; after normalization both must remain inside `user://<base_path>/<drive>/`, anything else raises `FileNotFoundError: [Errno 2] No such file or directory: '<path>'` (same message as a truly missing file, never leaking existence outside the drive):
 
-- **Drive prefix** (e.g. `"CI:/data/x.json"`): absolute form, resolved against the drive root; only this instance's drive is accepted (case-insensitive); any other letter-prefixed colon form (including `res:` / `user:` host protocol lookalikes) is refused as a foreign drive
+- **Drive prefix** (e.g. `"CI:/data/x.json"`, or `"_ABCD...:/data/x.json"` inside a temporary sandbox): absolute form, resolved against the drive root; only this instance's drive is accepted (case-insensitive); any other prefixed colon form (including `res:` / `user:` host protocol lookalikes) is refused as a foreign drive
 - **Bare relative path** (e.g. `"data/x.json"`, `"../shared.txt"`): resolved against the **directory of the main script**; `..` must not escape the drive root; `open` inside an imported module uses the same base (no per-module cwd in the sandbox)
 
 `sys.path` starts as `[""]` inside the sandbox, where the empty entry resolves to the main script's directory (CPython's sys.path[0] script-directory semantics; CPython's bare relative path base is the process cwd, which coincides with the script directory in ordinary single-script usage, so the two are equivalent in practice); scripts may append directory entries (e.g. `sys.path.append("lib")`), and out-of-drive entries are skipped during module resolution. `res://` asset access is not provided: the host can pre-place files into the drive or expose them via `register_api`.
@@ -1921,13 +1923,7 @@ The ASTs of preset code and user code are concatenated after parsing and then ex
 
 ### Floating Point Precision
 
-Since the underlying implementation uses GDScript's double-precision floating point numbers (`float` i.e. 64-bit IEEE 754), there may be subtle differences from Python's floating point calculations.
-
-```python
-# Godot's str() and Python's str() may produce different output formats
-print(1.15)  # May output "1.15" in Godot, while Python outputs "1.15"
-print(1.0 / 3.0)  # Floating point precision is consistent, but string representation may differ
-```
+`float` is 64-bit IEEE 754 double precision, matching Python's binary floating-point semantics. Float literals and the string parsing of `float()` / `complex()` go through a self-produced correctly-rounded parser (bypassing the engine's lenient parser); hard cases (`9007199254740993.0`, `1e23`, the subnormal `5e-324`) match CPython bit for bit, and repr is the shortest round-trip form; illegal shapes like `float("1e")` raise `ValueError` as in CPython. `math.copysign` honours the sign bit of negative zero. Remaining differences: the transcendentals of `math` (`pow` / `exp` / `log` / the trig family) go through the host libm, whose final-bit rounding for extreme values varies by platform (CPython itself varies with the libm it links against); for cross-platform comparison prefer `round(..., N)` first
 
 ### String Method Differences
 

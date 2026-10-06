@@ -365,7 +365,9 @@ int("0x1f", 0)      # 31 (自动识别十六进制前缀)
 int("-ff", 16)      # -255 (支持符号)
 ```
 
-**整数范围（P0-13 已对齐任意精度）**：PyGDS 的 `int` 与 CPython 一致为任意精度整数，永不溢出——字面量、算术运算（加 / 减 / 乘 / 除 / 整除 / 取模 / 幂 / 移位 / 位运算）、`int()` 的字符串与浮点转换在超出 int64 时自动升级为大数表示，结果落回 int64 范围时缩回快路径，对用户完全透明；`hash(int)` 同步对齐 CPython 的模 `2^61 - 1` 算法（`hash(-1) == -2`）。仍保留的索引位边界（CPython `Py_ssize_t` 同构）：序列下标超出 int64 报 `IndexError: cannot fit 'int' into an index-sized integer`，序列重复计数、`str` 宽度参数、`chr()`、`bytes(n)`、`range()` 参数与巨移位（`1 << 2**70` 报 `too many digits in integer`）等位置越界报 `OverflowError`；`float(10 ** 400)` 报 `OverflowError`（CPython 同）。已文档化限制：CPython 的 `range(10**30)` 可惰性构造成功，PyGDS 的 `range()` 参数按索引位收敛为 int64 直接报 `OverflowError`。性能说明：大数运算为 GDScript 层 O(n²) 实现（学校乘法 / 长除法），万位十进制数字内流畅，更大位数会明显变慢；结果位数超过约 400 万二进制位（约 127 万十进制位）时报 `MemoryError`。
+**整数范围（P0-13 已对齐任意精度）**：PyGDS 的 `int` 与 CPython 一致为任意精度整数，永不溢出——字面量、算术运算（加 / 减 / 乘 / 除 / 整除 / 取模 / 幂 / 移位 / 位运算）、`int()` 的字符串与浮点转换在超出 int64 时自动升级为大数表示，结果落回 int64 范围时缩回快路径，对用户完全透明；`hash(int)` 同步对齐 CPython 的模 `2^61 - 1` 算法（`hash(-1) == -2`）。仍保留的索引位边界（CPython `Py_ssize_t` 同构）：序列下标超出 int64 报 `IndexError: cannot fit 'int' into an index-sized integer`，序列重复计数、`str` 宽度参数、`chr()`、`bytes(n)`、`range()` 参数与巨移位（`1 << 2**70` 报 `too many digits in integer`）等位置越界报 `OverflowError`；`float(10 ** 400)` 报 `OverflowError`（CPython 同）。range 的参数同样保留任意精度（与 CPython 的惰性语义一致）：`range(10**30)` 可构造，`len` 取其大数长度、下标与成员判定按大数算术；长度超出索引位宽度时的物化（`list` / `tuple` / `sorted` / `random.sample`）与 `len()` 本身按 CPython 报 `OverflowError: Python int too large to convert to C ssize_t`
+
+**身份哈希模式**：`hash(None)` 等基于对象身份的哈希默认使用稳定值（进程间可复现的有意设计，`hash(None)` 恒为 `0`）；需要对齐 CPython 3.12 的进程随机化语义时，宿主在 `run()` 之前设置 `dsl.stable_identity_hash = false`，此后身份哈希进程内稳定、进程间随机（等值对象哈希相等、`id()` 语义不受影响）。`hash(int)` / `hash(str)` / `hash(float)` 等按值的哈希不受该开关影响，已与 CPython 对齐。性能说明：大数运算为 GDScript 层 O(n²) 实现（学校乘法 / 长除法），万位十进制数字内流畅，更大位数会明显变慢；结果位数超过约 400 万二进制位（约 127 万十进制位）时报 `MemoryError`
 
 ### `...`（Ellipsis）
 
@@ -1688,7 +1690,7 @@ dsl.cleanup()
 var dsl = PyGDS.new("MOD1", true)   # 盘符 MOD1, 允许脚本访问盘内文件
 ```
 
-- `drive_letter`（默认 `""`）：盘符名，仅允许字母并统一转大写（如 `"CI"` / `"MOD1"`）。含非字母字符时 push_error 拒绝实例化，后续 API 均不可用
+- `drive_letter`（默认 `""`）：盘符名，仅允许字母并统一转大写（如 `"CI"` / `"MOD1"`）；`_` 前缀为临时盘符保留，命名盘符不可使用。含非字母字符时 push_error 拒绝实例化，后续 API 均不可用
 - `path_access`（默认 `false`）：是否允许脚本实际访问盘内文件（`open` 与用户 `import`）
 
 ### 四种组合
@@ -1698,15 +1700,15 @@ var dsl = PyGDS.new("MOD1", true)   # 盘符 MOD1, 允许脚本访问盘内文�
 | 非空 | `true` | 常规沙箱：脚本可见空间为 `user://<base_path>/<盘符>/`，`open` / 用户 import / `load_dsl_script` 全可用，目录持久 |
 | 非空 | `false` | 单文件 + 脚本文件访问禁用（`open` 与用户 import 按文件不存在拒绝，内置 import 不受影响）；`load_dsl_script` 可用（宿主侧操作，从盘符载入主文件） |
 | 空 | `false` | 纯单文件（默认）；`load_dsl_script` 不可用 |
-| 空 | `true` | 随机不重复盘符的临时沙箱（从 A-Z 中选取未被活跃实例占用的盘符）；`cleanup()` 时删除该盘符目录，命名盘符持久不删 |
+| 空 | `true` | 随机临时盘符的沙箱（`_` 前缀 + 12 位随机字母组合，与命名盘符命名空间互斥）；`cleanup()` 时删除该盘符目录，命名盘符持久不删 |
 
-`cleanup()` 的调用时机包括宿主主动调用、`reset()` 与实例释放（`free()`）——随机盘符的虚拟沙箱目录随之删除；删除前解释器对象图先行回收，脚本未 `close()` 的文件句柄随对象释放关闭，Windows 上亦可删除。`cleanup()` 之后实例可重新 `write_dsl_script` 复用，盘符目录在下次 `run()` 时惰性重建
+`cleanup()` 的调用时机包括宿主主动调用、`reset()` 与实例释放（`free()`）——随机盘符的虚拟沙箱目录随之删除；删除前解释器对象图先行回收，脚本未 `close()` 的文件句柄随对象释放关闭，Windows 上亦可删除。`cleanup()` 之后实例可重新 `write_dsl_script` 复用，盘符目录在下次 `run()` 时惰性重建。随机临时盘符为 `_` 前缀 + 12 位随机字母组合，经活跃实例占用注册表查重（重复时重试），并发盘符数理论不受限，实际受操作系统路径长度上限约束；`_` 前缀使命名盘符（仅字母）在构造上不可能与临时盘符重名，临时盘符的 `cleanup()` 删除不会波及任何命名盘符（含创建时序在先或随后的命名盘符）
 
 ### 路径规则
 
 沙箱内脚本可见的路径只有两种形态，归一化后必须仍落在 `user://<base_path>/<盘符>/` 内，越界一律报 `FileNotFoundError: [Errno 2] No such file or directory: '<路径>'`（与文件真不存在同文案，不泄露盘符外的存在性）：
 
-- **盘符前缀**（如 `"CI:/data/x.json"`）：绝对形态，相对盘符根解析；仅接受本实例盘符（大小写不敏感），其余字母前缀冒号形态（含 `res:` / `user:` 等宿主协议字样）按外来盘符拒绝
+- **盘符前缀**（如 `"CI:/data/x.json"`，临时沙箱实例为 `"_ABCD…:/data/x.json"`）：绝对形态，相对盘符根解析；仅接受本实例盘符（大小写不敏感），其余前缀冒号形态（含 `res:` / `user:` 等宿主协议字样）按外来盘符拒绝
 - **裸相对路径**（如 `"data/x.json"`、`"../shared.txt"`）：以**主脚本所在目录**为基准解析，`..` 不得越出盘符根；被 import 模块内的 `open` 使用同一基准（沙箱无 per-module cwd）
 
 `sys.path` 在沙箱内初始为 `[""]`，空项按主脚本所在目录解析（CPython 的 sys.path[0] 脚本目录语义；CPython 的裸相对路径基准是进程 cwd，常规单脚本使用中 cwd 与脚本所在目录一致，实践中等价）；脚本可追加目录项（如 `sys.path.append("lib")`），越界的目录项在模块解析时跳过。`res://` 资产访问不提供：宿主可预放文件进盘符，或经 `register_api` 暴露
@@ -1918,13 +1920,7 @@ print(clamp(150, 0, 100))  # 100
 
 ### 浮点精度
 
-由于底层使用 GDScript 的双精度浮点数（`float` 即 64 位 IEEE 754），与 Python 的浮点计算存在细微差异
-
-```python
-# Godot 的 str() 与 Python 的 str() 输出格式可能不同
-print(1.15)  # 在 Godot 中可能输出 "1.15", 而 Python 中为 "1.15"
-print(1.0 / 3.0)  # 浮点精度一致, 但字符串表示可能不同
-```
+`float` 即 64 位 IEEE 754 双精度，与 Python 的二进制浮点语义一致。浮点字面量与 `float()` / `complex()` 的字符串解析走 PyGDS 自研的正确舍入解析器（不经引擎的宽松解析），难例（`9007199254740993.0`、`1e23`、次规格数 `5e-324`）与 CPython 逐位一致，repr 为最短往返表示；`float("1e")` 等非法形态按 CPython 报 `ValueError`。`math.copysign` 支持负零的符号位语义。残余差异：`math` 的超越函数（`pow` / `exp` / `log` / 三角族等）走宿主 libm，极端值的末位舍入随平台而异（CPython 自身同样随其链接的 libm 变化），跨平台比对建议 `round(..., N)` 后进行
 
 ### 字符串方法差异
 

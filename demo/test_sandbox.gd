@@ -12,7 +12,7 @@ var _passed: int = 0
 var _failed: int = 0
 
 ## 本套件专用的命名盘符 (仅字母), 与挂起套件 / 双端用例的盘符互不相干
-const DRIVES := ["PA", "PB", "PC", "PD", "PE", "PF", "PG", "PH", "RA"]
+const DRIVES := ["PA", "PB", "PC", "PD", "PE", "PF", "PG", "PH", "PI", "RA"]
 
 
 func _init() -> void:
@@ -265,42 +265,50 @@ print(math.floor(1.9))
 func _probe_close_free_timing() -> void:
 	print("[group] close-free timing (random drive)")
 	var dsl = _pygds_script.new("", true)
-	var letter: String = dsl._drive_letter
-	_check("random letter assigned", letter != "" and letter.length() == 1, letter)
-	var rroot := _drive_root(letter)
+	var name: String = dsl._drive_letter
+	var ok_name := name.begins_with("_") and name.length() == 1 + int(_pygds_script.RANDOM_DRIVE_LENGTH)
+	for i in range(1, name.length()):
+		if name[i] < "A" or name[i] > "Z":
+			ok_name = false
+	_check("random drive name is _-prefixed letters", ok_name, name)
+	var rroot := _drive_root(name)
 	_check("random drive dir created", DirAccess.dir_exists_absolute(rroot), rroot)
 	var out = _run_ok(dsl, """
 fh = open("left_open.txt", "w")
 fh.write("x")
 print("written", fh.closed)
-""")
-	_check("file left open runs", out == "written False\n", out)
+sf = open("closed.txt", "w")
+sf.write("x")
+sf.close()
+print(open("closed.txt").read())
+print(open("%s:/closed.txt").read())
+""" % name)
+	# 同轮运行内覆盖裸路径写读与临时盘符前缀形态; left_open 句柄保持打开至脚本结束
+	_check("file left open runs + prefix form", out == "written False\nx\nx\n", out)
 	dsl.cleanup()
 	_check("random sandbox deleted after cleanup", not DirAccess.dir_exists_absolute(rroot))
 	# 重建: cleanup 后重新 write + run, 目录惰性重建, 上一轮文件已随目录删除
 	var out2 = _run_ok(dsl, "print(open('left_open.txt').read())")
 	_check("instance reusable after cleanup", out2.contains("No such file or directory: 'left_open.txt'"), out2)
 	dsl.free()
-	# 占用注册表: 26 个并存的随机盘符互不相同, 全部释放后分配恢复
+	# 占用注册表: 40 个并存的随机盘符互不相同 (多字母组合无数量上限), 全部释放后注册表清空
 	var live := []
-	for i in range(26):
+	for i in range(40):
 		live.append(_pygds_script.new("", true))
-	var letters := {}
+	var names := {}
 	var dup := false
 	for d in live:
 		var l: String = d._drive_letter
-		if letters.has(l):
+		if names.has(l):
 			dup = true
-		letters[l] = true
-	_check("26 concurrent random drives unique", not dup and letters.size() == 26, str(letters.size()))
-	var extra = _pygds_script.new("", true)
-	_check("27th random drive refused", extra._drive_letter == "")
-	extra.free()
+		names[l] = true
+	_check("40 concurrent random drives unique", not dup and names.size() == 40, str(names.size()))
 	for d in live:
 		d.cleanup()
 		d.free()
+	_check("claims released after free", _pygds_script._drive_claims.is_empty(), str(_pygds_script._drive_claims))
 	var late = _pygds_script.new("", true)
-	_check("letters released after free", late._drive_letter != "")
+	_check("assignment works after release", late._drive_letter != "")
 	late.cleanup()
 	late.free()
 
@@ -316,12 +324,24 @@ func _probe_multi_random() -> void:
 	_check("B reads shared file", out2 == "AB\n", out2)
 	var r1 = _pygds_script.new("", true)
 	var r2 = _pygds_script.new("", true)
-	_check("random letters differ", r1._drive_letter != r2._drive_letter)
-	r1.cleanup()
-	var out3 = _run_ok(r2, "print('alive')")
-	_check("other random sandbox unaffected", out3 == "alive\n", out3)
+	_check("random names differ", r1._drive_letter != r2._drive_letter)
+	# 临时盘符与命名盘符命名空间互斥: 临时盘符恒为 _ 前缀, 其 cleanup 删除
+	# 在构造上不可能波及命名盘符, 命名盘符也无法占用 _ 前缀名字
+	var named = _new_drive("PI", true)
+	_run_ok(named, "open('keep.txt', 'w').write('KEEP')")
+	var tmp = _pygds_script.new("", true)
+	_run_ok(tmp, "open('tmp.txt', 'w').write('T')")
+	_check("temp name always _-prefixed", tmp._drive_letter.begins_with("_"), tmp._drive_letter)
+	var impostor = _pygds_script.new(tmp._drive_letter, true)
+	_check("named cannot claim a _-prefixed drive", impostor._init_rejected != "")
+	impostor.free()
+	tmp.cleanup()
+	var out_keep = _run_ok(named, "print(open('keep.txt').read())")
+	_check("named drive data survives temp cleanup", out_keep == "KEEP\n", out_keep)
 	a.free()
 	b.free()
+	named.free()
+	tmp.free()
 	r1.free()
 	r2.cleanup()
 	r2.free()
@@ -330,7 +350,7 @@ func _probe_multi_random() -> void:
 ## 九. 非法盘符: push_error 拒绝实例化, run 进入 ERROR
 func _probe_invalid_drive() -> void:
 	print("[group] invalid drive letters")
-	for bad in ["C1", "AB!", "A B", "C:"]:
+	for bad in ["C1", "AB!", "A B", "C:", "_ABC"]:
 		var dsl = _pygds_script.new(bad, true)
 		_check("rejected: " + bad, dsl._init_rejected != "" and dsl._drive_letter == "")
 		dsl.run()

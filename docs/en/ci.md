@@ -32,7 +32,7 @@ python ci/lint_gd.py
 # Suspension system suite (PyGDS-specific, 24 cases)
 godot --headless --path . --script res://demo/test_suspend_all.gd
 
-# Drive sandbox suite (PyGDS-specific, 48 checks)
+# Drive sandbox suite (PyGDS-specific, 52 checks)
 godot --headless --path . --script res://demo/test_sandbox.gd
 ```
 

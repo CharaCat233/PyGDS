@@ -218,17 +218,13 @@ P2-45 (re-checked as a false positive), P2-46 (`%#o` and f-string `#` prefix lay
 
 | ID | Item | Details |
 | :--- | :--- | :--- |
-| D2 (was P2-4) | `hash` values differ from CPython | PyGDS uses stable hash values for `hash(None)` etc., while CPython hashes are process-randomised; only the numeric values differ, and the equality/hash-consistency semantics match (int hashing is aligned to modulo 2^61-1) |
+| D2 (was P2-4) | `hash` values differ from CPython (stable model by default) | PyGDS uses stable hash values for `hash(None)` etc. by default (reproducible across processes), while CPython hashes are process-randomised; the equality/hash-consistency semantics match. An alignment switch exists: set `stable_identity_hash = false` before `run()` to align with CPython 3.12's process randomisation |
 | D3 (was P2-40) | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
-| D4 (was P0-NEW-1) | `range()` arguments converge to int64 index width | CPython can lazily construct `range(10**30)`; PyGDS converges at construction and raises `OverflowError: Python int too large to convert to C ssize_t` (a convergence decision of the arbitrary-precision landing, see the integer-range section of usage) |
-
-D1 (was P2-1, `random` sequences differing from CPython) was removed in **v0.8.0-alpha.8** by aligning MT19937: int-seeded draw sequences match CPython value by value; the string-seeded sequence difference via CPython's sha512 handling is documented
 
 ### Platform-Layer Differences (Platform)
 
 | ID | Item | Details |
 | :--- | :--- | :--- |
-| P1 (was P2-27) | Godot string↔float conversion precision edge cases | Some hard cases are not correctly rounded (e.g. the `9007199254740993.0` literal), originating from the host string parser |
 | P2 (was P2-52) | Engine VM call-stack hard limit of 2048 frames | Deep recursion combined with deep expressions makes the engine hard-abort the call chain with `Stack overflow`, silently losing the remaining output (CPython either completes or raises a catchable `RecursionError`); the GDScript frame depth of expression evaluation / parsing is not bounded by the call-depth limit |
 | P3 | str literals cannot contain NUL | Godot's String cannot store U+0000 (it would be replaced with U+FFFD), so `'\x00'` / `'\0'` str escapes raise `SyntaxError` at decode time; bytes are unaffected (`b'\x00'` works) |
 | P4 | `\N{...}` supports only the built-in name table | Godot has no Unicode name database; PyGDS ships about 200 names covering printable ASCII full names and common symbols (e.g. `\N{BULLET}',`\N{LATIN CAPITAL LETTER A}'). Names outside the table raise `SyntaxError: unknown Unicode character name` matching CPython's behaviour for unknown names |

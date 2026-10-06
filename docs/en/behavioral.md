@@ -986,6 +986,14 @@ A functional property assigned in a class body gets its attribute name via the c
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_hasattr.py](../../ci/cases/builtin_hasattr.py)
 
+### builtin_hash_identity
+
+- Responsibility: mode-independent identity-hash invariants: same-object hash stability / equal values hash equally / objects as dict and set keys
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_hash_identity.py](../../ci/cases/builtin_hash_identity.py)
+
+The cross-process values of the identity hash depend on the host's `stable_identity_hash` switch (stable by default / CPython 3.12 randomisation), so dual-end comparison covers only the mode-independent invariants; a user class defining `__eq__` without `__hash__` is unhashable and one defining neither hashes by identity, matching CPython
+
 ### builtin_isinstance
 
 - Responsibility: `isinstance`/`issubclass` type checks
@@ -1218,6 +1226,14 @@ Pragmatic support covers one-dimensional B-format views only; bytes-backed views
 - Comparison: `same_output`
 - Source: [ci/cases/type_dunder_methods.py](../../ci/cases/type_dunder_methods.py)
 
+### type_float_parse
+
+- Responsibility: correctly-rounded float string parsing: hard literals / float() syntax validation and underscores / subnormals and inf boundaries / shortest repr round-trip
+- Comparison: `same_output`
+- Source: [ci/cases/type_float_parse.py](../../ci/cases/type_float_parse.py)
+
+Float literals and `float()` strings go through a self-produced correctly-rounded parser (big-integer ratio + round-half-to-even); hard cases (`9007199254740993.0` / `1e23` / the subnormal `5e-324`) match CPython bit for bit; the repr shortest-round-trip check uses the same parser, so subnormals no longer fall back to 17 digits; `math.copysign` gained negative-zero sign-bit semantics
+
 ### type_frozenset
 
 - Responsibility: `frozenset` construction, set operations, hashability, dedup
@@ -1339,6 +1355,14 @@ Note: `range(10**30)` constructs lazily in CPython, while PyGDS converges range 
 - Responsibility: Set methods accepting any iterable; the in-place update family
 - Comparison: `same_output`
 - Source: [ci/cases/type_set_methods.py](../../ci/cases/type_set_methods.py)
+
+### type_range_big
+
+- Responsibility: arbitrary-precision semantics of big range: lazy construction / len OverflowError / big subscripts and negative subscripts / membership / slicing / reversed / equality and truthiness / start-stop-step attributes
+- Comparison: `same_output`
+- Source: [ci/cases/type_range_big.py](../../ci/cases/type_range_big.py)
+
+range arguments keep arbitrary precision instead of converging to the index width, matching CPython's lazy semantics; materialisation of lengths beyond the index width (list / tuple / sorted) and len raise OverflowError with CPython's message; out-of-range big slices of small ranges clamp identically and the read-only `start` / `stop` / `step` attributes are aligned
 
 ### type_slice
 

@@ -218,17 +218,13 @@ v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| D2（原 P2-4） | `hash` 数值与 CPython 不同 | PyGDS 对 `hash(None)` 等使用稳定哈希值，CPython 为进程相关的随机化哈希；仅数值本身不同，等值对象的哈希相等性等语义一致（int 哈希已对齐模 2^61-1） |
+| D2（原 P2-4） | `hash` 数值与 CPython 不同（默认稳定模型） | PyGDS 对 `hash(None)` 等默认使用稳定哈希值（进程间可复现），CPython 为进程随机化哈希；等值对象的哈希相等性等语义一致。已提供对齐开关：`run()` 前设 `stable_identity_hash = false` 即对齐 CPython 3.12 的进程随机化语义 |
 | D3（原 P2-40） | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
-| D4（原 P0-NEW-1） | `range()` 参数按索引位收敛为 int64 | CPython 可惰性构造 `range(10**30)`，PyGDS 构造时收敛并报 `OverflowError: Python int too large to convert to C ssize_t`（任意精度落地的收敛决策，见 usage 整数范围小节） |
-
-D1（原 P2-1，`random` 随机序列与 CPython 不同）已于 **v0.8.0-alpha.8** 对齐 MT19937 移除：int 种子的抽样序列与 CPython 逐值一致，字符串种子经 sha512 处理的序列差异文档化
 
 ### 平台层差异（Platform）
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| P1（原 P2-27） | Godot 字符串↔浮点转换的极端精度边界 | 部分难例不做正确舍入（如 `9007199254740993.0` 字面量解析），源自宿主层字符串解析器 |
 | P2（原 P2-52） | 引擎 VM 调用栈 2048 帧硬上限 | 深递归叠加深表达式时引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`）；表达式求值/解析的 GDScript 帧深不受调用深度约束 |
 | P3 | str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
 | P4 | `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号约 200 条（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
