@@ -46,14 +46,14 @@ class DSLObject:
     var interp: Interpreter        # Interpreter reference
 ```
 
-DSLObject distinguishes between two roles based on whether `fields` is `null`:
+DSLObject distinguishes roles based on whether `fields` is `null`:
 
 - `fields != null`: Indicates this is an **instance** (user class instance or built-in type wrapper)
 - `fields == null`: Indicates this is a **value object** (pure value types like DSLInteger, DSLString, etc.)
 
 ### The `_wrapped` Field
 
-`_wrapped` is an independent storage slot used to hold the underlying object inside a DSLObject wrapper. It is primarily used in two scenarios:
+`_wrapped` is an independent storage slot used to hold the underlying object inside a DSLObject wrapper. It is primarily used in the following scenarios:
 
 - **Built-in type subclass instances**: `MyInt(5)` → `DSLObject(klass=MyInt, fields={}, _wrapped=DSLInteger(5))`
 - **Exception instances**: `TypeError("msg")` → `DSLObject(klass=TypeError, fields={"args": ...}, _wrapped=DSLException(...))`
@@ -379,7 +379,7 @@ class DSLProperty extends DSLObject:
 
 ### Parser Handling
 
-The Parser's `decorated_declaration()` method recognizes the five built-in decorator syntaxes:
+The Parser's `decorated_declaration()` method recognizes the built-in decorator syntaxes:
 
 | Decorator Syntax | `method_type` | Handling |
 | :--- | :--- | :--- |
@@ -429,11 +429,11 @@ ro.area = 100       # AttributeError: can't set attribute
 
 ### Decorator Parsing
 
-`decorated_declaration()` collects consecutive `@` lines in source order: the five built-in forms `@classmethod` / `@staticmethod` / `@property` / `@name.setter` / `@name.deleter` are recorded into `method_type` (handled by the existing fast path), while any other expression is stored into the node's `decorators` array (held by both `FunctionStmt` and `ClassStmt`)
+`decorated_declaration()` collects consecutive `@` lines in source order: the built-in forms `@classmethod` / `@staticmethod` / `@property` / `@name.setter` / `@name.deleter` are recorded into `method_type` (handled by the existing fast path), while any other expression is stored into the node's `decorators` array (held by both `FunctionStmt` and `ClassStmt`)
 
 ### Decorator Application
 
-The interpreter's `_apply_decorators()` runs after the function / class object is created: it first evaluates all decorator expressions in source order, then invokes them starting from the one closest to the definition, and the final return value replaces the original binding. Three application sites:
+The interpreter's `_apply_decorators()` runs after the function / class object is created: it first evaluates all decorator expressions in source order, then invokes them starting from the one closest to the definition, and the final return value replaces the original binding. The application sites are:
 
 | Site | Timing |
 | :--- | :--- |
@@ -453,7 +453,7 @@ Decorator expressions are evaluated through the `evaluate()` channel, so a `time
 
 ### MRO-Driven Lookup Points
 
-All single-parent chain traversals have been migrated to MRO iteration, including: `DSLClass._lookup_method` (method resolution and `__new__` / `__init__` location), `DSLClass._dsl_getattribute` (class attribute access), `DSLObject._is_subclass_of_klass` (the shared base for isinstance / issubclass / exception matching / instantiation checks), the three collection loops in `dir()`, `__match_args__` and match-self determination, exception hierarchy registry checks (`_is_registered_exception_class`), and `_inherits_exception`.
+All single-parent chain traversals have been migrated to MRO iteration, including: `DSLClass._lookup_method` (method resolution and `__new__` / `__init__` location), `DSLClass._dsl_getattribute` (class attribute access), `DSLObject._is_subclass_of_klass` (the shared base for isinstance / issubclass / exception matching / instantiation checks), the collection loops in `dir()`, `__match_args__` and match-self determination, exception hierarchy registry checks (`_is_registered_exception_class`), and `_inherits_exception`.
 
 ### DSLSuper Cooperating Along the MRO
 

@@ -29,10 +29,10 @@ python ci/lint_cases.py
 python ci/lint_md.py
 python ci/lint_gd.py
 
-# 挂起系统套件 (PyGDS 特有能力, 24 例)
+# 挂起系统套件 (PyGDS 特有能力)
 godot --headless --path . --script res://demo/test_suspend_all.gd
 
-# 盘符沙箱套件 (PyGDS 特有能力, 52 项)
+# 盘符沙箱套件 (PyGDS 特有能力)
 godot --headless --path . --script res://demo/test_sandbox.gd
 ```
 

@@ -157,7 +157,7 @@ func my_api(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DS
     return PyGDS.DSLString.new("result")
 ```
 
-**Naming Convention**: Methods on DSLObject follow a three-tier naming convention:
+**Naming Convention**: Methods on DSLObject follow the convention below:
 
 | Prefix | Tier | Description | Example |
 | :--- | :--- | :--- | :--- |
@@ -354,7 +354,7 @@ print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
 > The target must be a plain variable name: `(obj.attr := 1)` and `(lst[0] := 1)` raise `cannot use assignment expressions with attribute` / `with subscript`; a bare `x := 1` statement
 > raises `SyntaxError` (write `(x := 1)` instead) and `del (x := 1)` raises `cannot delete named expression` — all matching Python.
 
-**Two restrictions inside comprehensions** (both `SyntaxError` at parse time, matching CPython):
+**Restrictions inside comprehensions** (both `SyntaxError` at parse time, matching CPython):
 
 ```python
 [i := 0 for i in range(3)]          # assignment expression cannot rebind
@@ -787,7 +787,7 @@ print(REG)                       # ['collected', 'collected']
 print(Service().run(), Service.ping())    # run ping
 ```
 
-The five built-in forms `@staticmethod` / `@classmethod` / `@property` / `@name.setter` / `@name.deleter` are handled by the method-type fast path and can be combined with arbitrary decorators (`@staticmethod` on top with a custom decorator below, and so on). Note: when a decorator returns a wrapper function that replaces the original, the static-method / class-method / property wrapping of the built-in form is not preserved (CPython re-wraps into a `staticmethod` object etc.); scenarios dominated by registry-style decorators that return the original function are unaffected
+The built-in forms `@staticmethod` / `@classmethod` / `@property` / `@name.setter` / `@name.deleter` are handled by the method-type fast path and can be combined with arbitrary decorators (`@staticmethod` on top with a custom decorator below, and so on). Note: when a decorator returns a wrapper function that replaces the original, the static-method / class-method / property wrapping of the built-in form is not preserved (CPython re-wraps into a `staticmethod` object etc.); scenarios dominated by registry-style decorators that return the original function are unaffected
 
 Decorator expressions run through the evaluation channel, so `time.sleep` suspensions inside them resume normally
 
@@ -1696,7 +1696,7 @@ var dsl = PyGDS.new("MOD1", true)   # drive MOD1, script may access files inside
 - `drive_letter` (default `""`): the drive name, letters only and normalized to upper case (e.g. `"CI"` / `"MOD1"`); the `_` prefix is reserved for temporary drives and unavailable to named drives. Non-letter characters push an error and refuse instantiation; all further API calls are unavailable
 - `path_access` (default `false`): whether the script may actually access files inside the drive (`open` and user `import`)
 
-### Four Combinations
+### Combinations and Behavior
 
 | Drive | path_access | Behavior |
 | :--- | :--- | :--- |
@@ -1709,12 +1709,12 @@ var dsl = PyGDS.new("MOD1", true)   # drive MOD1, script may access files inside
 
 ### Path Rules
 
-Only two path forms are visible to a sandboxed script; after normalization both must remain inside `user://<base_path>/<drive>/`, anything else raises `FileNotFoundError: [Errno 2] No such file or directory: '<path>'` (same message as a truly missing file, never leaking existence outside the drive):
+Only the following path forms are visible to a sandboxed script; after normalization each must remain inside `user://<base_path>/<drive>/`, anything else raises `FileNotFoundError: [Errno 2] No such file or directory: '<path>'` (same message as a truly missing file, never leaking existence outside the drive):
 
 - **Drive prefix** (e.g. `"CI:/data/x.json"`, or `"_ABCD...:/data/x.json"` inside a temporary sandbox): absolute form, resolved against the drive root; only this instance's drive is accepted (case-insensitive); any other prefixed colon form (including `res:` / `user:` host protocol lookalikes) is refused as a foreign drive
 - **Bare relative path** (e.g. `"data/x.json"`, `"../shared.txt"`): resolved against the **directory of the main script**; `..` must not escape the drive root; `open` inside an imported module uses the same base (no per-module cwd in the sandbox)
 
-`sys.path` starts as `[""]` inside the sandbox, where the empty entry resolves to the main script's directory (CPython's sys.path[0] script-directory semantics; CPython's bare relative path base is the process cwd, which coincides with the script directory in ordinary single-script usage, so the two are equivalent in practice); scripts may append directory entries (e.g. `sys.path.append("lib")`), and out-of-drive entries are skipped during module resolution. `res://` asset access is not provided: the host can pre-place files into the drive or expose them via `register_api`.
+`sys.path` starts as `[""]` inside the sandbox, where the empty entry resolves to the main script's directory (CPython's `sys.path[0]` script-directory semantics; CPython's bare relative path base is the process cwd, which coincides with the script directory in ordinary single-script usage, so the two are equivalent in practice); scripts may append directory entries (e.g. `sys.path.append("lib")`), and out-of-drive entries are skipped during module resolution. `res://` asset access is not provided: the host can pre-place files into the drive or expose them via `register_api`.
 
 ### load_dsl_script and the write File Mode
 
@@ -1741,7 +1741,7 @@ The relative base under `user://` for the sandbox root is the static property `P
 
 PyGDS provides a suspension mechanism that allows DSL scripts to pause during execution and wait for external conditions to be met before resuming. This is very useful in game development, for example, waiting for an animation to finish, waiting for player input, or implementing delay logic.
 
-The suspension system classifies suspensions into two types:
+The suspension system classifies suspensions into the following types:
 
 | Type | State | Trigger Method | Resume Method |
 | :--- | :--- | :--- | :--- |

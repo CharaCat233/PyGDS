@@ -157,7 +157,7 @@ func my_api(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DS
     return PyGDS.DSLString.new("result")
 ```
 
-**命名约定**：DSLObject 上的方法遵循三层命名规范
+**命名约定**：DSLObject 上的方法遵循以下命名规范
 
 | 前缀 | 层级 | 说明 | 示例 |
 | :--- | :--- | :--- | :--- |
@@ -284,7 +284,7 @@ print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
 > 目标必须是简单变量名：`(obj.attr := 1)` / `(lst[0] := 1)` 分别报 `cannot use assignment expressions with attribute` / `with subscript`
 > 裸写 `x := 1` 作为语句报 `SyntaxError`（需写成 `(x := 1)`），`del (x := 1)` 报 `cannot delete named expression`——以上均与 Python 一致
 
-**推导式内的两条禁止规则**（与 CPython 一致，均为解析期 `SyntaxError`）：
+**推导式内的禁止规则**（与 CPython 一致，均为解析期 `SyntaxError`）：
 
 ```python
 [i := 0 for i in range(3)]          # assignment expression cannot rebind
@@ -785,7 +785,7 @@ print(REG)                       # ['collected', 'collected']
 print(Service().run(), Service.ping())    # run ping
 ```
 
-`@staticmethod` / `@classmethod` / `@property` / `@name.setter` / `@name.deleter` 五种内建形式按方法类型快速路径处理，可与任意装饰器组合（`@staticmethod` 在上、自写装饰器在下等）。注意：当装饰器返回包装函数替换原函数时，内建形式的静态方法 / 类方法 / property 包装语义不保留（CPython 会重新包装为 `staticmethod` 等对象），以返回原函数的注册类装饰器为主的使用场景不受影响
+`@staticmethod` / `@classmethod` / `@property` / `@name.setter` / `@name.deleter` 这些内建形式按方法类型快速路径处理，可与任意装饰器组合（`@staticmethod` 在上、自写装饰器在下等）。注意：当装饰器返回包装函数替换原函数时，内建形式的静态方法 / 类方法 / property 包装语义不保留（CPython 会重新包装为 `staticmethod` 等对象），以返回原函数的注册类装饰器为主的使用场景不受影响
 
 装饰器表达式经求值通道执行，其内部的 `time.sleep` 挂起可正常推进
 
@@ -1693,7 +1693,7 @@ var dsl = PyGDS.new("MOD1", true)   # 盘符 MOD1, 允许脚本访问盘内文�
 - `drive_letter`（默认 `""`）：盘符名，仅允许字母并统一转大写（如 `"CI"` / `"MOD1"`）；`_` 前缀为临时盘符保留，命名盘符不可使用。含非字母字符时 push_error 拒绝实例化，后续 API 均不可用
 - `path_access`（默认 `false`）：是否允许脚本实际访问盘内文件（`open` 与用户 `import`）
 
-### 四种组合
+### 组合与行为
 
 | 盘符 | path_access | 行为 |
 | :--- | :--- | :--- |
@@ -1706,12 +1706,12 @@ var dsl = PyGDS.new("MOD1", true)   # 盘符 MOD1, 允许脚本访问盘内文�
 
 ### 路径规则
 
-沙箱内脚本可见的路径只有两种形态，归一化后必须仍落在 `user://<base_path>/<盘符>/` 内，越界一律报 `FileNotFoundError: [Errno 2] No such file or directory: '<路径>'`（与文件真不存在同文案，不泄露盘符外的存在性）：
+沙箱内脚本可见的路径仅有以下形态，归一化后必须仍落在 `user://<base_path>/<盘符>/` 内，越界一律报 `FileNotFoundError: [Errno 2] No such file or directory: '<路径>'`（与文件真不存在同文案，不泄露盘符外的存在性）：
 
 - **盘符前缀**（如 `"CI:/data/x.json"`，临时沙箱实例为 `"_ABCD…:/data/x.json"`）：绝对形态，相对盘符根解析；仅接受本实例盘符（大小写不敏感），其余前缀冒号形态（含 `res:` / `user:` 等宿主协议字样）按外来盘符拒绝
 - **裸相对路径**（如 `"data/x.json"`、`"../shared.txt"`）：以**主脚本所在目录**为基准解析，`..` 不得越出盘符根；被 import 模块内的 `open` 使用同一基准（沙箱无 per-module cwd）
 
-`sys.path` 在沙箱内初始为 `[""]`，空项按主脚本所在目录解析（CPython 的 sys.path[0] 脚本目录语义；CPython 的裸相对路径基准是进程 cwd，常规单脚本使用中 cwd 与脚本所在目录一致，实践中等价）；脚本可追加目录项（如 `sys.path.append("lib")`），越界的目录项在模块解析时跳过。`res://` 资产访问不提供：宿主可预放文件进盘符，或经 `register_api` 暴露
+`sys.path` 在沙箱内初始为 `[""]`，空项按主脚本所在目录解析（CPython 的 `sys.path[0]` 脚本目录语义；CPython 的裸相对路径基准是进程 cwd，常规单脚本使用中 cwd 与脚本所在目录一致，实践中等价）；脚本可追加目录项（如 `sys.path.append("lib")`），越界的目录项在模块解析时跳过。`res://` 资产访问不提供：宿主可预放文件进盘符，或经 `register_api` 暴露
 
 ### load_dsl_script 与 write 文件模式
 
@@ -1738,7 +1738,7 @@ dsl.write_dsl_script(source, "mods/extra/main.py")   # 需要非空盘符且 pat
 
 PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复执行。这在游戏开发中非常有用，例如等待动画播放完毕、等待玩家输入、或实现延时逻辑
 
-挂起系统将挂起分为两种类型
+挂起系统将挂起分为以下类型
 
 | 类型 | 状态 | 触发方式 | 恢复方式 |
 | :--- | :--- | :--- | :--- |

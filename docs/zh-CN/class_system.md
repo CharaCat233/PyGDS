@@ -46,14 +46,14 @@ class DSLObject:
     var interp: Interpreter        # 解释器引用
 ```
 
-DSLObject 通过 `fields` 是否为 `null` 来区分两种角色
+DSLObject 通过 `fields` 是否为 `null` 来区分角色
 
 - `fields != null`：表示这是一个 **实例**（用户类实例或内置类型包装）
 - `fields == null`：表示这是 **值对象**（如 DSLInteger、DSLString 等纯值类型）
 
 ### `_wrapped` 字段
 
-`_wrapped` 是一个独立的存储槽，用于在 DSLObject 包装器内部保存底层对象，主要用于两类场景
+`_wrapped` 是一个独立的存储槽，用于在 DSLObject 包装器内部保存底层对象，主要用于以下场景
 
 - **内置类型子类实例**：`MyInt(5)` → `DSLObject(klass=MyInt, fields={}, _wrapped=DSLInteger(5))`
 - **异常实例**：`TypeError("msg")` → `DSLObject(klass=TypeError, fields={"args": ...}, _wrapped=DSLException(...))`
@@ -379,7 +379,7 @@ class DSLProperty extends DSLObject:
 
 ### Parser 处理
 
-Parser 的 `decorated_declaration()` 方法识别五种内建装饰器语法
+Parser 的 `decorated_declaration()` 方法识别内建装饰器语法
 
 | 装饰器语法 | `method_type` | 处理方式 |
 | :--- | :--- | :--- |
@@ -429,11 +429,11 @@ ro.area = 100       # AttributeError: can't set attribute
 
 ### 装饰器解析
 
-`decorated_declaration()` 按源码顺序收集连续的 `@` 行：`@classmethod` / `@staticmethod` / `@property` / `@name.setter` / `@name.deleter` 五种内建形式记入 `method_type`（走既有快速路径），其余表达式存入节点的 `decorators` 数组（`FunctionStmt` 与 `ClassStmt` 均持有该字段）
+`decorated_declaration()` 按源码顺序收集连续的 `@` 行：`@classmethod` / `@staticmethod` / `@property` / `@name.setter` / `@name.deleter` 这些内建形式记入 `method_type`（走既有快速路径），其余表达式存入节点的 `decorators` 数组（`FunctionStmt` 与 `ClassStmt` 均持有该字段）
 
 ### 装饰器应用
 
-解释器的 `_apply_decorators()` 在函数 / 类对象创建后执行：先把装饰器表达式按源码顺序全部求值，再从最贴近定义者开始依次调用，最终返回值替换原绑定。三个应用点：
+解释器的 `_apply_decorators()` 在函数 / 类对象创建后执行：先把装饰器表达式按源码顺序全部求值，再从最贴近定义者开始依次调用，最终返回值替换原绑定。应用点如下：
 
 | 位置 | 时机 |
 | :--- | :--- |
@@ -453,7 +453,7 @@ ro.area = 100       # AttributeError: can't set attribute
 
 ### MRO 驱动的查找点
 
-沿单父链遍历的代码已全部迁移为 MRO 迭代，包括：`DSLClass._lookup_method`（方法解析与 `__new__` / `__init__` 定位）、`DSLClass._dsl_getattribute`（类属性访问）、`DSLObject._is_subclass_of_klass`（isinstance / issubclass / 异常匹配 / 类实例化判定的公共底层）、`dir()` 的三个收集循环、`__match_args__` 与 match-self 判定、异常体系注册表核对（`_is_registered_exception_class`）与 `_inherits_exception`
+沿单父链遍历的代码已全部迁移为 MRO 迭代，包括：`DSLClass._lookup_method`（方法解析与 `__new__` / `__init__` 定位）、`DSLClass._dsl_getattribute`（类属性访问）、`DSLObject._is_subclass_of_klass`（isinstance / issubclass / 异常匹配 / 类实例化判定的公共底层）、`dir()` 的收集循环、`__match_args__` 与 match-self 判定、异常体系注册表核对（`_is_registered_exception_class`）与 `_inherits_exception`
 
 ### DSLSuper 沿 MRO 协作
 

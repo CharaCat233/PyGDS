@@ -4,7 +4,7 @@
 
 PyGDS 的方法类型系统对标 CPython 的底层函数/方法/描述符类型。每种类型在 Python 交互环境中都有不同的 `type()` 输出和不同的行为语义，PyGDS 通过 `_type_name()` 方法返回与 CPython 一致的名称
 
-以下类型分别定义在 `pygds.gd` 中（含 Property 与两组包装器描述符，共十种）
+以下类型分别定义在 `pygds.gd` 中（含 Property 与包装器描述符）
 
 | PyGDS 类 | CPython 对应 |
 | :--- | :--- |
@@ -95,7 +95,7 @@ class DSLFunction extends DSLObject:
 
 ***描述符协议***
 
-这是区分三种方法行为的关键，根据 `method_type` 和 `instance` 的值
+这是区分不同方法行为的关键，根据 `method_type` 和 `instance` 的值
 
 ```gdscript
 func __get__(instance, owner):

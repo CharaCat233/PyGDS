@@ -154,7 +154,7 @@ expression_statement (handles assignment, augmented assignment, unpacking assign
 
 ### Code Block Parsing
 
-The method `PyGDS.Parser.block` can parse code blocks after a colon, supporting two formats:
+The method `PyGDS.Parser.block` can parse code blocks after a colon, supporting the following formats:
 
 - Indented block: colon followed by newline + INDENT → multi-line statements → DEDENT
 - Single-line block: colon followed immediately by a single simple statement (no newline)
@@ -413,7 +413,7 @@ match expr.operator.type:
             func(): return left.magic_add([left, right] as Array[DSLObject], {}))
 ```
 
-**Actual paths for three cases:**
+**Actual paths in the different cases:**
 
 Case A - User-defined class overloads `__add__`
 
@@ -589,7 +589,7 @@ The `PyGDS` class is a subclass of `Node` and serves as the controller of the en
 
 ## Part 7 - Suspension System
 
-The suspension system allows DSL scripts to pause during execution and resume after external conditions are met. It achieves a two-layer separated suspension architecture by introducing a `_suspended` bypass channel at the interpreter layer and a state machine at the PyGDS layer.
+The suspension system allows DSL scripts to pause during execution and resume after external conditions are met. It achieves a layered suspension architecture by introducing a `_suspended` bypass channel at the interpreter layer and a state machine at the PyGDS layer.
 
 ### Architecture Layers
 
@@ -665,7 +665,7 @@ enum Level {
 }
 ```
 
-### Two Types of Error Handling
+### Error Handling
 
 - **`error(msg)`**: Silently records the error (sets `has_error = true`), does not output immediately, used for exceptions that may be caught by try-except.
 - **`fatal_error(msg)`**: Confirms an uncaught exception, outputs to the console and Godot log, called by the interpreter's top-level `interpret()`.

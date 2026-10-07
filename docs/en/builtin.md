@@ -81,7 +81,7 @@ list(range(3))           # [0, 1, 2]
 
 ### `dict(iterable=None, **kwargs)`
 
-Corresponds to the Python `dict` type constructor, supporting two calling conventions:
+Corresponds to the Python `dict` type constructor, supporting the following calling conventions:
 
 1. **Iterator form**: Pass an iterable where each element is a `(key, value)` pair.
 2. **Keyword argument form**: Pass keyword arguments, with keys as strings and values as corresponding DSL objects.
@@ -602,7 +602,7 @@ print(type(f).__name__)                        # filter
 
 ## Built-in Modules (import)
 
-PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides eleven built-in modules: `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys` and `contextlib` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
+PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the built-in modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys` and `contextlib` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
 
 ### import Syntax
 

@@ -154,7 +154,7 @@ expression_statement （处理赋值、增强赋值、解包赋值）
 
 ### 代码块解析
 
-方法 `PyGDS.Parser.block` 能够解析冒号后的代码块，支持两种格式
+方法 `PyGDS.Parser.block` 能够解析冒号后的代码块，支持以下格式
 
 - 缩进块：冒号后换行 + INDENT → 多行语句 → DEDENT
 - 单行块：冒号后紧跟一条简单语句（不用换行）
@@ -413,7 +413,7 @@ match expr.operator.type:
             func(): return left.magic_add([left, right] as Array[DSLObject], {}))
 ```
 
-**三种情况的实际路径：**
+**不同情况下的实际路径：**
 
 情况 A - 用户自定义类重载了 `__add__`
 
@@ -588,7 +588,7 @@ class MyInt(int):
 
 ## 第七部分 - 挂起系统
 
-挂起系统允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复。它通过在解释器层引入 `_suspended` 旁路通道，在 PyGDS 层引入状态机，实现了两层分离的挂起架构
+挂起系统允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复。它通过在解释器层引入 `_suspended` 旁路通道，在 PyGDS 层引入状态机，实现了分层挂起架构
 
 ### 架构分层
 
@@ -664,7 +664,7 @@ enum Level {
 }
 ```
 
-### 两类错误处理
+### 错误处理
 
 - **`error(msg)`**：静默记录错误（设置 `has_error = true`），不立即输出，用于 try-except 可能捕获的异常
 - **`fatal_error(msg)`**：确认未捕获异常，输出到控制台和 Godot 日志，由解释器顶层 `interpret()` 调用

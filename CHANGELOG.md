@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.2-alpha.2] - 2026-10-07
+
+### 修复
+
+- **大整数与浮点精确比较（I1-77）**：`DSLFloat` 的序比较（lt / gt / le / ge）对大整数操作数改走 `DSLInteger._cmp_with_float` 的精确比较（翻转算符委托, 按 m×2^ep 精确值比, 不经 double 有损转换）；`_compare_with_reflect` 的同向反射分支对内建数值对（int / bool / float）跳过——原路径 `10**400 > float("inf")` 会先经 double 有损转换误报 `OverflowError: int too large to convert to float`（部分方向还产出方向颠倒的错误布尔值）
+- **函数与类的元属性（I1-79）**：`__doc__`（体首纯字符串字面量捕获, 函数 / 类 / 方法 / lambda, 缺省 None）、`__module__`（主脚本 `__main__`, 用户模块为模块名, 内建函数为 `builtins`）、`__qualname__`（类为类名, lambda 为 `<lambda>`）、`__defaults__`（仅位置参数的默认值元组, 无默认为 None）；绑定方法四项委托底层函数（CPython method 对象同形）；模块对象补 `__doc__`（内置模块无文档文本, 返回 None 为文档化残余）；绑定方法的四项在类上访问同理
+- **`operator.methodcaller`（I1-81）**：新增 `DSLMethodCaller`（type 名 `methodcaller`, repr 为 `operator.methodcaller('get', 1)` 形态），调用恰好接受一个目标实参, 预绑定位置 / 关键字实参合并转发（`methodcaller('f', a=1)(obj)` 等价 `obj.f(a=1)`）, 属性缺失报标准 `AttributeError`
+- **`float.fromhex`（I1-82）**：经 `DSLClassMethodDescriptor` 注册的类方法内建；解析 `[符号] [0x] 十六进制尾数 [.尾数] [p 十进制指数]` 及 inf / infinity / nan（大小写不敏感, 首尾空白剥离）, 大数尾数按 53 位半到偶舍入, 指数缩放走精确幂乘除（溢出归 inf, 次规范正确舍入, `0x1p-1074` 为最小次规范数）；非法形态报 `ValueError: invalid hexadecimal floating-point string`
+- **`__hash__ = None` 不可哈希（I2-67）**：沿 MRO 检查类属性 `__hash__` 显式置 None（优先于继承链与 `__eq__` 判定）, `hash()` / 字典键 / 集合元素三处按 CPython 报 `TypeError: unhashable type`
+
+### 文档
+
+- README 中英「审计临时登记」移除已修复的 I1-77 / I1-79 / I1-81 / I1-82 / I2-67 五条，重写了某些已过时的文档
+- README 中英兼容性矩阵收敛为支持程度概览（逐项细节统一指向 `usage.md` 的 DSL 语法参考小节）：行内说明只保留一句简述并移除易失同步的数量表述，内置类型条目集中排布于语句类条目之前并统一为「描述 (`构造名`)」格式，`str.format` 条目并入「字符串」行；「已知差异与限制」重排为 Issue / Design / Platform 三系分节；设计定位、破坏性变更条序、盘符沙箱小节链接、Demo 测试与 FAQ 等过时描述同步修正，英文版随之对齐
+- 中英全文档清理清单计数（内置模块 / 装饰器内建形式 / 方法类型 / 命名分层 / 应用点 / 块格式 / 错误处理分类 / 路径形态 / 套件用例数等），数量不再进入正文，避免功能增删时多点同步；`usage.md` 沙箱「四种组合」小节更名「组合与行为」
+
 ## [0.8.2-alpha.1] - 2026-10-07
 
 ### 修复

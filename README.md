@@ -22,16 +22,16 @@ flowchart TD
 
 **PyGDS 做什么：**
 
-- 为游戏提供 Python 语法的脚本能力（变量、函数、类、控制流、异常）
+- 为游戏提供 Python 语法的脚本能力（变量、函数、类、控制流、异常、生成器、推导式、模式匹配）
 - 让非开发者用熟悉的 Python 语法操作游戏数据、配置游戏逻辑
-- 作为模组系统的脚本引擎，让玩家编写自定义行为
+- 作为模组系统的脚本引擎：盘符沙箱内多文件 mod、用户模块 `import`、宿主 API 注册
 
 **PyGDS 不做什么：**
 
 - 替代 GDScript 开发游戏核心逻辑 — 核心逻辑仍用 GDScript
-- 提供完整的 Python 标准库 — 只提供 `str`/`list`/`dict` 等基础类型和少量内置函数
-- 支持 `import`/模块系统 — 脚本是独立的单文件
-- 支持 `async`/`await`/`yield` — 游戏脚本交互是同步的，但提供了挂起系统
+- 提供完整的 CPython 标准库 — 内置若干个常用模块，其余标准库模块未实现
+- 实现 CPython 的包 / 命名空间包与 C 扩展模块加载 — 用户模块按 `sys.path` 逐目录解析单文件 `<name>.py`
+- 提供事件循环与并发运行时（`asyncio` 等）— `async` / `await` 以协程对象模拟（同步方式驱动），游戏内等待以挂起系统替代
 
 ---
 
@@ -70,7 +70,7 @@ warn("这是一条 WARN 日志")
 
 ## 安装与集成
 
-PyGDS 提供两种集成方式：
+PyGDS 提供以下集成方式：
 
 ### 单文件集成
 
@@ -88,7 +88,7 @@ dsl.run()
 
 ### 盘符虚拟沙箱（可选）
 
-需要脚本读写文件或加载盘内模块时，实例化时传入盘符与访问开关，脚本可见空间收敛到 `user://<base_path>/<盘符>/`，对真实文件系统零接触：
+需要脚本读写文件或加载盘内模块时，实例化时传入盘符与访问开关，脚本可见空间收敛到 `user://<base_path>/<盘符>/`，对真实文件系统零接触，具体实现详见 [usage.md#盘符虚拟沙箱](docs/zh-CN/usage.md#盘符虚拟沙箱)
 
 ```gdscript
 var dsl = PyGDS.new("MOD1", true)
@@ -99,80 +99,63 @@ dsl.load_dsl_script("main.py")   # 从盘符读取主文件 (多文件 mod 场�
 dsl.run()
 ```
 
-四种盘符 × 访问组合、路径规则与 `base_path` 基准详见 [usage.md](docs/zh-CN/usage.md) 的「盘符虚拟沙箱」小节
-
 ---
 
 ## Python 兼容性矩阵
 
+本表为支持程度概览，各特性的详细语法与语义见 [usage.md#DSL 语法参考](docs/zh-CN/usage.md#dsl-语法参考)
+
 | 特性 | 支持程度 | 说明 |
 | :--- | :--- | :--- |
-| 变量赋值 | ✅ 完整 | 支持普通赋值、多重赋值、解包赋值 |
-| 整数 (`int`) | ✅ 完整 | 含加减乘除、取模、幂运算等所有运算符 |
+| 运算符 | ✅ 完整 | 二元/一元/比较/增强赋值全部支持 |
+| 变量赋值 | ✅ 完整 | 普通/多重/解包/增强赋值与赋值表达式（`:=`） |
+| 整数 (`int`) | ✅ 完整 | 含全部运算符与数字字面量（任意精度） |
 | 浮点数 (`float`) | ✅ 完整 | 同 `int` 的运算符支持 |
-| 字符串 (`str`) | ✅ 完整 | 含 `upper`/`lower`/`split`/`join` 等常用方法 |
-| 列表 (`list`) | ✅ 完整 | 含 `append`/`extend`/`pop`/`sort` 等所有方法 |
-| 元组 (`tuple`) | ✅ 完整 | 不可变序列 |
-| 字典 (`dict`) | ✅ 完整 | 含 `items`/`keys`/`values`/`get`/`pop` 等 |
+| 复数 (`complex`) | ✅ 完整 | 含 `1j` 字面量、构造、算术、比较与字典键 |
 | 布尔 (`bool`) | ✅ 完整 | `True`/`False`/`None` 单例 |
-| `if`/`elif`/`else` 语句 | ✅ 完整 | 含三目运算符 (`a if cond else b`) |
+| 字符串 (`str`) | ✅ 完整 | 含常用方法与 `%` / `format` / `f-string` 格式化 |
+| 字节串 (`bytes`) | ✅ 完整 | 字面量/构造与全部方法族 |
+| 字节数组 (`bytearray`) | ✅ 完整 | 可变字节序列，含构造与方法 |
+| 内存视图 (`memoryview`) | ✅ 务实子集 | 一维 B 格式视图（只读/可写透传） |
+| 列表 (`list`) | ✅ 完整 | 含 `append`/`extend`/`pop`/`sort` 等常用方法 |
+| 元组 (`tuple`) | ✅ 完整 | 不可变序列 |
+| 范围 (`range`) | ✅ 完整 | 独立惰性序列（`len`/索引/切片/迭代） |
+| 字典 (`dict`) | ✅ 完整 | 含常用方法与 `\|` 合并（Python 3.9+） |
+| 字典视图 (`dict_keys` / `dict_values` / `dict_items`) | ✅ 完整 | 实时视图（迭代、`len` 与成员判定） |
+| 集合 (`set`) | ✅ 完整 | 字面量、构造、集合运算与方法 |
+| 冻结集合 (`frozenset`) | ✅ 完整 | 不可变集合，可哈希 |
+| 切片 (`slice`) | ✅ 完整 | 可复用的切片对象与索引 |
+| `if`/`elif`/`else` 语句 | ✅ 完整 | 含三目运算符 |
 | `while` 循环 | ✅ 完整 | 含 `break`/`continue` |
 | `for` 循环 | ✅ 完整 | 支持列表/元组/字符串/字典遍历 |
-| 函数定义 | ✅ 完整 | 含普通函数、默认参数、`*args`、`**kwargs` |
-| 类定义 | ✅ 完整 | 含继承、方法覆写、实例属性 |
-| 静态方法 | ✅ 完整 | `@staticmethod` 装饰器 |
-| 类方法 | ✅ 完整 | `@classmethod` 装饰器 |
-| 异常处理 | ✅ 完整 | 含 `try`/`except`/`else`/`finally`/`raise`、自定义异常类、异常组（`ExceptionGroup` / `except*`，PEP 654） |
+| 函数定义 | ✅ 完整 | 含全部参数形态与匿名函数（`lambda`） |
+| 类定义 | ✅ 完整 | 含继承（多继承）、覆写、类/静态方法与魔法方法 |
+| 异常处理 | ✅ 完整 | 含 `try`/`except`/`else`/`finally`/`raise`、自定义异常与异常组（PEP 654） |
 | `is` / `is not` | ✅ 完整 | 身份运算符 |
 | `id()` | ✅ 完整 | 对象标识符 |
 | `global`/`nonlocal` | ✅ 完整 | 变量作用域声明 |
-| 列表推导式 | ✅ 完整 | `[x for x in iterable [if cond]]` |
-| 生成器表达式 | ✅ 完整 | `(x for x in iterable [if cond])`，惰性生成器，支持 `next()` 与 `sum(x for x in ...)` 裸写法 |
-| 字典推导式 | ✅ 完整 | `{k: v for k, v in ... [if cond]}` |
-| 集合推导式 | ✅ 完整 | `{x*x for x in iterable [if cond]}` |
-| 多 `for` 推导式 | ✅ 完整 | `[x*y for x in a for y in b]`，每个 `for` 可带多个 `if`；列表/字典/集合推导式与生成器表达式均支持，循环变量可为 `k, v` 元组目标 |
-| 字面量 `*` 解包 | ✅ 完整 | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}`（Python 3.5+） |
-| 赋值表达式 (`:=`) | ✅ 完整 | `if (n := len(a)) > 5:`、`while chunk := read():`、推导式内绑定到外层作用域（Python 3.8+）；与 CPython 一致地拒绝「重绑定推导式循环变量」与「出现在推导式可迭代表达式内」两种写法 |
-| `slice` | ✅ 完整 | `slice(start, stop[, step])` 对象，可复用索引 `lst[slice(...)]` |
-| 增强赋值 | ✅ 完整 | `+=` `-=` `*=` `/=` `**=` `//=` `%=` `\|=` `&=` `^=` `<<=` `>>=` 全部支持 |
-| 下标访问 | ✅ 完整 | `obj[key]` 含 `getitem`/`setitem`；切片赋值/删除 `a[1:3] = [9]` / `del a[1:3]` |
-| 属性访问 | ✅ 完整 | `obj.attr` 含 `getattr`/`setattr` |
-| 方法类型系统 | ✅ 完整 | 六种类型严格对标 CPython |
+| 推导式 | ✅ 完整 | 列表/生成器/字典/集合推导式（含多 `for` 与裸写法） |
+| `*`、`**` 解包 | ✅ 完整 | 字面量与调用处解包 |
+| 下标访问 | ✅ 完整 | 下标读写与切片赋值/删除 |
+| 属性访问 | ✅ 完整 | `obj.attr` 读写 |
+| 方法类型系统 | ✅ 完整 | 方法/描述符类型对标 CPython |
 | Descriptor 协议 | ✅ 完整 | `__get__` 实现类级/实例级绑定 |
-| 魔法方法 | ✅ 完整 | `__add__`/`__str__`/`__init__` 等类级注册 |
-| 运算符 | ✅ 完整 | 二元/一元/比较/增强赋值全部支持 |
-| f-string | ✅ 完整 | `f"value: {x:.2f}"`，含格式说明符、转换标志、`=` 调试符与嵌套格式宽度，以及同引号嵌套与嵌套 f-string（PEP 701，Python 3.12+），替换字段内表达式支持多行书写（含缩进续行与注释） |
-| lambda | ✅ 完整 | 匿名函数，支持默认参数与闭包 |
-| `super()` | ✅ 完整 | 单继承下调用父类方法/构造函数 |
+| `super()` | ✅ 完整 | 沿 MRO 调用父类方法/构造函数 |
 | `getattr`/`setattr`/`delattr`/`hasattr` | ✅ 完整 | 内置反射函数 |
-| `map()`/`filter()` | ✅ 完整 | 内置函数式工具 |
+| `map()`/`filter()` | ✅ 完整 | 惰性迭代器（CPython 同形） |
 | 运行时错误行号 | ✅ 完整 | 未捕获异常附带 `(line N)` |
-| 数字字面量 | ✅ 完整 | `0x1F` / `0o17` / `0b101` / `1_000_000` / `1e5`；`int("ff", 16)` 按进制解析 |
-| 调用处 `*`/`**` 解包 | ✅ 完整 | `f(*args)` / `f(**kwargs)` |
-| 字典合并 | ✅ 完整 | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}`（Python 3.9+） |
-| `str` `%` 格式化 | ✅ 完整 | `"%s: %d" % (x, y)`（printf 风格） |
-| `str.format` | ✅ 完整 | `"{:.2f} {:>8}".format(x, s)`，含位置/关键字参数与格式说明符 |
-| 内置模块 | ✅ 完整 | `import math` / `from math import sqrt`（含 math/random/statistics/functools/itertools/collections/string/operator/time/sys；math 含 comb/perm/prod/lcm/cbrt/remainder，random 含 choices/gauss，statistics 含 quantiles，functools 含 cmp_to_key，itertools 含 repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap，operator 提供运算符函数与 itemgetter/attrgetter/index，collections 含 Counter/defaultdict/namedtuple/deque/OrderedDict，sys 提供 version_info/maxsize/byteorder/platform/argv/intern/exit，time 提供 sleep/time/time_ns/monotonic/perf_counter） |
-| `set` | ✅ 完整 | 字面量 `{1, 2}`、构造、集合运算与方法 |
-| `frozenset` | ✅ 完整 | 不可变集合，可哈希，支持集合运算与比较 |
-| `bytes` 类型 | ✅ 完整 | `b"xy"` 字面量与 `bytes()` 构造（整数零填充 / 可迭代 / 字符串编码 / 拷贝）；方法族 `decode` / `hex` / `upper` / `lower` / `title` / `strip` 家族 / `split` / `replace` / `find` / `index` / `count` / `startswith` / `endswith` / `join` / `center` / `ljust` / `rjust`；索引/迭代产出整数、切片、重复、`in`，与 `str` 严格区分 |
-| `range` 类型 | ✅ 完整 | 独立的惰性 `range` 对象，支持 `len` / 索引 / 切片 / 成员判定 / 迭代，大范围不展开内存 |
-| 多重赋值目标 | ✅ 完整 | `a[0], a[2] = a[2], a[0]`、`o.x, o.y = 1, 2`，含链式后缀 `self.data[k] = v` |
-| `dict` 视图 | ✅ 完整 | `keys()` / `values()` 可迭代且有 `len` 与 `in` |
-| `match`/`case` 模式匹配 | ✅ 完整 | 软关键字；字面量 / 捕获 / 通配 / 序列（含星号与无括号序列）/ 映射（含 `**rest`）/ 类（`__match_args__` 与内建类型单位置绑定）/ 或 / `as` / 守卫 / 嵌套全部支持，编译期检查与 CPython 对齐 |
-| 多继承 | ✅ 完整 | `class C(A, B):` 沿 C3 线性化（MRO）查找，`__mro__` / `mro()` 可查看；MRO 冲突、重复基类与布局冲突按 CPython 报 `TypeError`；`super()`（零参与双参）沿 MRO 协作，菱形继承的 `__init__` 链逐类恰好一次 |
-| `async`/`await` | ✅ 务实子集 | 方案 C 协程对象模拟（由同步方式驱动，无事件循环）：`async def` 调用返回协程对象（send/throw/close，repr 带限定名），`await coro` 同步驱动并取返回值，用户 `__await__` 委托；`async for` / `async with` 走 `__aiter__`/`__anext__`/`__aenter__`/`__aexit__` 协议；异步生成器（`yield` 合法，`asend`/`athrow`/`aclose`）；`aiter` / `anext` 内建可用；未启动协程收尾发 never-awaited 警告。既定边界：`yield from` 与推导式内 await 不支持、`import asyncio` 不可用，异步场景继续以挂起系统替代 |
-| `raise ... from` 异常链 | ✅ 完整 | `__cause__` 与 `__suppress_context__` 字段可读，`from None` 置抑制标记，裸异常类与 `from` 异常类自动无参实例化；隐式 `__context__` 链与未捕获输出的链式回溯打印未实现 |
-| `__name__` / `__file__` | ✅ 完整 | `__name__` 恒为 `"__main__"`（可重新赋值），入口守卫可用；`__file__` 默认空串，宿主经 `set_script_path()` 在 `run()` 前注入 |
-| 泛型类型参数与 `type` 别名 | ✅ 语法接受 | `class C[T]` / `def f[T](x)` / `type X = int`（PEP 695）按语法接受并忽略类型语义；别名名不绑定到值 |
-| 生成器/`yield` | ✅ 完整 | 生成器函数（`def` 内含 `yield`），调用返回惰性 `generator` 对象，函数体不立即执行；支持语句级与表达式级 `yield`、`yield from` 委托、`send` 注入、`throw` / `close`（`GeneratorExit`）、`StopIteration.value`（生成器 `return` 值）、生成器方法、lambda 生成器（Python 3.12+）、多生成器交替与嵌套（含嵌套生成器内 `time.sleep()`）、`yield from` 的 `send` / `throw` 完整委托（PEP 380，子生成器优先捕获）、闭包跨 `yield` 保持 |
-| 装饰器 | ✅ 完整 | 任意可调用表达式装饰器（自写 / 带参工厂 / 堆叠，应用于函数、方法与类），加 `@staticmethod` / `@classmethod` / `@property`（含 getter/setter/deleter）五种内建形式；函数式 `staticmethod(f)` / `classmethod(f)` / `property(fget, fset, fdel)` 同样可用 |
-| 复数与 `1j` 字面量 | ✅ 完整 | 构造（数值/字符串/双序）/算术（整指数精确幂、非整指数极坐标）/比较/字典键（`1+0j` 与 `1` 同键）/`abs` / `conjugate`；序比较与整型转换按 CPython 报错 |
-| `bytearray` | ✅ 完整 | 构造（长度/bytes/整数可迭代/`str`+编码）、可变操作（下标与切片赋值、append/extend/insert/pop/remove/reverse/clear/copy）、与 bytes 互转；不可哈希 |
-| `memoryview` | ✅ 务实子集 | 一维 B 格式视图：len/下标/切片/迭代/`tobytes` / `hex` / `cast("B")` / `release`；bytes 底层只读、bytearray 底层可写透传 |
-| `open()` 文件 I/O | ✅ 务实子集 | 文本/二进制两态（`r`/`w`/`a`/`rb`/`wb`/`ab`），read/readline/readlines/write/writelines/close/seek/tell/flush 与行迭代；路径随宿主 FileAccess（相对路径按工程根解析）；`FileNotFoundError` / `UnsupportedOperation` 已注册 |
-| `with` 语句 | ✅ 完整 | 上下文管理器协议（`__enter__` / `__exit__`），单管理器与逗号分隔多管理器（进入按序退出逆序），括号化管理器列表（3.10 语法）与元组歧义回退，`as` 目标支持名字/元组与嵌套解包/星形/属性/下标；退出真值抑制在途异常；挂起重放不重复执行 `__enter__`；`with open(...)` 可用。`contextlib` 模块已支持（`contextmanager` / `closing` / `suppress` / `ExitStack` / `nullcontext`） |
-| 用户文件 `import` | ✅ 完整 | `sys.path` 逐目录解析 `<名>.py`（`import 用户模块` / `from 用户模块 import x`，未命中报 `ImportError: No module named 'X'`），模块缓存、循环导入检测与沙箱盘符内路径规则齐备 |
+| 内置模块 | ✅ 务实子集 | 内置 `math` / `random` / `time` 等常用模块，详见 [builtin.md#内置模块](docs/zh-CN/builtin.md#内置模块-import) |
+| 多重赋值目标 | ✅ 完整 | 下标/属性/键目标与链式后缀 |
+| `match`/`case` 模式匹配 | ✅ 完整 | 软关键字；全部模式形态与编译期检查 |
+| `async`/`await` | ✅ 务实子集 | 协程对象模拟（`async def` / `await` / `async for` / `async with` / 异步生成器，同步驱动，无事件循环） |
+| `raise ... from` 异常链 | ✅ 完整 | `__cause__` / `__suppress_context__` |
+| `__name__` / `__file__` | ✅ 完整 | 含入口守卫与 `set_script_path()` 注入 |
+| 泛型类型参数与 `type` 别名 | ✅ 语法接受 | PEP 695 语法接受（忽略类型语义） |
+| 生成器/`yield` | ✅ 完整 | 生成器函数与 `yield` / `yield from` / `send` / `throw` / `close` |
+| 装饰器 | ✅ 完整 | 任意表达式装饰器与 `@staticmethod` / `@classmethod` / `@property` 等内建形式 |
+| `open()` 文件 I/O | ✅ 务实子集 | 文本/二进制文件对象（`r`/`w`/`a`/`rb`/`wb`/`ab`） |
+| `with` 语句 | ✅ 完整 | 上下文管理器协议（含 `contextlib`） |
+| 用户文件 `import` | ✅ 完整 | `sys.path` 逐目录解析 `<name>.py` |
 
 > **⚠️ 破坏性变更（v0.3.0）**：生成器表达式 `(x for x in iterable)` 的语义已从「急切求值为列表」改为「惰性生成器对象」
 > 旧代码若直接对生成器表达式结果做下标/`len()`/列表方法会报错，需先 `list(g)` / `tuple(g)` 转换
@@ -181,72 +164,27 @@ dsl.run()
 > **⚠️ 破坏性变更（v0.4.0）**：`yield` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；若旧代码以 `yield` 命名变量，需改名
 >
 > **⚠️ 破坏性变更（v0.5.0-alpha.1）**：`sleep()` 已迁移到 `time` 模块，须 `import time` 后用 `time.sleep(n)` 调用；裸 `sleep()` 不再存在（与 CPython 一致，CPython 也没有内置的裸 `sleep`）
+> **⚠️ 破坏性变更（v0.5.0-alpha.4）**：`async` / `await` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；同时 `return` / `break` / `continue` 出现在函数体外或循环体会报 `SyntaxError`（此前被静默忽略）；若旧代码以 `async` / `await` 命名变量，需改名
 >
 > **⚠️ 破坏性变更（v0.6.0-alpha.2）**：异常对象的 `str(e)` 改为返回消息文本（此前为异常类型名，无参为空串），`repr(e)` 为 `TypeName('msg')` 格式，`e.args` 返回参数元组；`type` 变为类对象（`print(type)` 输出 `<class 'type'>`）；`dir()` 无参仅返回用户定义名，内置类型实例返回方法名列表
 >
-> **⚠️ 破坏性变更（v0.5.0-alpha.4）**：`async` / `await` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；同时 `return` / `break` / `continue` 出现在函数体外或循环体会报 `SyntaxError`（此前被静默忽略）；若旧代码以 `async` / `await` 命名变量，需改名
->
 > **⚠️ 破坏性变更（v0.8.0-alpha.1）**：`with` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；若旧代码以 `with` 命名变量，需改名
->
-> 已知的行为差异与功能缺失（含 `yield` 恢复重复求值、`send` / `throw` 不转发、多重赋值目标、用户类迭代协议等）已移至下方「已知差异与限制」章节
 
 ---
 
 ## 已知差异与限制
 
-以下列出 PyGDS 当前与 CPython 的已知差异与限制，按成因分为三系：**Issue（I 编号，语言核心对齐缺口）**、**Design（D 编号，有意的替代模型）**、**Platform（P 编号，宿主平台限制）**，编号规则与完整清单见 [差异清单](docs/zh-CN/differences.md)。Issue 按优先级分级：**I0 = 静默错值**（最危险，优先修复）、**I1 = 明确报错或功能缺失**、**I2 = 边缘差异**；开放条目的编号已于 v0.8.0-alpha.7 起改标（如原 P1-8 → I1-8、原 P2-1 → D1）
+以下列出 PyGDS 当前与 CPython 的已知差异与限制，按成因分为三系：**Issue（I 编号，语言核心对齐缺口）**、**Design（D 编号，有意的替代模型）**、**Platform（P 编号，宿主平台限制）**。Issue 按优先级分级：**I0 = 静默错值**（最危险，优先修复）、**I1 = 明确报错或功能缺失**、**I2 = 边缘差异**
 
-### 优先级 0（I0，静默错值）
-
-v0.5.0-alpha.5 收尾时发现的 10 条 P0 级缺陷（P0-3 ~ P0-12：嵌套容器相等判定、负数整除取模、转义序列解码、序列排序、`min`/`max` 的 `key`、切片 `del`、`repr(None)`、`chr()`/`%c` 越界、format 分组、`iter(list)` 活动视图）已**全部在 v0.5.0-alpha.6 修复**，详见 `CHANGELOG` 的对应版本节；v0.7.0-alpha.7 审计新发现的 P1-68（增强赋值 `&=` `^=` `<<=` `>>=`）、P1-69（dict 视图集合运算）、P1-70（旧式迭代的 `in` 判定）已在 v0.7.0-alpha.8 修复。P0-13（整数超出 int64 范围静默环绕）已在 v0.6.0-alpha.7 修复为明确报 `OverflowError`，并在 v0.8.0-alpha.5 升级为**任意精度整数**：算术与转换超界自动升级大数、落回可缩回，`hash(int)` 对齐 CPython 的模 `2^61-1` 算法，与 CPython 的 `int` 语义一致；仍保留索引位边界（下标 / 重复计数 / `chr` / `bytes(n)` / `range` 参数等按 CPython `Py_ssize_t` 同构报错）与性能上限（万位十进制数字内流畅），详见 `docs/zh-CN/usage.md` 的整数范围小节。v0.7.0-alpha.7 全项目审计新发现的两条 P0 已在 v0.7.0-alpha.8 修复：P0-28（`nonlocal` 声明的绑定搜索死循环——跨多级闭包链时解释器挂死）、P0-29（跨容器类型相等语义：`[1] == (1,)` 曾判 `True`）。既定限制（经评估暂缓）：P0-25（类体仅支持方法、嵌套类与类级赋值三种语句形态）已在 v0.8.0-alpha.5 修复：类体作为完整代码块整块执行，表达式调用、if / for / while、增强赋值、del、try、import、注解等全部生效，名字绑定落入类字典，方法组装与 `__set_name__` / `__init_subclass__` 钩子次序、类体内挂起重放均与 CPython 对齐
-
-### 优先级 1（I1，明确报错或功能缺失）
-
-下列 P1-1 ~ P1-6、P1-11、P1-14、P1-16 ~ P1-18 已在 v0.5.0-alpha.3 ~ v0.5.0-alpha.5 修复；P1-10（`match` / `case`）已在 v0.6.0 实现；P1-13（`yield` 恢复的子表达式重复求值）已在 v0.5.0-alpha.7 ~ v0.5.0-alpha.8 修复；v0.5.0-alpha.5 收尾时新发现的 P1-19 ~ P1-29（括号内换行、单行复合语句、`try`/`else`、切片赋值、genexpr 元组元素、用户类下标与转换协议、序列大小比较、`None` 字典键、`iter()` 类型名、`hasattr`）已**全部在 v0.5.0-alpha.6 修复**；P1-33（`raise ... from` 异常链）、P1-34（任意装饰器与带参装饰器）、P1-35（`__name__`）、P1-39（泛型类型参数语法）已在 v0.6.0-alpha.3 修复；P1-40（f-string 同引号嵌套，PEP 701）已在 v0.6.0-alpha.4 修复；P1-42（类的多继承）已在 v0.6.0-alpha.5 修复；P0-14（`and` / `or` 短路）、P0-15（增强赋值静默终止）、P0-16（`del` 括号元组目标）、P1-36（`...` 字面量）、P1-37（`collections.namedtuple`）、P1-44（反射运算符）、P1-45（类体作用域）、P1-46（property 内 `super()`）、P1-47（用户自定义描述符）、P1-48（`min` / `max` 的 `default`）、P1-49（`__getitem__` 旧式迭代）已在 v0.6.0-alpha.6 修复；P1-7（`with` 语句与上下文管理器协议，含挂起重放的进入标记）已在 v0.8.0-alpha.1 实现；P1-9（`async` / `await`，方案 C 协程对象模拟，含 `aiter` / `anext` 内建）已在 v0.8.0-alpha.2 实现并附既定边界（`yield from` 与推导式内 await 不支持、`import asyncio` 不可用）；P1-41（`except*` 异常组）已在 v0.8.0-alpha.4 实现（括号化管理器列表与 async generator 一并落地，`contextlib` 经评估登记为 P1-71 暂不投入）；P1-72（类定义基类关键字参数，PEP 487 的 kw 转发形态）已在 v0.8.0-alpha.6 实现，详见 `CHANGELOG` 的对应版本节
-
-I1 系开放条目已于 **v0.8.0-alpha.9 清零**：I1-8（用户文件 import）随 v0.8.0-alpha.8 实现移除（`sys.path` 逐目录解析 `<名>.py`，沙箱内按盘符路径规则收敛）；I1-32（eval / exec / compile 与 globals / locals / vars、sys 深水面）、I1-38（自定义元类机制）、I1-71（contextlib 模块）与 I1-73（内建类型子类的用户 `__init__`）均已随 v0.8.0-alpha.8 修复移除，详见 `CHANGELOG` 对应版本节
-
-### 优先级 2（I2，边缘差异）
-
-I2 系开放条目已于 **v0.8.0-alpha.9 清零**：I2-43（`__iter__` 严格文案）与 I2-59（残余构造器 kwargs）已随 v0.8.0-alpha.8 修复；I2-38（生成器丢弃时的隐式 close）经实测转类 Platform P5；I2-58 / I2-41（v0.8.0-alpha.7）、I2-60 / I2-61 / I2-62（挂起重放缺口，v0.8.0-alpha.9）等均已修复移除，详见 `CHANGELOG` 对应版本节
-
-P2-2（解析期错误文案与函数 repr）与 P2-3（运算符错误文案）已随 **v0.7.0-alpha.9** 的文案对齐专项修复（缺冒号、未结束字符串、`min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` 文案、`print >> x` 迁移提示、函数与绑定方法 repr）；P2-50（`Stack underflow` 日志噪音）已通过项目设置 `debug/settings/gdscript/max_call_stack=2047` 消除（宿主工程同设即可，见平台层 P2 条目说明）；P2-51（退出时 ObjectDB 泄漏与 `resources still in use`）已随 **v0.7.0-alpha.9** 的对象登记表 + 断环回收（`cleanup()` API）修复；P2-16（`@` 矩阵乘，语法层全链含 `@=` 与 `operator.matmul`）、P2-37（`close()` 的跨挂起行序升级为语句级重放）、P2-42（非类基类按元类候选解析并转发调用文案）、P2-56（整型常量表达式折叠与驻留）与 P2-57（同类反射运算跳过）已随 **v0.8.0-alpha.6** 修复；I2-58（`int()` / `str()` 构造器的类型特化文案、`str` 编码解码路径与六类型构造器关键字参数）与 I2-41（`from __future__` 的位置报错与 `_Feature` 对象绑定）已随 **v0.8.0-alpha.7** 修复
-
-v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-string `#` 前缀布局）、P2-47（`%c` str 实参）、P2-48（`.N` 有效数字语义）、P2-49（`casefold` 完整折叠）已随 v0.7.0-alpha.8 修复
-
-### 设计层差异（Design）
+### 语言核心差异（Issue）
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| D2（原 P2-4） | `hash` 数值与 CPython 不同（默认稳定模型） | PyGDS 对 `hash(None)` 等默认使用稳定哈希值（进程间可复现），CPython 为进程随机化哈希；等值对象的哈希相等性等语义一致。已提供对齐开关：`run()` 前设 `stable_identity_hash = false` 即对齐 CPython 3.12 的进程随机化语义 |
-| D3（原 P2-40） | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
-
-### 平台层差异（Platform）
-
-| 编号 | 内容 | 说明 |
-| :--- | :--- | :--- |
-| P2（原 P2-52） | 引擎 VM 调用栈 2048 帧硬上限 | 深递归叠加深表达式时引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`）；表达式求值/解析的 GDScript 帧深不受调用深度约束 |
-| P3 | str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
-| P4 | `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号约 200 条（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
-| P5（原 I2-38） | 生成器对象丢弃时的隐式 close 不可实现 | Godot 4.x 的 `NOTIFICATION_PREDELETE` 触发时脚本实例已 detach，引用计数回收路径无法驱动 `finally`（alpha.8 批次二实测，理论修复路径被否定）；需要清理逻辑的代码应显式 `close()`；Godot 升级若松动应复核 |
-| P6 | 引擎退出检查对全局类脚本资源图的滞留告警 | 内嵌类方法体内的自引用构造（类 X 体内 `X.new()`）使引擎退出时不释放脚本核心类图并告警；触发构造已于 v0.8.0-alpha.9 经跨类工厂规避（退出告警清零），新增内嵌类应避免该形态；引擎升级若松动应复核 |
-
-### 审计临时登记（待修复后移除）
-
-以下条目为 2026-10-07 全项目审计新登记的与 CPython 的行为差异，尚未修复；修复后随版本移除本节。按成因归入 Issue（I1 明确报错或功能缺失 / I2 边缘差异）与 Design（D 有意模型）两系，编号沿用差异清单三系约定（I 系自 I1-74 / I2-63 起，D 系自 D5 起，永不复用）
-
-| 编号 | 内容 | 说明 |
-| :--- | :--- | :--- |
-| I1-77 | 大整数与浮点比较在部分方向误报 `OverflowError` | `10**400 > float("inf")` 报 `int too large to convert to float`，CPython 按精确比较返回 True；`<` 方向正常 |
-| I1-79 | `__doc__` / `__module__` / `__qualname__` / `__defaults__` 元属性缺失 | 函数、类、方法、lambda 与模块均无这些属性（`getattr` 走默认值）；`__name__` 已支持 |
 | I1-80 | 用户类 `__del__` 不会触发 | CPython 在引用归零时调用 `__del__`；PyGDS 的回收路径基于引擎 PREDELETE（同 P5 根源），不调用 `__del__` |
-| I1-81 | `operator.methodcaller` 未实现 | 其余 operator 成员齐备 |
-| I1-82 | `float.fromhex` 未实现 | CPython 的类方法内建（`classmethod_descriptor`）；`float.hex()` 已支持，反向解析缺失 |
 | I2-63 | 协议校验缺失：非法返回值静默接受 | `__len__` 返回负数、`__bool__` 返回非 bool、`__init__` 返回非 None、`__repr__` / `__str__` 返回非字符串，CPython 均报 `TypeError` / `ValueError`，PyGDS 静默接受（repr 回退默认形态） |
 | I2-64 | `str.format` 混用手动 / 自动编号不报错 | `"{1}{}".format(1, 2)` CPython 报 `ValueError: cannot switch from manual field specification to automatic field numbering`，PyGDS 静默接受 |
 | I2-65 | `except <非异常类>` 不报 `TypeError` | CPython 报 `catching classes that do not inherit from BaseException is not allowed`，PyGDS 静默跳过该子句后异常继续传播 |
 | I2-66 | 自定义异常未调 `super().__init__` 时 `str(e)` 回退类型名 | CPython 按 `args` 格式化消息（`str(E2(7))` 为 `"7"`），PyGDS 返回类名 `"E2"` |
-| I2-67 | `__hash__ = None` 的类仍可哈希 | CPython 报 `TypeError: unhashable type`，PyGDS 静默允许作字典键 |
 | I2-68 | 模块对象 repr 为简化形态 | `repr(math)` 为 `<module object>`，CPython 为 `<module 'math' (built-in)>` |
 | I2-69 | `type()` 三参错误文案未对齐 | CPython 为 `type.__new__() argument 3 must be dict, not int`，PyGDS 为 `type() argument 3 ...` |
 | I2-70 | `type(类型别名实例)` 返回 `type` | CPython 返回 `TypeAliasType` |
@@ -254,7 +192,24 @@ v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-
 | I2-72 | method_descriptor / wrapper_descriptor 的 repr 归属类名为占位 | `str(str.upper)` 输出 `<method 'upper' of '??' objects>`，CPython 输出 `of 'str' objects` |
 | I2-73 | 内建类型类上的魔法方法描述符不可访问 | `str.__add__` 报 `AttributeError`（CPython 返回 slot wrapper） |
 | I2-74 | 字符分类仅覆盖常见 Unicode 码段 | `isspace` / `isprintable` / `isdigit` / `isnumeric` 已覆盖 ASCII 与常用 Unicode 码段（上标数字、全角数字等）；引擎无 Unicode 数据库，其余 Nd / Nl / No 码段按非数字 / 非空白处理（与 P4 同类平台限制） |
-| D5 | CPython 3.11+ 的 4300 位 int↔str 转换上限未模拟 | CPython 的 `int_max_str_digits` 是其自身 DoS 防护；PyGDS 任意精度整数不设该限（有意模型） |
+
+### 设计层差异（Design）
+
+| 编号 | 内容 | 说明 |
+| :--- | :--- | :--- |
+| D2 | `hash` 数值与 CPython 不同（默认稳定模型） | PyGDS 对 `hash(None)` 等默认使用稳定哈希值（进程间可复现），CPython 为进程随机化哈希；等值对象的哈希相等性等语义一致。已提供对齐开关：`run()` 前设 `stable_identity_hash = false` 即对齐 CPython 3.12 的进程随机化语义 |
+| D3 | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
+| D5 | CPython 3.11+ 的 4300 位 int 与 str 转换上限未模拟 | CPython 的 `int_max_str_digits` 是其自身 DoS 防护；PyGDS 任意精度整数不设该限（有意模型） |
+
+### 平台层差异（Platform）
+
+| 编号 | 内容 | 说明 |
+| :--- | :--- | :--- |
+| P2 | 引擎 VM 调用栈 2048 帧硬上限 | 深递归叠加深表达式时引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`）；表达式求值/解析的 GDScript 帧深不受调用深度约束 |
+| P3 | str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
+| P4 | `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号的名称表（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
+| P5 | 生成器对象丢弃时的隐式 close 不可实现 | Godot 4.x 的 `NOTIFICATION_PREDELETE` 触发时脚本实例已 detach，引用计数回收路径无法驱动 `finally`（alpha.8 批次二实测，理论修复路径被否定）；需要清理逻辑的代码应显式 `close()`；Godot 升级若松动应复核 |
+| P6 | 引擎退出检查对全局类脚本资源图的滞留告警 | 内嵌类方法体内的自引用构造（类 X 体内 `X.new()`）使引擎退出时不释放脚本核心类图并告警；触发构造已于 v0.8.0-alpha.9 经跨类工厂规避（退出告警清零），新增内嵌类应避免该形态；引擎升级若松动应复核 |
 
 ---
 
@@ -274,7 +229,7 @@ PyGDS 实现了一条完整的解释器管线：
 | **Parser（语法分析器）** | 递归下降解析器，将 Token 流构建为抽象语法树（AST） |
 | **Interpreter（解释器）** | 遍历 AST 节点并逐条执行，管理作用域与运行时状态 |
 | **DSLObject 体系** | 多种运行时对象类型，所有对象继承自 DSLObject，通过 `klass` 字段实现统一类型查找（对标 CPython `PyObject.ob_type`）。`fields` 字典（对应 Python `__dict__`，`null` = 内置类型无 `__dict__`）实现实例属性存储，"万物皆对象"的 Python 语义 |
-| **DSLClass** | 类系统，支持继承、方法覆写、`@staticmethod`、`@classmethod`。DSLObject 直接作为实例（无需 DSLInstance 中间层），内置 `_dsl_*`（内部快速通道）、`magic_*`（DSL 魔法方法协议）、`builtin_*`（DSL 内置方法）三层命名规范 |
+| **DSLClass** | 类系统，支持继承、方法覆写、`@staticmethod`、`@classmethod`。DSLObject 直接作为实例（无需 DSLInstance 中间层），内置 `_dsl_*`（内部快速通道）、`magic_*`（DSL 魔法方法协议）、`builtin_*`（DSL 内置方法）命名规范 |
 | **PyGDS** | 主控制器，汇集 Lexer/Parser/Interpreter，提供对外 API |
 
 ---
@@ -310,7 +265,7 @@ print(result)
 
 PyGDS 提供了挂起（Suspend）机制，允许 DSL 脚本在执行过程中暂停，等待外部条件满足后恢复。这是 PyGDS 区别于标准 Python 的独有特性，适用于游戏中的延时、等待玩家输入、播放动画等场景
 
-挂起分为两种类型：
+挂起分为以下类型：
 
 | 类型 | 调用方法 | 适用范围 | 恢复方式 |
 | :--- | :--- | :--- | :--- |
@@ -363,13 +318,19 @@ godot --headless --path /你的项目路径 --script /pygds路径/ci/run_cases.g
 
 ### 新增测试
 
-向 [ci/cases](./ci/cases/) 添加用例后，运行 `python ci/lint_cases.py` 会提示补全文档条目；完整流程（头注格式 → lint → 补 behavioral.md 条目 → 过滤单跑 → 全量回归）见 [`docs/zh-CN/ci.md`](docs/zh-CN/ci.md) 的「新增用例流程」
+向 [ci/cases](./ci/cases/) 添加用例后，运行 `python ci/lint_cases.py` 会提示补全文档条目；完整流程（头注格式 → lint → 补 behavioral.md 条目 → 过滤单跑 → 全量回归）见 [ci.md#新增用例流程](docs/zh-CN/ci.md#新增用例流程)
 
 ---
 
 ## Demo 测试
 
-`demo/` 目录下包含一些完整的演示场景，在 Godot 编辑器中打开场景文件即可运行
+`demo/` 目录下包含挂起系统演示场景（`demo.tscn`）与挂起、盘符沙箱的独立测试套件（`test_suspend_all.gd`、`test_sandbox.gd`——PyGDS 特有能力无 CPython 参照端，以套件内自持期望判定）；前者在 Godot 编辑器中打开即可运行，后者经命令行执行：
+
+```cmd
+godot --headless --path /你的项目路径 --script /pygds路径/demo/test_suspend_all.gd
+
+godot --headless --path /你的项目路径 --script /pygds路径/demo/test_sandbox.gd
+```
 
 ---
 
@@ -393,7 +354,7 @@ dsl.load_dsl_script("main.py")
 dsl.run()
 ```
 
-脚本可见路径的收敛规则见 [usage.md](docs/zh-CN/usage.md) 的「盘符虚拟沙箱」小节
+脚本可见路径的收敛规则见 [usage.md#盘符虚拟沙箱](docs/zh-CN/usage.md#盘符虚拟沙箱)
 
 ### 如何让脚本与场景/节点交互？
 
@@ -415,7 +376,7 @@ dsl.register_api_pair("move_player", func(args, _kwargs):
 
 ### 脚本能读取玩家输入或网络数据吗？
 
-可以。通过 `register_api()` 把 GDScript 侧的能力暴露给脚本；需要等待的异步场景通过挂起系统实现（`time.sleep` / `request_suspend_waiting`），而非 Python 的 `async/await`
+可以。通过 `register_api()` 把 GDScript 侧的能力暴露给脚本；游戏内的等待场景建议通过挂起系统实现（`time.sleep` / `request_suspend_waiting`）——`async`/`await` 语法本身已支持（协程对象同步驱动），但无事件循环，不适合作为并发方案
 
 ---
 

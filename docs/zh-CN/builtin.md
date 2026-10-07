@@ -81,7 +81,7 @@ list(range(3))           # [0, 1, 2]
 
 ### `dict(iterable=None, **kwargs)`
 
-对应 Python `dict` 类型构造函数，支持两种调用方式
+对应 Python `dict` 类型构造函数，支持以下调用方式
 
 1. **迭代器方式**：传入一个可迭代对象，其中每个元素为 `(key, value)` 二元组
 2. **关键字参数方式**：传入关键字参数，键为字符串，值为对应 DSL 对象
@@ -601,7 +601,7 @@ print(type(f).__name__)                        # filter
 
 ## 内置模块 (import)
 
-PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib` 共十一个内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
+PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib` 内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
 
 ### import 语法
 

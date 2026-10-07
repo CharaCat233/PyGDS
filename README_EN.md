@@ -22,16 +22,16 @@ flowchart TD
 
 **What PyGDS does:**
 
-- Provide Python-syntax scripting for games (variables, functions, classes, control flow, exceptions)
+- Provide Python-syntax scripting for games (variables, functions, classes, control flow, exceptions, generators, comprehensions, pattern matching)
 - Allow non-developers to manipulate game data and configure game logic with familiar Python syntax
-- Serve as a scripting engine for mod systems, enabling players to write custom behaviors
+- Serve as a scripting engine for mod systems: multi-file mods inside a drive sandbox, user-module `import`, host API registration
 
 **What PyGDS does NOT do:**
 
 - Replace GDScript for core game logic — core logic remains in GDScript
-- Provide a full Python standard library — only basic types (`str`/`list`/`dict`) and a few built-in functions
-- Support `import`/module system — scripts are standalone single files
-- Support `async`/`await`/`yield` — The game script interaction is synchronous, but it provides a suspended system
+- Provide the complete CPython standard library — a number of common modules are built in, the rest of the standard library is not implemented
+- Implement CPython packages / namespace packages and C-extension module loading — user modules are single files `<name>.py` resolved directory by directory along `sys.path`
+- Provide an event loop or concurrency runtime (`asyncio` etc.) — `async` / `await` are emulated with coroutine objects (driven synchronously); in-game waiting is handled by the suspend system
 
 ---
 
@@ -70,7 +70,7 @@ warn("This is a WARN log")
 
 ## Installation & Integration
 
-PyGDS offers two ways to integrate:
+PyGDS offers the following ways to integrate:
 
 ### Single-file integration
 
@@ -88,7 +88,7 @@ dsl.run()
 
 ### Drive-letter virtual sandbox (optional)
 
-To let scripts read and write files or load in-drive modules, pass a drive letter and an access switch at instantiation; the script-visible space converges into `user://<base_path>/<drive>/` with zero contact with the real file system:
+To let scripts read and write files or load in-drive modules, pass a drive letter and an access switch at instantiation; the script-visible space converges into `user://<base_path>/<drive>/` with zero contact with the real file system. See [usage.md#Drive-Letter Virtual Sandbox](docs/en/usage.md#drive-letter-virtual-sandbox) for the implementation details:
 
 ```gdscript
 var dsl = PyGDS.new("MOD1", true)
@@ -99,80 +99,63 @@ dsl.load_dsl_script("main.py")   # read the main file from the drive (multi-file
 dsl.run()
 ```
 
-See the "Drive-Letter Virtual Sandbox" section of [usage.md](docs/en/usage.md) for the four drive/access combinations, the path rules and the `base_path` root.
-
 ---
 
 ## Python Compatibility Matrix
 
+This table is a support overview; for the detailed syntax and semantics of each feature see [usage.md#DSL Syntax Reference](docs/en/usage.md#dsl-syntax-reference).
+
 | Feature | Support | Notes |
 | :--- | :--- | :--- |
-| Variable Assignment | ✅ Full | Regular, multi-assignment, unpacking |
-| Integer (`int`) | ✅ Full | All operators: +, -, *, /, %, **, etc. |
-| Float (`float`) | ✅ Full | Same operator support as `int` |
-| String (`str`) | ✅ Full | Common methods: `upper`/`lower`/`split`/`join`, etc. |
-| List (`list`) | ✅ Full | All methods: `append`/`extend`/`pop`/`sort`, etc. |
-| Tuple (`tuple`) | ✅ Full | Immutable sequence |
-| Dictionary (`dict`) | ✅ Full | Methods: `items`/`keys`/`values`/`get`/`pop`, etc. |
+| Operators | ✅ Full | Binary/unary/comparison/augmented all supported |
+| Variable assignment | ✅ Full | Regular/multiple/unpacking/augmented assignment and assignment expressions (`:=`) |
+| Integers (`int`) | ✅ Full | All operators and number literals (arbitrary precision) |
+| Floats (`float`) | ✅ Full | Same operator support as `int` |
+| Complex (`complex`) | ✅ Full | `1j` literals, construction, arithmetic, comparison and dict keys |
 | Boolean (`bool`) | ✅ Full | `True`/`False`/`None` singletons |
-| `if`/`elif`/`else` | ✅ Full | Including ternary operator (`a if cond else b`) |
+| Strings (`str`) | ✅ Full | Common methods plus `%` / `format` / `f-string` formatting |
+| Bytes (`bytes`) | ✅ Full | Literals/constructor and the full method family |
+| Byte Arrays (`bytearray`) | ✅ Full | Mutable byte sequence, construction and methods |
+| Memory Views (`memoryview`) | ✅ Pragmatic subset | One-dimensional B-format views (read-only / write-through) |
+| Lists (`list`) | ✅ Full | Common methods: `append`/`extend`/`pop`/`sort`, etc. |
+| Tuples (`tuple`) | ✅ Full | Immutable sequence |
+| Ranges (`range`) | ✅ Full | A distinct lazy sequence (`len`/indexing/slicing/iteration) |
+| Dictionaries (`dict`) | ✅ Full | Common methods and `\|` merge (Python 3.9+) |
+| Dictionary Views (`dict_keys` / `dict_values` / `dict_items`) | ✅ Full | Live views (iteration, `len` and membership) |
+| Sets (`set`) | ✅ Full | Literal, constructor, set operations and methods |
+| Frozen Sets (`frozenset`) | ✅ Full | Immutable set, hashable |
+| Slices (`slice`) | ✅ Full | Reusable slice objects and indexing |
+| `if`/`elif`/`else` | ✅ Full | Including the ternary operator |
 | `while` loops | ✅ Full | Including `break`/`continue` |
-| `for` loops | ✅ Full | Iteration over list/tuple/string/dict |
-| Function Definitions | ✅ Full | Regular functions, default args, `*args`, `**kwargs` |
-| Class Definitions | ✅ Full | Inheritance, method overrides, instance attributes |
-| Static Methods | ✅ Full | `@staticmethod` decorator |
-| Class Methods | ✅ Full | `@classmethod` decorator |
-| Exception Handling | ✅ Full | `try`/`except`/`else`/`finally`/`raise` with custom exception classes. exception groups (`ExceptionGroup` / `except*`, PEP 654) fully supported |
+| `for` loops | ✅ Full | Iteration over lists/tuples/strings/dicts |
+| Function definitions | ✅ Full | All parameter forms and anonymous functions (`lambda`) |
+| Class definitions | ✅ Full | Inheritance (multiple), overrides, class/static methods and magic methods |
+| Exception handling | ✅ Full | `try`/`except`/`else`/`finally`/`raise`, custom exceptions and exception groups (PEP 654) |
 | `is` / `is not` | ✅ Full | Identity operators |
 | `id()` | ✅ Full | Object identifiers |
 | `global`/`nonlocal` | ✅ Full | Variable scope declarations |
-| List Comprehensions | ✅ Full | `[x for x in iterable [if cond]]` |
-| Generator Expressions | ✅ Full | `(x for x in iterable [if cond])`, lazy generator, supports `next()` and bare `sum(x for x in ...)` |
-| Dict Comprehensions | ✅ Full | `{k: v for k, v in ... [if cond]}` |
-| Set Comprehensions | ✅ Full | `{x*x for x in iterable [if cond]}` |
-| Multiple `for` clauses | ✅ Full | `[x*y for x in a for y in b]`, each `for` may carry several `if`; list/dict/set comprehensions and generator expressions all support it, loop variables may be `k, v` tuple targets |
-| Literal `*` unpacking | ✅ Full | `[*a, *b]` / `[1, *mid, 2]` / `(*a,)` / `{*a, 1}` (Python 3.5+) |
-| Assignment expressions (`:=`) | ✅ Full | `if (n := len(a)) > 5:`, `while chunk := read():`, binds to the enclosing scope inside comprehensions (Python 3.8+); matching CPython, both "rebinding a comprehension iteration variable" and "appearing in a comprehension iterable expression" are rejected |
-| `slice` | ✅ Full | `slice(start, stop[, step])` object, reusable indexing `lst[slice(...)]` |
-| Augmented Assignment | ✅ Full | `+=` `-=` `*=` `/=` `**=` `//=` `%=` `\|=` `&=` `^=` `<<=` `>>=` all supported |
-| Subscript Access | ✅ Full | `obj[key]` with `getitem`/`setitem`; slice assignment/deletion `a[1:3] = [9]` / `del a[1:3]` |
-| Attribute Access | ✅ Full | `obj.attr` with `getattr`/`setattr` |
-| Method Type System | ✅ Full | 7 types strictly matching CPython |
-| Descriptor Protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
-| Magic Methods | ✅ Full | `__add__`/`__str__`/`__init__`, etc., registered at class level |
-| Operators | ✅ Full | Binary/unary/comparison/augmented all supported |
-| f-string | ✅ Full | `f"value: {x:.2f}"`, with format specifiers, conversion flags, the `=` debug specifier and nested format widths, plus same-quote nesting and nested f-strings (PEP 701, Python 3.12+); replacement-field expressions support multiple lines (indented continuations and comments included) |
-| lambda | ✅ Full | Anonymous functions with default arguments and closures |
-| `super()` | ✅ Full | Call parent methods/constructors under single inheritance |
+| Comprehensions | ✅ Full | List/generator/dict/set comprehensions (multiple `for` and the bare form included) |
+| `*`, `**` unpacking | ✅ Full | Literal and call-site unpacking |
+| Subscript access | ✅ Full | Subscript read/write and slice assignment/deletion |
+| Attribute access | ✅ Full | `obj.attr` read/write |
+| Method type system | ✅ Full | Method/descriptor types matching CPython |
+| Descriptor protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
+| `super()` | ✅ Full | Calls parent methods/constructors along the MRO |
 | `getattr`/`setattr`/`delattr`/`hasattr` | ✅ Full | Built-in reflection functions |
-| `map()`/`filter()` | ✅ Full | Built-in functional tools |
+| `map()`/`filter()` | ✅ Full | Lazy iterators (same shape as CPython) |
 | Runtime error line numbers | ✅ Full | Uncaught exceptions include `(line N)` |
-| Number literals | ✅ Full | `0x1F` / `0o17` / `0b101` / `1_000_000` / `1e5`; `int("ff", 16)` parses in a base |
-| Call-site `*`/`**` unpacking | ✅ Full | `f(*args)` / `f(**kwargs)` |
-| Dict merge | ✅ Full | `d1 \| d2` / `d1 \|= d2` / `{**a, **b}` (Python 3.9+) |
-| `str` `%` formatting | ✅ Full | `"%s: %d" % (x, y)` (printf style) |
-| `str.format` | ✅ Full | `"{:.2f} {:>8}".format(x, s)`, with positional/keyword arguments and format specifiers |
-| Built-in modules | ✅ Full | `import math` / `from math import sqrt` (math/random/statistics/functools/itertools/collections/string/operator/time/sys; math has comb/perm/prod/lcm/cbrt/remainder, random has choices/gauss, statistics has quantiles, functools has cmp_to_key, itertools has repeat/cycle/count/zip_longest/takewhile/dropwhile/accumulate/pairwise/groupby/starmap, operator exposes operator functions plus itemgetter/attrgetter/index, collections has Counter/defaultdict/namedtuple/deque/OrderedDict, sys provides version_info/maxsize/byteorder/platform/argv/intern/exit, time provides sleep/time/time_ns/monotonic/perf_counter) |
-| `set` | ✅ Full | Literal `{1, 2}`, constructor, set operations and methods |
-| `frozenset` | ✅ Full | Immutable set, hashable, supports set operations and comparisons |
-| `bytes` type | ✅ Full | `b"xy"` literals and the `bytes()` constructor (zero-filled integer / iterable / string encoding / copy); method family `decode` / `hex` / `upper` / `lower` / `title` / `strip` family / `split` / `replace` / `find` / `index` / `count` / `startswith` / `endswith` / `join` / `center` / `ljust` / `rjust`; indexing/iteration yield integers, plus slicing, repetition and `in`, strictly distinct from `str` |
-| `range` type | ✅ Full | A distinct lazy `range` object supporting `len` / indexing / slicing / containment / iteration without materialising large ranges |
-| Multiple assignment targets | ✅ Full | `a[0], a[2] = a[2], a[0]`, `o.x, o.y = 1, 2`, including chained suffixes like `self.data[k] = v` |
-| `dict` views | ✅ Full | `keys()` / `values()` are iterable and support `len` and `in` |
-| `match`/`case` pattern matching | ✅ Complete | Soft keywords; literal / capture / wildcard / sequence (star and bracket-less forms) / mapping (with `**rest`) / class (`__match_args__` and built-in single-position binding) / or / `as` / guard / nested patterns all supported, with compile-time checks aligned to CPython |
-| Multiple Inheritance | ✅ Full | `class C(A, B):` resolves along the C3 linearization (MRO), visible via `__mro__` / `mro()`; MRO conflicts, duplicate bases and layout conflicts raise `TypeError` matching CPython; `super()` (zero-arg and two-arg) cooperates along the MRO, with diamond `__init__` chains running exactly once per class |
-| `async`/`await` | ✅ Practical Subset | Option-C coroutine-object emulation (driven synchronously, no event loop): `async def` calls return coroutine objects (send/throw/close, qualified-name repr), `await coro` drives to completion and takes the return value, user `__await__` delegation; `async for` / `async with` use the `__aiter__`/`__anext__`/`__aenter__`/`__aexit__` protocols; the `aiter` / `anext` builtins are available; unstarted coroutines get a never-awaited warning at script end. Async generators (`yield` legal, with `asend`/`athrow`/`aclose`); the `aiter` / `anext` builtins are available; unstarted coroutines get a never-awaited warning at script end. Established boundaries: `yield from` and await in comprehensions are unsupported, `import asyncio` remains unavailable, async scenarios are still replaced by the suspension system |
-| `raise ... from` exception chaining | ✅ Full | `__cause__` and `__suppress_context__` fields readable, `from None` sets the suppression flag, bare exception classes and classes after `from` are auto-instantiated with no arguments; the implicit `__context__` chain and chained traceback printing for uncaught errors are not implemented |
-| `__name__` / `__file__` | ✅ Full | `__name__` is always `"__main__"` (reassignable), the entry guard works; `__file__` defaults to an empty string and the host injects it via `set_script_path()` before `run()` |
-| Generic type parameters and `type` aliases | ✅ Syntax accepted | `class C[T]` / `def f[T](x)` / `type X = int` (PEP 695) are accepted as syntax with type semantics ignored; alias names are not bound to values |
-| Generators/`yield` | ✅ Full | Generator functions (`def` containing `yield`); calling returns a lazy `generator` object without executing the body. Supports statement-level and expression-level `yield`, `yield from` delegation, `send` injection, `throw` / `close` (`GeneratorExit`), `StopIteration.value` (generator `return` value), generator methods, lambda generators (Python 3.12+), alternating and nested generators (including `time.sleep()` inside nested generators), full `send` / `throw` delegation through `yield from` (PEP 380, sub-generator catches first), and closures persisting across `yield` |
-| Decorators | ✅ Full | Arbitrary callable-expression decorators (self-written / parameterised factories / stacked, applied to functions, methods and classes), plus the five built-in forms `@staticmethod` / `@classmethod` / `@property` (with getter/setter/deleter) ; functional `staticmethod(f)` / `classmethod(f)` / `property(fget, fset, fdel)` are also available |
-| Complex type & `1j` literals | ✅ Full | Construction (numeric/string/two orders)/arithmetic (exact integer powers, polar for non-integer)/comparison/dict keys (`1+0j` shares key with `1`)/`abs` / `conjugate`; ordering and int conversion raise per CPython |
-| `bytearray` | ✅ Full | Construction (length/bytes/int iterable/`str`+encoding), mutation (index & slice assignment, append/extend/insert/pop/remove/reverse/clear/copy), bytes interop; unhashable |
-| `memoryview` | ✅ Pragmatic subset | One-dimensional B-format views: len/index/slice/iteration/`tobytes` / `hex` / `cast("B")` / `release`; bytes-backed views are read-only, bytearray-backed write through |
-| `open()` file I/O | ✅ Pragmatic subset | Text/binary modes (`r`/`w`/`a`/`rb`/`wb`/`ab`), read/readline/readlines/write/writelines/close/seek/tell/flush and line iteration; paths follow the host FileAccess (relative paths resolve against the project root); `FileNotFoundError` / `UnsupportedOperation` are registered |
-| `with` statement | ✅ Full | Context manager protocol (`__enter__` / `__exit__`), single and comma-separated multiple managers (entered in order, exited in reverse), `as` targets supporting names/tuple and nested unpacking/starred/attribute/subscript; a truthy exit value suppresses the in-flight exception; suspension replay never re-runs `__enter__`; `with open(...)` works. The `contextlib` module is supported (`contextmanager` / `closing` / `suppress` / `ExitStack` / `nullcontext`) |
-| User-file `import` | ✅ Full | `<name>.py` resolved directory by directory along `sys.path` (`import usermodule` / `from usermodule import x`, miss raises `ImportError: No module named 'X'`), with module cache, circular-import detection and in-drive path rules inside the sandbox |
+| Built-in modules | ✅ Pragmatic subset | Common modules built in (`math` / `random` / `time`, etc.), see [builtin.md#Built-in Modules](docs/en/builtin.md#built-in-modules-import) |
+| Multiple assignment targets | ✅ Full | Subscript/attribute/key targets and chained suffixes |
+| `match`/`case` pattern matching | ✅ Full | Soft keywords; all pattern forms and compile-time checks |
+| `async`/`await` | ✅ Pragmatic subset | Coroutine-object emulation (`async def` / `await` / `async for` / `async with` / async generators, driven synchronously, no event loop) |
+| `raise ... from` exception chaining | ✅ Full | `__cause__` / `__suppress_context__` |
+| `__name__` / `__file__` | ✅ Full | Entry guard and `set_script_path()` injection included |
+| Generic type parameters and `type` aliases | ✅ Syntax accepted | PEP 695 syntax accepted (type semantics ignored) |
+| Generators/`yield` | ✅ Full | Generator functions with `yield` / `yield from` / `send` / `throw` / `close` |
+| Decorators | ✅ Full | Arbitrary expression decorators and the `@staticmethod` / `@classmethod` / `@property` built-in forms |
+| `open()` file I/O | ✅ Pragmatic subset | Text/binary file objects (`r`/`w`/`a`/`rb`/`wb`/`ab`) |
+| `with` statement | ✅ Full | Context manager protocol (including `contextlib`) |
+| User-file `import` | ✅ Full | `<name>.py` resolved directory by directory along `sys.path` |
 
 > **⚠️ Breaking Change (v0.3.0)**: Generator expressions `(x for x in iterable)` have changed from "eagerly evaluated to a list" to "lazy generator object".
 > Code that directly subscripts/`len()`s or calls list methods on a generator expression result will fail — convert with `list(g)` / `tuple(g)` first
@@ -181,72 +164,27 @@ See the "Drive-Letter Virtual Sandbox" section of [usage.md](docs/en/usage.md) f
 > **⚠️ Breaking Change (v0.4.0)**: `yield` is now a reserved keyword and can no longer be used as an identifier (variable/function name, etc.). Code that used `yield` as a name must rename it.
 >
 > **⚠️ Breaking Change (v0.5.0-alpha.1)**: `sleep()` has moved into the `time` module — use `import time` then `time.sleep(n)`. A bare `sleep()` no longer exists (matching CPython, which has no built-in bare `sleep` either).
+> **⚠️ Breaking Change (v0.5.0-alpha.4)**: `async` / `await` are now reserved keywords and can no longer be used as identifiers (variable/function names, etc.). `return` / `break` / `continue` outside a function body or loop body now raise `SyntaxError` (previously ignored silently). Code using `async` / `await` as names must rename them.
 >
 > **⚠️ Breaking Change (v0.6.0-alpha.2)**: `str(e)` of exception objects now returns the message text (previously the exception type name, empty string for no args), `repr(e)` prints `TypeName('msg')`, and `e.args` returns the argument tuple; `type` is now a class object (`print(type)` prints `<class 'type'>`); a no-arg `dir()` returns only user-defined names and built-in type instances list their method names
 >
-> **⚠️ Breaking Change (v0.5.0-alpha.4)**: `async` / `await` are now reserved keywords and can no longer be used as identifiers (variable/function names, etc.). `return` / `break` / `continue` outside a function body or loop body now raise `SyntaxError` (previously ignored silently). Code using `async` / `await` as names must rename them.
->
 > **⚠️ Breaking Change (v0.8.0-alpha.1)**: `with` is now a reserved keyword and can no longer be used as an identifier (variable/function name, etc.). Code that used `with` as a name must rename it.
->
-> Known behavioural differences and missing features (`yield` resumption re-evaluating prefixes, `send` / `throw` not forwarded, multiple assignment targets, user-class iteration protocol, and so on) have moved to the **Known Differences & Limitations** section below
 
 ---
 
 ## Known Differences & Limitations
 
-The following lists the known differences and limitations between PyGDS and CPython, grouped by cause into three families: **Issue (I IDs, language-core alignment gaps)**, **Design (D IDs, intentional alternative models)** and **Platform (P IDs, host-platform constraints)**; the ID rules and the full list live in the [Differences List](docs/en/differences.md). Issues are graded by priority: **I0 = silent wrong values** (most dangerous, fix first), **I1 = a clear error or a missing feature**, **I2 = an edge difference**; open entries were re-labeled to the new families in v0.8.0-alpha.7 (e.g. P1-8 → I1-8, P2-1 → D1).
+The following lists the known differences and limitations between PyGDS and CPython, grouped by cause into three families: **Issue (I IDs, language-core alignment gaps)**, **Design (D IDs, intentional alternative models)** and **Platform (P IDs, host-platform constraints)**. Issues are graded by priority: **I0 = silent wrong values** (most dangerous, fix first), **I1 = a clear error or a missing feature**, **I2 = an edge difference**.
 
-### Priority 0 (I0, Silent Wrong Values)
-
-The 10 P0 defects uncovered while finalising v0.5.0-alpha.5 (P0-3 to P0-12: nested-container equality, floor division and modulo for negative operands, escape-sequence decoding, sequence sorting, `min`/`max` `key`, slice `del`, `repr(None)`, `chr()`/`%c` range checks, `format` grouping, and the `iter(list)` live view) were **all fixed in v0.5.0-alpha.6**; see the corresponding section of `CHANGELOG`; P1-68 (augmented assignment `&=` `^=` `<<=` `>>=`), P1-69 (set operations on dict views) and P1-70 (`in` membership on `__getitem__`-only iterables) uncovered by the v0.7.0-alpha.7 audit were fixed in v0.7.0-alpha.8. P0-13 (silent wrapping for integers beyond the int64 range) was fixed in v0.6.0-alpha.7 to raise an explicit `OverflowError`, and upgraded in v0.8.0-alpha.5 to an **arbitrary-precision integer**: arithmetic and conversions beyond int64 are promoted to a big-integer representation automatically (shrinking back when results fit again), `hash(int)` aligns with CPython's modulo `2^61-1` algorithm, and `int` semantics now match CPython; index positions remain bounded (subscripts, repetition, `chr`, `bytes(n)`, `range` arguments raise per the CPython `Py_ssize_t` isomorphism) together with a performance ceiling (fluent within ten-thousand decimal digits), see the integer-range section of `docs/en/usage.md` for behavior. The v0.7.0-alpha.7 project-wide audit uncovered two new P0s (both unfixed): P0-28 (dead loop in `nonlocal` binding search — the interpreter hangs across multi-level closure chains, requiring the host process to be killed) and P0-29 (cross-container equality semantics: `[1] == (1,)` evaluates to `True`). P0-25 (class bodies only supporting three statement forms) was fixed in v0.8.0-alpha.5: class bodies now execute as full code blocks — expression calls, if / for / while, augmented assignment, del, try, import and annotations all take effect with name bindings landing in the class dict; method assembly, `__set_name__` / `__init_subclass__` hook order and in-body suspension replay all match CPython
-
-### Priority 1 (I1, Clear Errors or Missing Features)
-
-Items P1-1 to P1-6, P1-11, P1-14 and P1-16 to P1-18 were fixed in v0.5.0-alpha.3 to v0.5.0-alpha.5; P1-10 (`match` / `case`) was implemented in v0.6.0; P1-13 (re-evaluation of prefix subexpressions on `yield` resumption) was fixed in v0.5.0-alpha.7 to v0.5.0-alpha.8; P1-19 to P1-29 found by the same audit (implicit line continuation inside brackets, one-line compound statements, `try`/`else`, slice assignment, genexpr tuple elements, user-class subscript and conversion protocols, sequence ordering comparisons, `None` as a dict key, the `iter()` type name, and `hasattr`) were **all fixed in v0.5.0-alpha.6**; P1-33 (`raise ... from` exception chaining), P1-34 (arbitrary and parameterised decorators), P1-35 (`__name__`) and P1-39 (generic type parameter syntax) were fixed in v0.6.0-alpha.3; P1-40 (f-string same-quote nesting, PEP 701) was fixed in v0.6.0-alpha.4; P1-42 (multiple inheritance) was fixed in v0.6.0-alpha.5; P0-14 (`and` / `or` short-circuit), P0-15 (silent termination on augmented assignment), P0-16 (`del` with parenthesized tuple targets), P1-36 (`...` literal), P1-37 (`collections.namedtuple`), P1-44 (reflected operators), P1-45 (class-body scope), P1-46 (`super()` in properties), P1-47 (user-defined descriptors), P1-48 (`min` / `max` `default`), P1-49 (`__getitem__`-only iteration) were fixed in v0.6.0-alpha.6; P1-7 (the `with` statement and the context manager protocol, including the replay enter-marker for suspensions) was implemented in v0.8.0-alpha.1; P1-9 (`async` / `await`, option-C coroutine-object emulation, including the `aiter` / `anext` builtins) was implemented in v0.8.0-alpha.2 with established boundaries (`yield from` and await in comprehensions unsupported, `import asyncio` unavailable); P1-41 (`except*` exception groups) was implemented in v0.8.0-alpha.4 (parenthesized manager lists and async generators landed alongside; `contextlib` was evaluated and registered as P1-71, deferred); P1-72 (class-header keyword bases, the PEP 487 kw-forwarding form) was implemented in v0.8.0-alpha.6; see the corresponding section of `CHANGELOG`
-
-The I1 open-item list was **cleared in v0.8.0-alpha.9**: I1-8 (user-file `import`) was removed with its implementation in v0.8.0-alpha.8 (`<name>.py` resolved directory by directory along `sys.path`, converging into the drive inside a sandbox); I1-32 (eval / exec / compile plus globals / locals / vars and the deep sys surface), I1-38 (custom metaclass machinery), I1-71 (the contextlib module) and I1-73 (user `__init__` on builtin type subclasses) were all fixed and removed in v0.8.0-alpha.8; see the corresponding sections of `CHANGELOG`
-
-### Priority 2 (I2, Edge Differences)
-
-The I2 open-item list was **cleared in v0.8.0-alpha.9**: I2-43 (the `__iter__` strict message) and I2-59 (remaining constructor kwargs) were fixed in v0.8.0-alpha.8; I2-38 (implicit close of discarded generators) was reclassified as Platform P5 after experiments; I2-58 / I2-41 (v0.8.0-alpha.7) and I2-60 / I2-61 / I2-62 (the suspension-replay gaps, v0.8.0-alpha.9) were all fixed and removed; see the corresponding sections of `CHANGELOG`
-
-P2-2 (parse-error messages and function repr) and P2-3 (operator error messages) were fixed by the **v0.7.0-alpha.9** message-alignment effort (missing colon, unterminated strings, `min` / `max` / `round` / `math.factorial` / `math.comb` / `math.perm` texts, the `print >> x` migration hint, function and bound-method repr); P2-50 (`Stack underflow` log noise) is eliminated by the project setting `debug/settings/gdscript/max_call_stack=2047` (set it in host projects too, see the Platform entry P2); P2-51 (`ObjectDB` leaks at exit and `resources still in use`) was fixed in **v0.7.0-alpha.9** via the object registry + cycle-breaking reclamation (`cleanup()` API); P2-16 (the `@` matrix-multiply operator, full syntax chain with `@=` and `operator.matmul`), P2-37 (the cross-suspension ordering of `close()` upgraded to statement-level replay), P2-42 (non-class bases resolved as metaclass candidates forwarding the call message), P2-56 (integer constant-expression folding and interning) and P2-57 (same-type reflection skip) were fixed in **v0.8.0-alpha.6**; I2-58 (type-specialized constructor messages for `int()` / `str()`, the `str` decoding path and keyword arguments of the six type constructors) and I2-41 (the position error and `_Feature` object binding for `from __future__`) were fixed in **v0.8.0-alpha.7**
-
-P2-45 (re-checked as a false positive), P2-46 (`%#o` and f-string `#` prefix layout), P2-47 (`%c` str argument), P2-48 (`.N` significant-digit semantics) and P2-49 (`casefold` full folding) uncovered by the v0.7.0-alpha.7 audit were fixed in v0.7.0-alpha.8
-
-### Design-Layer Differences (Design)
+### Language-Core Differences (Issue)
 
 | ID | Item | Details |
 | :--- | :--- | :--- |
-| D2 (was P2-4) | `hash` values differ from CPython (stable model by default) | PyGDS uses stable hash values for `hash(None)` etc. by default (reproducible across processes), while CPython hashes are process-randomised; the equality/hash-consistency semantics match. An alignment switch exists: set `stable_identity_hash = false` before `run()` to align with CPython 3.12's process randomisation |
-| D3 (was P2-40) | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
-
-### Platform-Layer Differences (Platform)
-
-| ID | Item | Details |
-| :--- | :--- | :--- |
-| P2 (was P2-52) | Engine VM call-stack hard limit of 2048 frames | Deep recursion combined with deep expressions makes the engine hard-abort the call chain with `Stack overflow`, silently losing the remaining output (CPython either completes or raises a catchable `RecursionError`); the GDScript frame depth of expression evaluation / parsing is not bounded by the call-depth limit |
-| P3 | str literals cannot contain NUL | Godot's String cannot store U+0000 (it would be replaced with U+FFFD), so `'\x00'` / `'\0'` str escapes raise `SyntaxError` at decode time; bytes are unaffected (`b'\x00'` works) |
-| P4 | `\N{...}` supports only the built-in name table | Godot has no Unicode name database; PyGDS ships about 200 names covering printable ASCII full names and common symbols (e.g. `\N{BULLET}',`\N{LATIN CAPITAL LETTER A}'). Names outside the table raise `SyntaxError: unknown Unicode character name` matching CPython's behaviour for unknown names |
-| P5 (was I2-38) | Implicit close of discarded generator objects is unimplementable | At `NOTIFICATION_PREDELETE` time in Godot 4.x the script instance is already detached, so the refcount reclamation path cannot drive `finally` (measured in the alpha.8 second batch, the theoretical fix path was disproved); code needing cleanup should call `close()` explicitly; re-check if a Godot upgrade loosens this |
-| P6 | Engine exit check lingers on the global class script resource graph | A self-referencing construction inside an inner class body (`X.new()` within class X's own methods) makes the engine retain the script's core class graph at exit and emit a warning; the triggering construction was avoided in v0.8.0-alpha.9 via a cross-class factory (exit warnings cleared), new inner classes should avoid that form; re-check if a Godot upgrade loosens this |
-
-### Audit Temporary Registry (removed after fixes)
-
-The entries below are behavior differences versus CPython newly registered by the 2026-10-07 full-project audit, not yet fixed; this section is removed with the fixing release. They are grouped under Issue (I1: explicit errors or missing features / I2: edge differences) and Design (D: intentional model), following the difference-list numbering convention (the I series starts at I1-74 / I2-63 and the D series at D5; numbers are never reused).
-
-| ID | Content | Details |
-| :--- | :--- | :--- |
-| I1-77 | Big-integer vs float comparison raises `OverflowError` in some directions | `10**400 > float("inf")` raises `int too large to convert to float`; CPython compares exactly and returns True; the `<` direction works |
-| I1-79 | The `__doc__` / `__module__` / `__qualname__` / `__defaults__` metadata attributes are missing | Functions, classes, methods, lambdas and modules lack these attributes (`getattr` falls through to defaults); `__name__` is supported |
 | I1-80 | User-class `__del__` is never invoked | CPython calls `__del__` when the reference count reaches zero; PyGDS's reclamation path is based on the engine PREDELETE (same root cause as P5) and does not call `__del__` |
-| I1-81 | `operator.methodcaller` is not implemented | The other operator members are complete |
-| I1-82 | `float.fromhex` is not implemented | A CPython class-method builtin (`classmethod_descriptor`); `float.hex()` is supported, the reverse parsing is missing |
 | I2-63 | Protocol validation missing: invalid return values silently accepted | Negative `__len__` returns, non-bool `__bool__` returns, non-None `__init__` returns and non-str `__repr__` / `__str__` returns raise `TypeError` / `ValueError` in CPython; PyGDS silently accepts them (repr falls back to the default form) |
 | I2-64 | `str.format` does not reject mixed manual / automatic numbering | `"{1}{}".format(1, 2)` raises `ValueError: cannot switch from manual field specification to automatic field numbering` in CPython; PyGDS silently accepts it |
 | I2-65 | `except <non-exception class>` does not raise `TypeError` | CPython raises `catching classes that do not inherit from BaseException is not allowed`; PyGDS silently skips the clause and the exception keeps propagating |
 | I2-66 | `str(e)` falls back to the class name for custom exceptions that skip `super().__init__` | CPython formats the message from `args` (`str(E2(7))` is `"7"`); PyGDS returns the class name `"E2"` |
-| I2-67 | Classes with `__hash__ = None` remain hashable | CPython raises `TypeError: unhashable type`; PyGDS silently allows them as dict keys |
 | I2-68 | Module object repr uses a simplified form | `repr(math)` is `<module object>`; CPython prints `<module 'math' (built-in)>` |
 | I2-69 | The three-argument `type()` error message is not aligned | CPython prints `type.__new__() argument 3 must be dict, not int`; PyGDS prints `type() argument 3 ...` |
 | I2-70 | `type(type-alias instance)` returns `type` | CPython returns `TypeAliasType` |
@@ -254,7 +192,24 @@ The entries below are behavior differences versus CPython newly registered by th
 | I2-72 | method_descriptor / wrapper_descriptor repr uses a placeholder owner name | `str(str.upper)` prints `<method 'upper' of '??' objects>`; CPython prints `of 'str' objects` |
 | I2-73 | Magic-method descriptors are not accessible on built-in type classes | `str.__add__` raises `AttributeError` (CPython returns the slot wrapper) |
 | I2-74 | Character classification covers only common Unicode ranges | `isspace` / `isprintable` / `isdigit` / `isnumeric` cover ASCII plus common Unicode ranges (superscript digits, full-width digits, etc.); the engine has no Unicode database, so remaining Nd / Nl / No code points are treated as non-digit / non-space (same platform limitation as P4) |
+
+### Design-Layer Differences (Design)
+
+| ID | Item | Details |
+| :--- | :--- | :--- |
+| D2 | `hash` values differ from CPython (stable model by default) | PyGDS uses stable hash values for `hash(None)` etc. by default (reproducible across processes), while CPython hashes are process-randomised; the equality/hash-consistency semantics match. An alignment switch exists: set `stable_identity_hash = false` before `run()` to align with CPython 3.12's process randomisation |
+| D3 | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
 | D5 | CPython 3.11+'s 4300-digit int↔str conversion limit is not emulated | CPython's `int_max_str_digits` is its own DoS protection; PyGDS's arbitrary-precision integers impose no such limit (intentional model) |
+
+### Platform-Layer Differences (Platform)
+
+| ID | Item | Details |
+| :--- | :--- | :--- |
+| P2 | Engine VM call-stack hard limit of 2048 frames | Deep recursion combined with deep expressions makes the engine hard-abort the call chain with `Stack overflow`, silently losing the remaining output (CPython either completes or raises a catchable `RecursionError`); the GDScript frame depth of expression evaluation / parsing is not bounded by the call-depth limit |
+| P3 | str literals cannot contain NUL | Godot's String cannot store U+0000 (it would be replaced with U+FFFD), so `'\x00'` / `'\0'` str escapes raise `SyntaxError` at decode time; bytes are unaffected (`b'\x00'` works) |
+| P4 | `\N{...}` supports only the built-in name table | Godot has no Unicode name database; PyGDS ships a name table covering printable ASCII full names and common symbols (e.g. `\N{BULLET}',`\N{LATIN CAPITAL LETTER A}'). Names outside the table raise `SyntaxError: unknown Unicode character name` matching CPython's behaviour for unknown names |
+| P5 | Implicit close of discarded generator objects is unimplementable | At `NOTIFICATION_PREDELETE` time in Godot 4.x the script instance is already detached, so the refcount reclamation path cannot drive `finally` (measured in the alpha.8 second batch, the theoretical fix path was disproved); code needing cleanup should call `close()` explicitly; re-check if a Godot upgrade loosens this |
+| P6 | Engine exit check lingers on the global class script resource graph | A self-referencing construction inside an inner class body (`X.new()` within class X's own methods) makes the engine retain the script's core class graph at exit and emit a warning; the triggering construction was avoided in v0.8.0-alpha.9 via a cross-class factory (exit warnings cleared), new inner classes should avoid that form; re-check if a Godot upgrade loosens this |
 
 ---
 
@@ -274,7 +229,7 @@ Source Code (Python-like) → Lexer → Parser → AST → Interpreter → Execu
 | **Parser** | Recursive descent parser that builds an abstract syntax tree (AST) from tokens |
 | **Interpreter** | Traverses AST nodes and executes them one by one, managing scope and runtime state |
 | **DSLObject System** | Multiple runtime object types, all inheriting from DSLObject, with unified type lookup via the `klass` field (matching CPython's `PyObject.ob_type`). The `fields` dictionary (Python's `__dict__`, `null` = built-in types without `__dict__`) stores instance attributes, implementing Python's "everything is an object" semantics |
-| **DSLClass** | Class system supporting inheritance, method overrides, `@staticmethod`, `@classmethod`, `@property`. DSLObject directly serves as instances (no separate DSLInstance layer needed), with a three-level naming convention: `_dsl_*` (internal fast path), `magic_*` (DSL magic method protocol), `builtin_*` (DSL built-in methods) |
+| **DSLClass** | Class system supporting inheritance, method overrides, `@staticmethod`, `@classmethod`, `@property`. DSLObject directly serves as instances (no separate DSLInstance layer needed), with the naming convention: `_dsl_*` (internal fast path), `magic_*` (DSL magic method protocol), `builtin_*` (DSL built-in methods) |
 | **PyGDS** | Main controller, integrating Lexer/Parser/Interpreter, providing the public API |
 
 ---
@@ -310,7 +265,7 @@ print(result)
 
 PyGDS provides a suspend mechanism that allows DSL scripts to pause during execution and resume when external conditions are met. This is a unique PyGDS feature not found in standard Python, suitable for game scenarios like delays, waiting for player input, and playing animations.
 
-Two types of suspension:
+The suspension types are as follows:
 
 | Type | Call Method | Use Case | Resume |
 | :--- | :--- | :--- | :--- |
@@ -363,13 +318,19 @@ The runner auto-detects the CPython command (`python` first on Windows, `python3
 
 ### Adding Tests
 
-After adding a case to [ci/cases](./ci/cases/), run `python ci/lint_cases.py` — it will point out missing documentation entries; the full workflow (header metadata → lint → add a behavioral.md entry → filtered run → full regression) is described in [`docs/en/ci.md`](docs/en/ci.md) under "新增用例流程" (case authoring workflow).
+After adding a case to [ci/cases](./ci/cases/), run `python ci/lint_cases.py` — it will point out missing documentation entries; the full workflow (header metadata → lint → add a behavioral.md entry → filtered run → full regression) is described in [ci.md#Workflow for Adding a Case](docs/en/ci.md#workflow-for-adding-a-case).
 
 ---
 
 ## Demo Tests
 
-The `demo/` directory contains a complete demo scene for the suspend system. Open the scene file in the Godot editor to run it, visually demonstrating three suspend modes (passive, active, and active + on_resume callback) in a turn-based combat simulation.
+The `demo/` directory contains the suspend-system demo scene (`demo.tscn`) plus standalone test suites for the suspend system and the drive sandbox (`test_suspend_all.gd`, `test_sandbox.gd` — PyGDS-specific capabilities have no CPython reference end, so verdicts are checked against expectations held inside the suites); the scene runs by opening it in the Godot editor, the suites run from the command line:
+
+```cmd
+godot --headless --path /your/project/path --script /pygds/path/demo/test_suspend_all.gd
+
+godot --headless --path /your/project/path --script /pygds/path/demo/test_sandbox.gd
+```
 
 ---
 
@@ -393,7 +354,7 @@ dsl.load_dsl_script("main.py")
 dsl.run()
 ```
 
-See the "Drive-Letter Virtual Sandbox" section of [usage.md](docs/en/usage.md) for the path convergence rules.
+See [usage.md#Drive-Letter Virtual Sandbox](docs/en/usage.md#drive-letter-virtual-sandbox) for the path convergence rules.
 
 ### How do scripts interact with scenes/nodes?
 
@@ -415,7 +376,7 @@ In non-debug mode, output is not printed to the console in real time; it accumul
 
 ### Can scripts read player input or network data?
 
-Yes. Expose GDScript-side capabilities to scripts via `register_api()`; asynchronous scenarios that need to wait are implemented with the suspend system (`time.sleep` / `request_suspend_waiting`) rather than Python's `async/await`.
+Yes. Expose GDScript-side capabilities to scripts via `register_api()`; in-game waiting scenarios are best handled with the suspend system (`time.sleep` / `request_suspend_waiting`) — the `async`/`await` syntax itself is supported (coroutines driven synchronously), but with no event loop it is not suitable as a concurrency solution.
 
 ---
 

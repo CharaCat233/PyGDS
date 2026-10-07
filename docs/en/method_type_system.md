@@ -4,7 +4,7 @@
 
 PyGDS's method type system aligns with CPython's underlying function/method/descriptor types. Each type has a different `type()` output and different behavioral semantics in the Python interactive environment. PyGDS returns names consistent with CPython through the `_type_name()` method.
 
-The following types are defined in `pygds.gd` (ten in total, including the Property descriptor and the two wrapper descriptors).
+The following types are defined in `pygds.gd` (including the Property descriptor and the wrapper descriptors).
 
 | PyGDS Class | CPython Equivalent |
 | :--- | :--- |
@@ -94,7 +94,7 @@ class DSLFunction extends DSLObject:
 
 ***Descriptor Protocol***
 
-This is the key to distinguishing the three method behaviors, based on the values of `method_type` and `instance`.
+This is the key to distinguishing different method behaviors, based on the values of `method_type` and `instance`.
 
 ```gdscript
 func __get__(instance, owner):
