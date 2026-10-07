@@ -237,11 +237,7 @@ The entries below are behavior differences versus CPython newly registered by th
 
 | ID | Content | Details |
 | :--- | :--- | :--- |
-| I1-74 | `str.format` does not support field indexing / attribute access | `"{0[1]}".format([10, 20])` and `"{0.attr}".format(obj)` raise `KeyError: '0[1]'` / `KeyError: '0.attr'`; CPython supports index and dotted field access |
-| I1-75 | lambda parameter lists do not support the positional-only marker `/` | `lambda a, /, b: ...` raises `SyntaxError: Expected parameter name`; the `def` form is supported |
-| I1-76 | `round(True)` raises `TypeError` | bool is an int subclass and CPython returns `1`; PyGDS's round dispatches only on int/float |
 | I1-77 | Big-integer vs float comparison raises `OverflowError` in some directions | `10**400 > float("inf")` raises `int too large to convert to float`; CPython compares exactly and returns True; the `<` direction works |
-| I1-78 | `bytes(-1)` silently returns `b''` | CPython raises `ValueError: negative count` |
 | I1-79 | The `__doc__` / `__module__` / `__qualname__` / `__defaults__` metadata attributes are missing | Functions, classes, methods, lambdas and modules lack these attributes (`getattr` falls through to defaults); `__name__` is supported |
 | I1-80 | User-class `__del__` is never invoked | CPython calls `__del__` when the reference count reaches zero; PyGDS's reclamation path is based on the engine PREDELETE (same root cause as P5) and does not call `__del__` |
 | I1-81 | `operator.methodcaller` is not implemented | The other operator members are complete |

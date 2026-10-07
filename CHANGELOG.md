@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.2-alpha.1] - 2026-10-07
+
+### 修复
+
+- **`str.format` 字段访问（I1-74）**：字段名支持 `.属性` 与 `[下标]` 访问链（`{0.attr}` / `{0[1]}` / `{0[0][1]}` / `{0.attr[0]}` / `{[1]}` 自动编号 + 链等），`[...]` 内全数字按整数下标、其余（含 `-1` 与空格）按字符串键，与 CPython 一致（`{0[-1]}` 报 `TypeError: list indices must be integers or slices, not str`）；外层字段扫描改方括号感知（`{0[a:b]}` / `{0[}]}` / `{0[a:b}c]}` 的冒号 / 花括号 / 叹号不再截断字段），未闭合字段报 CPython 同文案（`expected '}' before end of string` / 单个 `{` 或 `}` 报 `Single '{' encountered in format string` 等三式）；下标失败透传对象侧自然错误（`IndexError: list index out of range` / `KeyError` / `'int' object is not subscriptable`），属性缺失报 `AttributeError` 并区分合法的 None 属性值
+- **lambda 仅位置分隔符（I1-75）**：`lambda a, /, b: ...` 按解析期标记 positional-only（与 `def` 同一机制），仅位置参数拒绝关键字实参（`f1(a=1, b=2)` 报 `TypeError`），支持与默认值 / `*args` / 关键字仅参数组合（`lambda x, /, y=10, *rest, z=0: ...`）
+- **`round(True)`（I1-76）**：bool 按 int 子类走整数路径（`round(True)` 为 `1`、`round(True, 5)` 为 `1`），不再报 `TypeError: type bool doesn't define __round__ method`
+- **`bytes(-1)`（I1-78）**：负数长度报 CPython 同文案 `ValueError: negative count`（原静默返回 `b''`）
+
+### 文档
+
+- README 中英「审计临时登记」移除已修复的 I1-74 / I1-75 / I1-76 / I1-78 四条
+
 ## [0.8.1] - 2026-10-07
 
 ### 修复

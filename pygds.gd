@@ -7278,82 +7278,121 @@ class DSLString extends DSLObject:
 	## [param kwargs] 关键字参数字典 [br]
 	## [param idx_box] 自动编号计数器 (数组引用, idx_box[0]) [br]
 	## [returns] 格式化字符串
+	## format 字段键的全数字判定: 仅 ASCII 数字序列按整数下标处理, [br]
+	## 带符号 (如 -1) 或含其他字符的键按字符串处理 (CPython 同形: {0[-1]} 报 TypeError)
+	func _fmt_key_is_int(s: String) -> bool:
+		if s.is_empty():
+			return false
+		for c in s:
+			if c < "0" or c > "9":
+				return false
+		return true
+
 	func _format_field(field: String, fmt_args: Array, kwargs: Dictionary, idx_box: Array) -> String:
-		var idx_str = field
+		# 括号感知地切分 name / conv / spec: [...] 内的 ! 与 : 不参与分隔 (CPython: {0[a:b]} 的键含冒号)
+		var depth := 0
+		var split_at := -1
+		var split_is_bang := false
+		for i in range(field.length()):
+			var ch = field[i]
+			if depth > 0:
+				if ch == "]":
+					depth -= 1
+				continue
+			if ch == "[":
+				depth += 1
+			elif ch == "!" or ch == ":":
+				split_at = i
+				split_is_bang = ch == "!"
+				break
+		if depth > 0:
+			# 未闭合的 [ 吞掉了字段收尾: CPython 报 expected '}' before end of string
+			last_error = "ValueError: expected '}' before end of string"
+			return ""
+		var name_part = field
 		var conv = ""
 		var spec = ""
-		var bang = field.find("!")
-		var colon = field.find(":")
-		if bang != -1:
-			idx_str = field.substr(0, bang)
-			var after = field.substr(bang + 1)
-			var colon2 = after.find(":")
-			if colon2 != -1:
-				conv = after.substr(0, colon2)
-				spec = after.substr(colon2 + 1)
+		if split_at != -1:
+			name_part = field.substr(0, split_at)
+			if split_is_bang:
+				var after = field.substr(split_at + 1)
+				var c2 = after.find(":")
+				if c2 != -1:
+					conv = after.substr(0, c2)
+					spec = after.substr(c2 + 1)
+				else:
+					conv = after
 			else:
-				conv = after
-		elif colon != -1:
-			idx_str = field.substr(0, colon)
-			spec = field.substr(colon + 1)
-		# 解析索引/名称
+				spec = field.substr(split_at + 1)
+		# 主字段: 到首个 . 或 [ 之前 (空 = 自动编号; 全数字 = 位置; 其余 = 关键字)
+		var p = 0
+		while p < name_part.length() and name_part[p] != "." and name_part[p] != "[":
+			p += 1
+		var primary = name_part.substr(0, p)
 		var val: DSLObject = null
-		if idx_str == "":
+		if primary == "":
 			var a = idx_box[0]
 			if a < fmt_args.size():
 				val = fmt_args[a]
 			idx_box[0] = a + 1
-		elif idx_str.is_valid_int():
-			var a = int(idx_str)
+		elif _fmt_key_is_int(primary):
+			var a = int(primary)
 			if a >= 0 and a < fmt_args.size():
 				val = fmt_args[a]
-		else:
-			# 字段可携带属性访问链 ({0.real}): 以首个点分段, 先解析主字段再逐级取属性
-			var dot = idx_str.find(".")
-			if dot != -1:
-				var head = idx_str.substr(0, dot)
-				var head_val: DSLObject = null
-				if head == "":
-					var hb = idx_box[0]
-					if hb < fmt_args.size():
-						head_val = fmt_args[hb]
-					idx_box[0] = hb + 1
-				elif head.is_valid_int():
-					var hb2 = int(head)
-					if hb2 >= 0 and hb2 < fmt_args.size():
-						head_val = fmt_args[hb2]
-				elif kwargs.has(head):
-					head_val = kwargs[head]
-				var tail = idx_str.substr(dot + 1)
-				if head_val == null:
-					if head == "" or head.is_valid_int():
-						last_error = "IndexError: Replacement index %d out of range for positional args tuple" % (idx_box[0] - 1 if head == "" else int(head))
-					else:
-						last_error = "KeyError: '" + head + "'"
-						last_error_args = [DSLString.new(head)] as Array[DSLObject]
-					return ""
-				var segs = tail.split(".")
-				for seg in segs:
-					if head_val == null:
-						break
-					var nxt = head_val._dsl_getattribute(seg)
-					if nxt == null:
-						last_error = "AttributeError: '" + head_val._type_name() + "' object has no attribute '" + seg + "'"
-						return ""
-					head_val = nxt
-				val = head_val
-			elif kwargs.has(idx_str):
-				val = kwargs[idx_str]
+		elif kwargs.has(primary):
+			val = kwargs[primary]
 		if val == null:
 			# CPython: 自动编号或显式索引越界报 IndexError, 名称缺失报 KeyError
-			if idx_str == "" or idx_str.is_valid_int():
-				# 自动编号时 idx_box 已自增, 实际缺失的是前一个索引
-				var miss_idx = (idx_box[0] - 1) if idx_str == "" else int(idx_str)
+			# (含符号或非数字的名称按关键字处理, 如 {-1} 报 KeyError: '-1')
+			if primary == "" or _fmt_key_is_int(primary):
+				var miss_idx = (idx_box[0] - 1) if primary == "" else int(primary)
 				last_error = "IndexError: Replacement index %d out of range for positional args tuple" % miss_idx
 			else:
-				last_error = "KeyError: '" + idx_str + "'"
-				last_error_args = [DSLString.new(idx_str)] as Array[DSLObject]
+				last_error = "KeyError: '" + primary + "'"
+				last_error_args = [DSLString.new(primary)] as Array[DSLObject]
 			return ""
+		# 访问链: .attr 与 [key] 逐级应用 (CPython: {0.attr} / {0[0][1]} / {0.attr[0]} / {[1]})
+		while p < name_part.length():
+			var ch = name_part[p]
+			if ch == ".":
+				p += 1
+				var a_start = p
+				while p < name_part.length() and name_part[p] != "." and name_part[p] != "[":
+					p += 1
+				var seg = name_part.substr(a_start, p - a_start)
+				if val == null:
+					break
+				var nxt = val._dsl_getattribute(seg)
+				# 缺失属性: getter 以 DSLNone 返回并在 last_error 留下文案
+				# (合法的 None 属性值不带错误残留, 据此区分)
+				if nxt == null or (nxt is DSLNone and val.last_error != ""):
+					last_error = "AttributeError: '" + val._type_name() + "' object has no attribute '" + seg + "'"
+					val.last_error = ""
+					return ""
+				val = nxt
+			else:
+				# [key]: 全数字按整数下标, 其余 (含 -1 / 空格 / 符号) 按字符串键, CPython 同形
+				var close = name_part.find("]", p)
+				if close == -1:
+					last_error = "ValueError: expected '}' before end of string"
+					return ""
+				var key_str = name_part.substr(p + 1, close - p - 1)
+				var key_obj: DSLObject = DSLString.new(key_str)
+				if _fmt_key_is_int(key_str):
+					key_obj = DSLInteger.pooled(int(key_str))
+				var got = val.magic_getitem([val, key_obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if got == null:
+					# 下标失败: 透传对象侧的自然错误 (IndexError / KeyError / not subscriptable)
+					if val.last_error != "":
+						last_error = val.last_error
+						last_error_args.clear()
+						for la in val.last_error_args:
+							last_error_args.append(la)
+						val.last_error = ""
+						val.last_error_args.clear()
+					return ""
+				val = got
+				p = close + 1
 		# 嵌套格式规格: 字段名解析之后、规格应用之前解析
 		if spec.contains("{"):
 			spec = _resolve_nested_spec(spec, fmt_args, kwargs, idx_box)
@@ -8471,19 +8510,30 @@ class DSLString extends DSLObject:
 				i += 2
 				continue
 			if template[i] == '{':
-				# 查找匹配的右花括号 (忽略嵌套)
+				# 查找字段收尾: 方括号感知 (CPython: {0[a:b}c]} 的键含冒号与花括号),
+				# [...] 内的 { 与 } 不参与字段定界
 				var j = i + 1
-				var depth = 1
-				while j < template.length() and depth > 0:
-					if template[j] == '{':
-						depth += 1
-					elif template[j] == '}':
-						depth -= 1
+				var brace_depth = 1
+				var bracket_depth = 0
+				while j < template.length() and brace_depth > 0:
+					var cj = template[j]
+					if bracket_depth > 0:
+						if cj == "]":
+							bracket_depth -= 1
+					elif cj == "[":
+						bracket_depth += 1
+					elif cj == "{":
+						brace_depth += 1
+					elif cj == "}":
+						brace_depth -= 1
 					j += 1
-				if depth != 0:
-					result += template[i]
-					i += 1
-					continue
+				if brace_depth != 0:
+					# 字段未闭合: CPython 按内容区分文案 (CPython: "{0" 与 "{")
+					if template.substr(i + 1, j - i - 1) == "":
+						last_error = "ValueError: Single '{' encountered in format string"
+					else:
+						last_error = "ValueError: expected '}' before end of string"
+					return null
 				var field = template.substr(i + 1, j - i - 2)
 				result += _format_field(field, fmt_args, kwargs, idx_box)
 				if last_error != "":
@@ -8491,6 +8541,10 @@ class DSLString extends DSLObject:
 					return null
 				i = j
 				continue
+			if template[i] == '}':
+				# 单个右花括号: CPython 报错 (仅 }} 转义在前一分支处理)
+				last_error = "ValueError: Single '}' encountered in format string"
+				return null
 			result += template[i]
 			i += 1
 		return DSLString.cached(result)
@@ -20649,6 +20703,15 @@ class Parser:
 				# 尾随逗号: 逗号后仅允许冒号收尾 (CPython: lambda x,)
 				if check(TokenType.COLON):
 					break
+				# / 分隔符: 前面的普通参数标记为 positional-only (CPython: lambda a, /, b)
+				if check(TokenType.SLASH):
+					advance()
+					for p in params:
+						if not p.is_args and not p.is_kwargs:
+							p.is_positional_only = true
+					if not match_types([TokenType.COMMA]):
+						break
+					continue
 				if check(TokenType.STAR):
 					var next_idx = current + 1
 					var is_star_only = false
@@ -34416,6 +34479,9 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception("TypeError", "round() takes at least one argument")
 			return null
 		var val = args[0]
+		# bool 为 int 子类 (CPython: True.__round__ 继承 int), 按其 0/1 值走整数路径
+		if val is DSLBool:
+			val = DSLInteger.pooled(1 if (val as DSLBool).value else 0)
 		var has_ndigits = args.size() >= 2
 		var n = 0
 		if has_ndigits:
@@ -35320,11 +35386,14 @@ order (MRO) for bases %s" % ", ".join(names))
 			var arg = args[1]
 			var raw = arg._wrapped if arg._wrapped != null else arg
 			if raw is DSLInteger:
-				# 分配长度为索引位 (CPython Py_ssize_t 同构)
+				# 分配长度为索引位 (CPython Py_ssize_t 同构); 负数报 CPython 同文案
 				if (raw as DSLInteger).is_big():
 					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
 					return null
-				for i in range(maxi(raw.value, 0)):
+				if raw.value < 0:
+					raise_exception("ValueError", "negative count")
+					return null
+				for i in range(raw.value):
 					out.append(0)
 			elif raw is DSLBytes:
 				out.assign(raw.data)

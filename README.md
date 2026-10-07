@@ -237,11 +237,7 @@ v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| I1-74 | `str.format` 不支持字段内下标 / 属性访问 | `"{0[1]}".format([10, 20])` 与 `"{0.attr}".format(obj)` 报 `KeyError: '0[1]'` / `KeyError: '0.attr'`，CPython 支持索引与点号字段访问 |
-| I1-75 | lambda 参数列表不支持仅位置分隔符 `/` | `lambda a, /, b: ...` 报 `SyntaxError: Expected parameter name`；`def` 形态已支持 |
-| I1-76 | `round(True)` 报 `TypeError` | bool 为 int 子类，CPython 返回 `1`；PyGDS 的 round 仅按 int/float 分派 |
 | I1-77 | 大整数与浮点比较在部分方向误报 `OverflowError` | `10**400 > float("inf")` 报 `int too large to convert to float`，CPython 按精确比较返回 True；`<` 方向正常 |
-| I1-78 | `bytes(-1)` 静默返回 `b''` | CPython 报 `ValueError: negative count` |
 | I1-79 | `__doc__` / `__module__` / `__qualname__` / `__defaults__` 元属性缺失 | 函数、类、方法、lambda 与模块均无这些属性（`getattr` 走默认值）；`__name__` 已支持 |
 | I1-80 | 用户类 `__del__` 不会触发 | CPython 在引用归零时调用 `__del__`；PyGDS 的回收路径基于引擎 PREDELETE（同 P5 根源），不调用 `__del__` |
 | I1-81 | `operator.methodcaller` 未实现 | 其余 operator 成员齐备 |
