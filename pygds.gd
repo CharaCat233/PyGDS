@@ -7832,13 +7832,26 @@ class DSLString extends DSLObject:
 
 	## str.isnumeric() (等价于 isdecimal)
 	func builtin_isnumeric(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return builtin_isdecimal(args, _kwargs)
+		# isnumeric 覆盖 isdigit 全集再加常见数值字符 (分数/圈数字), CPython 同形
+		var raw = DSLObject._unwrap_dsl(args[0]).value
+		if raw.length() == 0:
+			return DSLBool.new(false)
+		for ch in raw:
+			var code = ch.unicode_at(0)
+			if _is_py_digit(code):
+				continue
+			if code >= 0xbc and code <= 0xbe:
+				continue
+			if (code >= 0x2460 and code <= 0x2468) or (code >= 0x2488 and code <= 0x2490):
+				continue
+			return DSLBool.new(false)
+		return DSLBool.new(true)
 
 	## str.isprintable()
 	func builtin_isprintable(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		for ch in raw:
-			if ch == '\n' or ch == '\t' or ch == '\r':
+			if not _is_py_printable(ch.unicode_at(0)):
 				return DSLBool.new(false)
 		return DSLBool.new(true)
 
@@ -8030,9 +8043,31 @@ class DSLString extends DSLObject:
 		if raw.length() == 0:
 			return DSLBool.new(false)
 		for ch in raw:
-			if not ch.is_valid_int():
+			if not _is_py_digit(ch.unicode_at(0)):
 				return DSLBool.new(false)
 		return DSLBool.new(true)
+
+	## CPython str.isdigit 的常见 Unicode 数字码段: ASCII 数字之外覆盖上标/下标 [br]
+	## 数字、全角数字与常用文字的 Nd 码段; 引擎无 Unicode 数据库, 其余 Nd 码段按 [br]
+	## 非数字处理 (与 \N{名称} 表的既定平台限制同类)
+	static func _is_py_digit(code: int) -> bool:
+		if code >= 0x30 and code <= 0x39:
+			return true
+		if code == 0xb2 or code == 0xb3 or code == 0xb9:
+			return true
+		if (code >= 0x2070 and code <= 0x2079) or (code >= 0x2080 and code <= 0x2089):
+			return true
+		if code >= 0xff10 and code <= 0xff19:
+			return true
+		if (code >= 0x660 and code <= 0x669) or (code >= 0x6f0 and code <= 0x6f9):
+			return true
+		if (code >= 0x966 and code <= 0x96f) or (code >= 0x9e6 and code <= 0x9ef):
+			return true
+		if (code >= 0xe50 and code <= 0xe59) or (code >= 0xed0 and code <= 0xed9):
+			return true
+		if (code >= 0x17e0 and code <= 0x17e9) or (code >= 0x1810 and code <= 0x1819):
+			return true
+		return false
 	
 	func builtin_isalpha(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
@@ -8057,9 +8092,42 @@ class DSLString extends DSLObject:
 		if raw.length() == 0:
 			return DSLBool.new(false)
 		for ch in raw:
-			if not (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r'):
+			if not _is_py_space(ch.unicode_at(0)):
 				return DSLBool.new(false)
 		return DSLBool.new(true)
+
+	## CPython str.isspace 的码点集合 (Unicode 空白 + 双向类 WS/B/S): [br]
+	## \t-\r, \x1c-\x1f, 空格, \x85, \xa0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000
+	static func _is_py_space(code: int) -> bool:
+		if code == 0x20 or (code >= 0x09 and code <= 0x0d) or (code >= 0x1c and code <= 0x1f):
+			return true
+		if code == 0x85 or code == 0xa0 or code == 0x1680 or code == 0x202f or code == 0x205f or code == 0x3000:
+			return true
+		if code >= 0x2000 and code <= 0x200a:
+			return true
+		return code == 0x2028 or code == 0x2029
+
+	## CPython str.isprintable 的可打印判定: Cc/Cf/Cs/Co/Cn 与分隔符 (Zs 除空格/Zl/Zp) 不可打印 [br]
+	## 覆盖 C0/C1 控制、常用 Cf 格式符与全部 Zs/Zl/Zp 码点; 无 Unicode 数据库, [br]
+	## 未分配码点 (Cn) 的判定按可打印处理, 属引擎平台限制 (与 \N{名称} 表的既定限制同类)
+	static func _is_py_printable(code: int) -> bool:
+		if code < 0x20 or (code >= 0x7f and code <= 0x9f):
+			return false
+		if code == 0x20:
+			return true
+		if _is_py_space(code):
+			return false
+		if code == 0xad or code == 0xfeff:
+			return false
+		if (code >= 0x200b and code <= 0x200f) or (code >= 0x202a and code <= 0x202e) or (code >= 0x2060 and code <= 0x2064) or (code >= 0x206a and code <= 0x206f):
+			return false
+		if code >= 0xd800 and code <= 0xdfff:
+			return false
+		if code >= 0xe000 and code <= 0xf8ff:
+			return false
+		if code >= 0xf0000 and code <= 0x10ffff:
+			return false
+		return true
 	
 	func builtin_islower(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
@@ -8215,7 +8283,8 @@ class DSLString extends DSLObject:
 			last_error = "ValueError: the first two maketrans arguments must have equal length"
 			return null
 		for i in range(x.length()):
-			table.dict[x.unicode_at(i)] = DSLString.cached(y[i])
+			# 映射值为码点整数 (CPython 同形: str.maketrans("a", "1") 得 {97: 49})
+			table.dict[x.unicode_at(i)] = DSLInteger.pooled(y.unicode_at(i))
 		if args.size() == 3:
 			var z = DSLObject._unwrap_dsl(args[2])._dsl_str()
 			for i in range(z.length()):
@@ -8243,6 +8312,13 @@ class DSLString extends DSLObject:
 				out += ch
 			elif rep_obj is DSLNone:
 				pass
+			elif rep_obj is DSLInteger:
+				# 码点整数映射为对应字符 (CPython 同形: {97: 120} → 'x')
+				var cp = (rep_obj as DSLInteger).value
+				if (rep_obj as DSLInteger).is_big() or cp < 0 or cp > 0x10FFFF:
+					last_error = "ValueError: character mapping must be in range(0x110000)"
+					return null
+				out += String.chr(cp)
 			else:
 				out += rep_obj._dsl_str()
 		return DSLString.cached(out)
@@ -8474,7 +8550,8 @@ class DSLString extends DSLObject:
 		_str_descriptors["rjust"] = DSLMethodDescriptor.new("rjust", Callable(proto, "builtin_rjust"))
 		_str_descriptors["zfill"] = DSLMethodDescriptor.new("zfill", Callable(proto, "builtin_zfill"))
 		_str_descriptors["translate"] = DSLMethodDescriptor.new("translate", Callable(proto, "builtin_translate"))
-		_str_descriptors["maketrans"] = DSLMethodDescriptor.new("maketrans", Callable(proto, "builtin_maketrans"))
+		# maketrans 是 staticmethod (CPython 同): 实例调用不并入接收者
+		_str_descriptors["maketrans"] = DSLStaticMethodWrapper.new(DSLBuiltinFunction.new("maketrans", Callable(proto, "builtin_maketrans")), null)
 		_str_descriptors["rsplit"] = DSLMethodDescriptor.new("rsplit", Callable(proto, "builtin_rsplit"))
 		_str_descriptors["format"] = DSLMethodDescriptor.new("format", Callable(proto, "builtin_format"))
 		_str_descriptors["index"] = DSLMethodDescriptor.new("index", Callable(proto, "builtin_index"))
@@ -14145,7 +14222,8 @@ class DSLStaticMethodWrapper extends DSLObject:
 			return wrapped.magic_call(args, kwargs)
 		return super.magic_call(args, kwargs)
 
-## classmethod 包装对象: 持有被包装的可调用对象, 经类或实例访问都绑定到所属类
+	func _dsl_is_callable() -> bool:
+		return true
 class DSLClassMethodWrapper extends DSLObject:
 	## 被包装的可调用对象
 	var wrapped
@@ -14589,6 +14667,43 @@ class DSLMethodDescriptor extends DSLObject:
 		bf.__self__ = instance
 		return bf
 
+	func _dsl_is_callable() -> bool:
+		return true
+
+## DSL 类方法描述符, 对应 Python classmethod_descriptor (CPython 的 METH_CLASS 内建: [br]
+## int.from_bytes / bytes.fromhex / bytearray.fromhex / dict.fromkeys / float.fromhex) [br]
+## 类级与实例级访问都解包为未绑定的 DSLBuiltinFunction (CPython 访问形态: [br]
+## builtin_function_or_method), 调用不并入接收者 — PyGDS 的实现签名无 cls 首参, [br]
+## 实例级调用 (如 (5).from_bytes(b, "big")) 与 CPython 的类绑定语义 observable 一致
+class DSLClassMethodDescriptor extends DSLObject:
+	## 方法名称
+	var name: String
+	## 回调 Callable
+	var callback: Callable
+	## 缓存的解包函数 (访问时返回, 避免重复分配)
+	var _bound: DSLBuiltinFunction = null
+
+	## 构造类方法描述符 [br]
+	## [param p_name] 方法名称 [br]
+	## [param p_cb] 回调 Callable
+	func _init(p_name, p_cb):
+		super._init()
+		name = p_name
+		callback = p_cb
+		_bound = DSLBuiltinFunction.new(name, callback)
+
+	func _type_name() -> String:
+		return "classmethod_descriptor"
+
+	func _dsl_str() -> String:
+		return "<classmethod_descriptor '%s'>" % name
+
+	## 描述符协议 __get__: 类级与实例级都返回未绑定内建函数 [br]
+	## [param _instance] 实例 (未使用, 不并入接收者) [br]
+	## [param _owner] 所属类 (未使用)
+	func __get__(_instance, _owner):
+		return _bound
+
 ## DSL 类级别魔法方法描述符, 对应  Python wrapper_descriptor
 class DSLWrappedDescriptor extends DSLObject:
 	## 方法名称
@@ -14625,6 +14740,9 @@ class DSLWrappedDescriptor extends DSLObject:
 			return self
 		return DSLMethodWrapper.new(self, instance)
 
+	func _dsl_is_callable() -> bool:
+		return true
+
 ## DSL 实例级别魔法方法包装, 对应 Python method-wrapper
 class DSLMethodWrapper extends DSLObject:
 	## 所属描述符
@@ -14655,6 +14773,9 @@ class DSLMethodWrapper extends DSLObject:
 		var callv_args = [full_args, kwargs]
 		var raw_result = descriptor.callback.callv(callv_args)
 		return DSLBuiltinFunction._wrap_static(raw_result)
+
+	func _dsl_is_callable() -> bool:
+		return true
 
 ## DSL 用户定义绑定方法, 对应 Python method
 class DSLMethod extends DSLObject:
@@ -14692,6 +14813,9 @@ class DSLMethod extends DSLObject:
 		var new_args: Array[DSLObject] = [instance]
 		new_args.append_array(args)
 		return interp.call_user_function(function, new_args, kwargs)
+
+	func _dsl_is_callable() -> bool:
+		return true
 
 ## DSL 类对象, 对应 Python type, 支持继承和方法查找
 class DSLClass extends DSLObject:
@@ -16680,6 +16804,305 @@ class DSLGroupby extends DSLObject:
 		if _outer == null:
 			_outer = DSLGroupbyOuterIterator.new(state)
 		return _outer
+
+## 惰性内建消费器对象共同基类: map / zip / enumerate / filter 的返回值 [br]
+## CPython 中四者返回惰性迭代器对象 (iter(x) is x, 一次性消费, next 驱动), [br]
+## 对象持有构造实参与缓存驱动器; 创建经 _memo_generator 按调用节点记忆, [br]
+## 语句重放复用同一对象与消费进度 (与 groupby 同协议)
+class DSLLazyIterable extends DSLObject:
+	## 缓存驱动器 (首次消费创建, 复用以共享进度)
+	var _driver: DSLIterator = null
+
+	func _init(ip: Interpreter):
+		super._init()
+		interp = ip
+
+	func _lazy_type() -> String:
+		return "iterable"
+
+	func _type_name() -> String:
+		return _lazy_type()
+
+	func _make_driver() -> DSLIterator:
+		return null
+
+	func _dsl_iter() -> DSLIterator:
+		if _driver == null:
+			_driver = _make_driver()
+		return _driver
+
+## 惰性消费器驱动器共同基类: 一次性迭代语义 (once 产出日志 + 消费窗口) [br]
+## 推导式整式重放经日志重读已产出元素, for 循环经 windowed=false + resume_info 续推 [br]
+## 子类实现 _produce_step: 返回 1=已产出 (值在 produced), 0=耗尽或出错, 2=挂起
+class DSLLazyDriver extends DSLIterator:
+	## 所属惰性对象
+	var owner: DSLLazyIterable = null
+	## 本次推进产出的值
+	var produced: DSLObject = null
+
+	func _init(p_owner: DSLLazyIterable):
+		super._init()
+		owner = p_owner
+		once = true
+
+	func _produce_step() -> int:
+		return 0
+
+	func has_next() -> bool:
+		var ip = owner.interp if owner.interp != null else Interpreter.active
+		suspended = false
+		if done:
+			return false
+		_begin_use(ip)
+		if _read_pos < _log.size():
+			return true
+		var r = _produce_step()
+		if r == 2:
+			# 挂起须同时置迭代器自身标志: 消费方 (for/list/sum) 据此区分
+			# 「挂起中断」与「正常耗尽」, 否则挂起被当作耗尽吞掉
+			suspended = true
+			_propagate_suspend(ip)
+			return false
+		if r == 1:
+			# 探测性产出也入日志: next() 经日志取值, 不会二次驱动生产步
+			_log.append(produced)
+		return r == 1
+
+	func next() -> DSLObject:
+		var ip = owner.interp if owner.interp != null else Interpreter.active
+		suspended = false
+		if done:
+			return null
+		_begin_use(ip)
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
+			return buffered
+		var r = _produce_step()
+		if r == 2:
+			suspended = true
+			_propagate_suspend(ip)
+			return null
+		if r == 0:
+			return null
+		_log.append(produced)
+		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
+		return produced
+
+## map(func, *iterables) 对象: 惰性逐元素调用 func
+class DSLMapObject extends DSLLazyIterable:
+	## 被调用的函数
+	var fn: DSLObject = null
+	## 成员迭代器 (构造时获取, CPython 同为构造期 iter())
+	var member_its: Array[DSLIterator] = []
+
+	func _init(p_fn: DSLObject, p_its: Array[DSLIterator], ip: Interpreter):
+		super._init(ip)
+		fn = p_fn
+		member_its = p_its
+
+	func _lazy_type() -> String:
+		return "map"
+
+	func _make_driver() -> DSLIterator:
+		return DSLMapDriver.new(self)
+
+## DSLMapObject 的驱动器: 成员迭代器逐个推进后调用 func
+class DSLMapDriver extends DSLLazyDriver:
+	## 部分行缓冲: 挂起前本行已拉取的成员取件, 重放轮从断点续拉不重丢
+	var _partial: Array[DSLObject] = []
+
+	func _produce_step() -> int:
+		var n = owner.member_its.size()
+		while _partial.size() < n:
+			var mi = owner.member_its[_partial.size()]
+			var more = mi.has_next()
+			if mi.suspended:
+				return 2
+			if not more:
+				return 0
+			var v = mi.next()
+			if mi.suspended:
+				return 2
+			_partial.append(v)
+		var r = owner.fn.magic_call(_partial, {} as Dictionary[String, DSLObject])
+		if r == null:
+			# func 体内挂起与真报错区分: 挂起交回消费方重放, 报错保留错误状态;
+			# 实参保留在 _partial, 重放轮以同参重调 (函数体内睡眠经去重收敛)
+			var ip = owner.interp if owner.interp != null else Interpreter.active
+			if ip != null and ip._suspended:
+				return 2
+			return 0
+		produced = r
+		_partial = []
+		return 1
+
+## zip(*iterables, strict=False) 对象: 惰性并行消费
+class DSLZipObject extends DSLLazyIterable:
+	## 成员迭代器 (构造时获取)
+	var member_its: Array[DSLIterator] = []
+	## 长度不齐时报错开关
+	var strict: bool = false
+
+	func _init(p_its: Array[DSLIterator], p_strict: bool, ip: Interpreter):
+		super._init(ip)
+		member_its = p_its
+		strict = p_strict
+
+	func _lazy_type() -> String:
+		return "zip"
+
+	func _make_driver() -> DSLIterator:
+		return DSLZipDriver.new(self)
+
+## DSLZipObject 的驱动器: 每步按成员顺序各取一个, 任一耗尽即止
+class DSLZipDriver extends DSLLazyDriver:
+	## 部分行缓冲: 挂起前本行已拉取的成员取件, 重放轮从断点续拉不重丢
+	var _partial: Array[DSLObject] = []
+
+	func _produce_step() -> int:
+		var n = owner.member_its.size()
+		if n == 0:
+			# zip() 零成员: 无行可产, 直接耗尽 (否则每步都产出空元组)
+			return 0
+		while _partial.size() < n:
+			var mi = owner.member_its[_partial.size()]
+			var more = mi.has_next()
+			if mi.suspended:
+				return 2
+			if not more:
+				if owner.strict and n >= 2:
+					if not _raise_strict(_partial.size()):
+						return 2
+				return 0
+			var v = mi.next()
+			if mi.suspended:
+				return 2
+			_partial.append(v)
+		produced = DSLTuple.new(_partial)
+		_partial = []
+		return 1
+
+	## strict 长度校验: 依 CPython 文案在第 j 个成员 (0 基) 耗尽时报错 [br]
+	## [returns] true=已报错 (消费方经 report 传播), false=校验探测中挂起 (交回重放)
+	func _raise_strict(j: int) -> bool:
+		var ip = owner.interp if owner.interp != null else Interpreter.active
+		if j > 0:
+			if j == 1:
+				ip.raise_exception("ValueError", "zip() argument 2 is shorter than argument 1")
+			else:
+				ip.raise_exception("ValueError", "zip() argument %d is shorter than arguments 1-%d" % [j + 1, j])
+			return true
+		# 首个成员耗尽: 依序探测后续成员, 首个仍有元素者为 longer
+		for k in range(1, owner.member_its.size()):
+			var mk = owner.member_its[k]
+			var more = mk.has_next()
+			if mk.suspended:
+				return false
+			if more:
+				if k == 1:
+					ip.raise_exception("ValueError", "zip() argument 2 is longer than argument 1")
+				else:
+					ip.raise_exception("ValueError", "zip() argument %d is longer than arguments 1-%d" % [k + 1, k])
+				return true
+		return true
+
+## enumerate(iterable, start=0) 对象: 惰性编号枚举
+class DSLEnumerateObject extends DSLLazyIterable:
+	## 源迭代器 (构造时获取)
+	var source_it: DSLIterator = null
+	## 起始编号
+	var start: int = 0
+
+	func _init(p_it: DSLIterator, p_start: int, ip: Interpreter):
+		super._init(ip)
+		source_it = p_it
+		start = p_start
+
+	func _lazy_type() -> String:
+		return "enumerate"
+
+	func _make_driver() -> DSLIterator:
+		return DSLEnumerateDriver.new(self)
+
+## DSLEnumerateObject 的驱动器
+class DSLEnumerateDriver extends DSLLazyDriver:
+	## 当前编号
+	var idx: int = 0
+
+	func _produce_step() -> int:
+		var more = owner.source_it.has_next()
+		if owner.source_it.suspended:
+			return 2
+		if not more:
+			return 0
+		var v = owner.source_it.next()
+		if owner.source_it.suspended:
+			return 2
+		produced = DSLTuple.new([DSLInteger.pooled(owner.start + idx), v] as Array[DSLObject])
+		idx += 1
+		return 1
+
+## filter(func, iterable) 对象: 惰性真值过滤
+class DSLFilterObject extends DSLLazyIterable:
+	## 谓词函数 (None 时按元素真值)
+	var fn: DSLObject = null
+	## 源迭代器 (构造时获取)
+	var source_it: DSLIterator = null
+
+	func _init(p_fn: DSLObject, p_it: DSLIterator, ip: Interpreter):
+		super._init(ip)
+		fn = p_fn
+		source_it = p_it
+
+	func _lazy_type() -> String:
+		return "filter"
+
+	func _make_driver() -> DSLIterator:
+		return DSLFilterDriver.new(self)
+
+## DSLFilterObject 的驱动器: 跳过不保留的元素 (谓词挂起即停)
+class DSLFilterDriver extends DSLLazyDriver:
+	## 待测元素缓冲: 谓词挂起时元素已取出, 重放轮以同元素重测谓词
+	var _pending_item: DSLObject = null
+
+	func _produce_step() -> int:
+		while true:
+			var v: DSLObject = null
+			if _pending_item != null:
+				v = _pending_item
+			else:
+				var more = owner.source_it.has_next()
+				if owner.source_it.suspended:
+					return 2
+				if not more:
+					return 0
+				v = owner.source_it.next()
+				if owner.source_it.suspended:
+					return 2
+				_pending_item = v
+			var keep = false
+			if owner.fn == null or owner.fn is DSLNone:
+				keep = v._dsl_bool()
+				_pending_item = null
+			else:
+				var r = owner.fn.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if r == null:
+					var ip = owner.interp if owner.interp != null else Interpreter.active
+					if ip != null and ip._suspended:
+						return 2
+					_pending_item = null
+					return 0
+				_pending_item = null
+				keep = r._dsl_bool()
+			if keep:
+				produced = v
+				return 1
+		return 0
 
 class DSLTeeHandle extends DSLObject:
 	## 共享状态: {items: 缓冲数组, it: 源迭代器, interp: 解释器}
@@ -23430,7 +23853,7 @@ class Interpreter:
 		
 		# 迭代器类型 (list_iterator 等): 仅用于 type() 返回与 isinstance 判定,
 		# 其实例由 iter(list/tuple/str/range/dict/set) 构造
-		var iterator_type_names = ["list_iterator", "tuple_iterator", "str_iterator", "str_ascii_iterator", "range_iterator", "dict_keyiterator", "dict_valueiterator", "dict_itemiterator", "set_iterator", "repeat", "count", "cycle", "groupby", "_grouper", "list_reverseiterator", "tuple_reverseiterator", "str_reverseiterator", "range_reverseiterator", "dict_reversekeyiterator", "_tee"]
+		var iterator_type_names = ["list_iterator", "tuple_iterator", "str_iterator", "str_ascii_iterator", "range_iterator", "dict_keyiterator", "dict_valueiterator", "dict_itemiterator", "set_iterator", "repeat", "count", "cycle", "groupby", "_grouper", "list_reverseiterator", "tuple_reverseiterator", "str_reverseiterator", "range_reverseiterator", "dict_reversekeyiterator", "_tee", "map", "zip", "enumerate", "filter"]
 		for it_name in iterator_type_names:
 			var it_class = DSLClass.new(it_name, obj_class, {}, self)
 			it_class.klass = type_class
@@ -23501,7 +23924,7 @@ class Interpreter:
 		bytes_cls.klass = type_class
 		_inject_builtin_methods(bytes_cls, "bytes")
 		globals.define("bytes", bytes_cls)
-		bytes_cls.methods["fromhex"] = DSLMethodDescriptor.new("fromhex", Callable(_builtin_protos["bytes"], "builtin_fromhex"))
+		bytes_cls.methods["fromhex"] = DSLClassMethodDescriptor.new("fromhex", Callable(_builtin_protos["bytes"], "builtin_fromhex"))
 		# bytearray 同规: 类可调用, 方法表注入可变子集 + bytes 全套只读方法 (经 bytearray proto 的类型工厂)
 		var bytearray_methods = {}
 		bytearray_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_bytearray_new"))
@@ -24073,7 +24496,8 @@ class Interpreter:
 		return mod
 
 	## 创建 random 模块 [br]
-	## 使用内置 xorshift32 PRNG (seed() 可复现), 与 CPython 的 Mersenne Twister 序列不同 [br]
+	## MT19937 (Mersenne Twister) 对齐 CPython: 整数种子走 init_by_array 同款路径, 数值序列一致 [br]
+	## 字符串种子经自有哈希展开, 序列与 CPython 不同 (文档化差异); seed() 可复现 [br]
 	## [returns] DSLModule
 	func _create_random_module() -> DSLModule:
 		var mod = DSLModule.new("random")
@@ -27077,7 +27501,11 @@ class Interpreter:
 		_current_stmt_key = _stmt_key(stmt)
 		if _sleep_root_key == 0:
 			_sleep_root_key = _current_stmt_key
-		_needs_replay = false
+		# 仅无在途挂起时才清重放标记: 嵌套函数体 (如消费器的 key 实参 lambda) 可在
+		# 外层语句的挂起已传播后执行, 此处清零会吞掉外层的重放诉求, 使挂起被
+		# 调用分派误判为「挂起即本调用自身」而返回 None 半成品
+		if not _suspended:
+			_needs_replay = false
 			
 		step_count += 1
 		if step_count > max_steps:
@@ -31585,7 +32013,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["rjust"] = DSLMethodDescriptor.new("rjust", Callable(proto, "builtin_rjust"))
 				class_obj.methods["zfill"] = DSLMethodDescriptor.new("zfill", Callable(proto, "builtin_zfill"))
 				class_obj.methods["translate"] = DSLMethodDescriptor.new("translate", Callable(proto, "builtin_translate"))
-				class_obj.methods["maketrans"] = DSLMethodDescriptor.new("maketrans", Callable(proto, "builtin_maketrans"))
+				class_obj.methods["maketrans"] = DSLStaticMethodWrapper.new(DSLBuiltinFunction.new("maketrans", Callable(proto, "builtin_maketrans")), null)
 				class_obj.methods["rsplit"] = DSLMethodDescriptor.new("rsplit", Callable(proto, "builtin_rsplit"))
 				class_obj.methods["index"] = DSLMethodDescriptor.new("index", Callable(proto, "builtin_index"))
 				class_obj.methods["rindex"] = DSLMethodDescriptor.new("rindex", Callable(proto, "builtin_rindex"))
@@ -31643,7 +32071,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
 				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
 				class_obj.methods["__delitem__"] = DSLWrappedDescriptor.new("__delitem__", Callable(proto, "magic_delitem"))
-				class_obj.class_attrs["fromkeys"] = _make_builtin("fromkeys", Callable(self, "builtin_fromkeys"))
+				class_obj.class_attrs["fromkeys"] = DSLClassMethodDescriptor.new("fromkeys", Callable(self, "builtin_fromkeys"))
 			"int":
 				var proto = DSLInteger.pooled(0)
 				_builtin_protos["int"] = proto
@@ -31668,7 +32096,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["bit_count"] = DSLMethodDescriptor.new("bit_count", Callable(proto, "builtin_bit_count"))
 				class_obj.methods["to_bytes"] = DSLMethodDescriptor.new("to_bytes", Callable(proto, "builtin_to_bytes"))
 				class_obj.methods["hex"] = DSLMethodDescriptor.new("hex", Callable(proto, "builtin_hex"))
-				class_obj.class_attrs["from_bytes"] = _make_builtin("from_bytes", Callable(self, "api_int_from_bytes"))
+				class_obj.class_attrs["from_bytes"] = DSLClassMethodDescriptor.new("from_bytes", Callable(self, "api_int_from_bytes"))
 			"float":
 				var proto = DSLFloat.new(0.0)
 				_builtin_protos["float"] = proto
@@ -31746,7 +32174,7 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["center"] = DSLMethodDescriptor.new("center", Callable(ba_proto, "builtin_center"))
 				class_obj.methods["ljust"] = DSLMethodDescriptor.new("ljust", Callable(ba_proto, "builtin_ljust"))
 				class_obj.methods["rjust"] = DSLMethodDescriptor.new("rjust", Callable(ba_proto, "builtin_rjust"))
-				class_obj.methods["fromhex"] = DSLMethodDescriptor.new("fromhex", Callable(ba_proto, "builtin_fromhex"))
+				class_obj.methods["fromhex"] = DSLClassMethodDescriptor.new("fromhex", Callable(ba_proto, "builtin_fromhex"))
 				class_obj.methods["append"] = DSLMethodDescriptor.new("append", Callable(ba_proto, "builtin_append"))
 				class_obj.methods["extend"] = DSLMethodDescriptor.new("extend", Callable(ba_proto, "builtin_extend"))
 				class_obj.methods["insert"] = DSLMethodDescriptor.new("insert", Callable(ba_proto, "builtin_insert"))
@@ -33180,43 +33608,62 @@ order (MRO) for bases %s" % ", ".join(names))
 		return null
 	
 	## enumerate(iterable, start) - 返回枚举对象
-	func builtin_enumerate(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLList:
-		if args.size() < 1:
-			raise_exception("TypeError", "enumerate() takes at least 1 argument")
+	## enumerate(iterable, start=0) - 惰性编号枚举对象 (CPython 同为一次性迭代器)
+	func builtin_enumerate(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() == 0:
+			raise_exception("TypeError", "enumerate() missing required argument 'iterable'")
+			return null
+		if args.size() > 2:
+			raise_exception("TypeError", "enumerate() takes at most 2 arguments (%d given)" % args.size())
 			return null
 		var start = 0
-		if _kwargs.has("start"):
-			start = (_kwargs["start"] as DSLInteger).value
+		for k in kwargs:
+			if k != "start":
+				raise_exception("TypeError", "'%s' is an invalid keyword argument for enumerate()" % k)
+				return null
+		if kwargs.has("start"):
+			if args.size() >= 2:
+				raise_exception("TypeError", "enumerate() takes at most 2 arguments (%d given)" % (args.size() + 1))
+				return null
+			var sv = kwargs["start"]
+			if sv is DSLInteger:
+				start = (sv as DSLInteger).value
+			else:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % sv._type_name())
+				return null
 		elif args.size() >= 2:
-			start = (args[1] as DSLInteger).value
+			var sv2 = args[1]
+			if sv2 is DSLInteger:
+				start = (sv2 as DSLInteger).value
+			else:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % sv2._type_name())
+				return null
 		var obj = args[0]
 		if obj._wrapped != null:
 			obj = obj._wrapped
-		var result = DSLList.new()
-		if obj is DSLList or obj is DSLTuple:
-			for i in range(obj.items.size()):
-				result.items.append(DSLTuple.new([DSLInteger.pooled(start + i), obj.items[i]]))
-			return result
 		var iter = obj._dsl_iter()
 		if iter == null:
-			raise_exception("TypeError", "enumerate() arg is not iterable")
+			if obj.last_error != "":
+				raise_exception_from_last_error(obj.last_error)
+				obj.last_error = ""
+			else:
+				raise_exception("TypeError", "'%s' object is not iterable" % obj._type_name())
 			return null
-		var idx = start
-		while iter.has_next():
-			result.items.append(DSLTuple.new([DSLInteger.pooled(idx), iter.next()]))
-			idx += 1
-		return result
+		# 源迭代器退出语句消费窗口 (理由同 builtin_zip): 重放轮由本对象日志
+		# 重读已产出行, 续拉按源自身进度推进, 不回退源游标
+		iter.windowed = false
+		return _memo_generator(_current_call_node, DSLEnumerateObject.new(iter, start, self))
 	
-	## zip(*iterables) - 并行迭代
-	func builtin_zip(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLList:
-		if args.size() == 0:
-			return DSLList.new()
+	## zip(*iterables, strict=False) - 并行惰性迭代对象 (CPython 同为一次性迭代器)
+	func builtin_zip(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var strict = false
-		if kwargs.has("strict"):
-			strict = kwargs["strict"]._dsl_bool()
-		var lists: Array[Array] = []
-		var min_len = 999999
-		var any_suspended = false
+		for k in kwargs:
+			if k == "strict":
+				strict = kwargs["strict"]._dsl_bool()
+			else:
+				raise_exception("TypeError", "'%s' is an invalid keyword argument for zip()" % k)
+				return null
+		var members: Array[DSLIterator] = []
 		for arg in args:
 			var obj = arg
 			if obj._wrapped != null:
@@ -33228,50 +33675,16 @@ order (MRO) for bases %s" % ", ".join(names))
 					raise_exception_from_last_error(obj.last_error)
 					obj.last_error = ""
 				else:
-					raise_exception("TypeError", "zip() arg is not iterable")
+					raise_exception("TypeError", "'%s' object is not iterable" % obj._type_name())
 				return null
-			var zitems: Array[DSLObject] = []
-			while iter.has_next():
-				zitems.append(iter.next())
-				if iter.suspended:
-					any_suspended = true
-					break
-			lists.append(zitems)
-			if zitems.size() < min_len:
-				min_len = zitems.size()
-			# 挂起也可能发生在 has_next() 内部 (如生成器步进真等待),
-			# 此时 while 以「耗尽」形态退出; 必须识别并停止, 否则继续取下一参数的
-			# 迭代器会在 _suspended 置位下触发假挂起, 被误报 arg is not iterable。
-			# 部分结果登记与 min_len 收敛必须先于本 break: min_len 的哨兵初值
-			# 若带入结果构建循环, 会放大为逐次调用百万级空元组分配 (性能回归)
-			if iter.suspended:
-				any_suspended = true
-				break
-		# 严格模式: 先耗尽的参数决定文案——第 1 个参数耗尽时找首个更长参数,
-		# 其余参数耗尽时报 shorter; 挂起重放时长度不可信, 跳过校验
-		if strict and not any_suspended and args.size() >= 2:
-			var first_short = 0
-			for i in range(args.size()):
-				if lists[i].size() == min_len:
-					first_short = i
-					break
-			if first_short > 0:
-				raise_exception("ValueError", "zip() argument %d is shorter than argument 1" % (first_short + 1))
-				return null
-			for j in range(1, args.size()):
-				if lists[j].size() > min_len:
-					if j == 1:
-						raise_exception("ValueError", "zip() argument 2 is longer than argument 1")
-					else:
-						raise_exception("ValueError", "zip() argument %d is longer than arguments 1-%d" % [j + 1, j])
-					return null
-		var result = DSLList.new()
-		for i in range(min_len):
-			var row: Array[DSLObject] = []
-			for lst in lists:
-				row.append(lst[i])
-			result.items.append(DSLTuple.new(row))
-		return result
+			# 成员迭代器退出语句消费窗口: 惰性对象的成员游标跨语句持久,
+			# 重放轮由本对象日志重读完整行, 不完整行的续拉按成员自身进度推进,
+			# 若成员游标被语句重放回退到窗口起点, 已拉元素会被重复投递进行内
+			iter.windowed = false
+			members.append(iter)
+		# 惰性对象按调用节点记忆化: 消费中途挂起后语句整句重放时,
+		# 重建会拿到全新对象丢掉已消费进度, 故重放轮必须复用同一对象
+		return _memo_generator(_current_call_node, DSLZipObject.new(members, strict, self))
 	
 	## any(iterable) - 任一元素为真则返回 True
 	func builtin_any(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -33650,68 +34063,64 @@ order (MRO) for bases %s" % ", ".join(names))
 			return null
 		return DSLNone.new()
 
-	## map(func, iterable, ...) - 对可迭代对象逐元素应用函数 [br]
-	## 支持多可迭代对象 (逐元素并行), 本实现为立即求值并返回列表
-	func builtin_map(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLList:
+	## map(func, iterable, ...) - 惰性逐元素应用函数 (CPython 同为一次性迭代器)
+	func builtin_map(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if not kwargs.is_empty():
+			raise_exception("TypeError", "map() takes no keyword arguments")
+			return null
 		if args.size() < 2:
-			raise_exception("TypeError", "map() must have at least 2 arguments")
+			raise_exception("TypeError", "map() must have at least two arguments.")
 			return null
 		var fn = args[0]
-		var iter_lists: Array = []
+		if not fn._dsl_is_callable():
+			raise_exception("TypeError", "'%s' object is not callable" % fn._type_name())
+			return null
+		var members: Array[DSLIterator] = []
 		for i in range(1, args.size()):
-			var it = args[i]._dsl_iter()
+			var obj = args[i]
+			if obj._wrapped != null:
+				obj = obj._wrapped
+			var it = obj._dsl_iter()
 			if it == null:
-				raise_exception("TypeError", "map() argument %d is not iterable" % (i + 1))
+				if obj.last_error != "":
+					raise_exception_from_last_error(obj.last_error)
+					obj.last_error = ""
+				else:
+					raise_exception("TypeError", "'%s' object is not iterable" % obj._type_name())
 				return null
-			var items: Array[DSLObject] = []
-			while it.has_next():
-				items.append(it.next())
-				if it.suspended:
-					break
-			iter_lists.append(items)
-		var count = iter_lists[0].size()
-		if iter_lists.size() > 1:
-			for lst in iter_lists:
-				if lst.size() < count:
-					count = lst.size()
-		var result = DSLList.new()
-		for i in range(count):
-			var call_args: Array[DSLObject] = []
-			for lst in iter_lists:
-				call_args.append(lst[i])
-			var r = fn.magic_call(call_args, {} as Dictionary[String, DSLObject])
-			if r == null:
-				return null
-			result.items.append(r)
-		return result
+			# 成员迭代器退出语句消费窗口 (理由同 builtin_zip): 重放轮由本对象
+			# 日志重读已产出行, 续拉按成员自身进度推进, 不回退成员游标
+			it.windowed = false
+			members.append(it)
+		return _memo_generator(_current_call_node, DSLMapObject.new(fn, members, self))
 
-	## filter(func, iterable) - 保留满足条件的元素 [br]
-	## func 为 null 时按真值过滤
-	func builtin_filter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLList:
+	## filter(func, iterable) - 惰性真值过滤 (CPython 同为一次性迭代器)
+	func builtin_filter(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if not kwargs.is_empty():
+			raise_exception("TypeError", "filter() takes no keyword arguments")
+			return null
 		if args.size() != 2:
-			raise_exception("TypeError", "filter() takes exactly 2 arguments")
+			raise_exception("TypeError", "filter expected 2 arguments, got %d" % args.size())
 			return null
 		var fn = args[0]
-		var it = args[1]._dsl_iter()
-		if it == null:
-			raise_exception("TypeError", "filter() argument 2 is not iterable")
+		if not (fn is DSLNone) and not fn._dsl_is_callable():
+			raise_exception("TypeError", "'%s' object is not callable" % fn._type_name())
 			return null
-		var result = DSLList.new()
-		while it.has_next():
-			var item = it.next()
-			if it.suspended:
-				break
-			var keep = false
-			if fn == null or fn is DSLNone:
-				keep = item._dsl_bool()
+		var obj = args[1]
+		if obj._wrapped != null:
+			obj = obj._wrapped
+		var it = obj._dsl_iter()
+		if it == null:
+			if obj.last_error != "":
+				raise_exception_from_last_error(obj.last_error)
+				obj.last_error = ""
 			else:
-				var r = fn.magic_call([item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-				if r == null:
-					return null
-				keep = r._dsl_bool()
-			if keep:
-				result.items.append(item)
-		return result
+				raise_exception("TypeError", "'%s' object is not iterable" % obj._type_name())
+			return null
+		# 源迭代器退出语句消费窗口 (理由同 builtin_zip): 重放轮由本对象日志
+		# 重读已产出元素, 续拉按源自身进度推进, 不回退源游标
+		it.windowed = false
+		return _memo_generator(_current_call_node, DSLFilterObject.new(fn, it, self))
 		
 	## int(x, base) - 转换为整数
 	func builtin_int(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLInteger:
@@ -34108,6 +34517,9 @@ order (MRO) for bases %s" % ", ".join(names))
 			return DSLSeqIterator.new(obj, "set_iterator")
 		# groupby 对象: 返回自身 (它同时是迭代器, iter(it) is it)
 		if obj is DSLGroupby:
+			return obj
+		# 惰性内建消费器对象 (map/zip/enumerate/filter): 返回自身 (iter(x) is x)
+		if obj is DSLLazyIterable:
 			return obj
 		# 其余可迭代对象: 维持既有行为 (消费为快照列表)
 		var internal_it = obj._dsl_iter()

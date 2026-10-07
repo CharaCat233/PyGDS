@@ -218,9 +218,9 @@ first, *rest = [10, 20, 30, 40]    # first=10, rest=[20, 30, 40]
 String and bytes literals support the full escape set: `\n` `\t` `\r` `\a` `\b` `\f` `\v` `\\` `\'` `\"`, hex `\xNN`, octal `\NNN` (1-3 digits), Unicode `\uNNNN` / `\UXXXXXXXX` and named escapes `\N{NAME}` (built-in name table: printable ASCII full names and common symbols, e.g. `\N{BULLET}` `\N{LATIN CAPITAL LETTER A}`). `r"..."` raw strings skip decoding entirely
 
 ```python
-print(len(\x41))             # 1
-print(\u4e2d)                # 中
-print(len(b\x00))            # 1 (bytes support NUL)
+print(len("\x41"))           # 1
+print("\u4e2d")              # 中
+print(len(b"\x00"))          # 1 (bytes support NUL)
 ```
 
 Invalid escapes (e.g. `\xZZ`, `\u12`) raise `SyntaxError`; unrecognized escapes (e.g. `\8`) are kept verbatim as in CPython. str literals cannot contain NUL (`\x00` raises `SyntaxError`, a Godot String platform limitation); bytes are unaffected
@@ -1270,7 +1270,7 @@ print(f.closed)               # True
 
 > **Interaction with the suspension system**: `time.sleep` (and active suspension APIs) inside the `with` body, `__enter__` and `__exit__` suspend and resume normally. Resuming a suspended body never re-runs `__enter__` (the enter marker), and an `__exit__` suspension with an exception in flight resumes normally, deciding suppression or propagation by its return value. A `with` inside a generator keeps its entered state across `yield`, and the `GeneratorExit` injected by `close()` passes through the exit path as well
 >
-> **Not yet supported**: the `contextlib` module (P1-71). Parenthesized manager lists (3.10) are supported: `with (a as b, c as d):` parses as a manager list (a `with (a, b):` without `as` is also a list), while an `as` after the closing paren falls back to the tuple expression
+> The `contextlib` module is supported (`contextmanager` / `closing` / `suppress` / `ExitStack` / `nullcontext`). Parenthesized manager lists (3.10) are supported: `with (a as b, c as d):` parses as a manager list (a `with (a, b):` without `as` is also a list), while an `as` after the closing paren falls back to the tuple expression
 
 ### raise ... from Exception Chaining
 

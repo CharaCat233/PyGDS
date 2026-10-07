@@ -113,7 +113,7 @@ func _dsl_setattr(name: String, value: DSLObject):
     if fields != null:
         fields[name] = value
         return
-    last_error = "TypeError: '%s' object has no __dict__" % _type_name()
+    last_error = "AttributeError: '%s' object has no attribute '%s'" % [_type_name(), 属性名]
 ```
 
 **设置优先级：** 属性描述符 (`__set__`) → 类 `__setattr__` → 实例 `fields` 字典
@@ -227,7 +227,7 @@ DSLClass.magic_call(args, kwargs)
 func api_object_new(args, _kwargs):
     var cls = args[0]
     if not cls is DSLClass:
-        raise_exception("TypeError", "object.__new__(X): X is not a type object")
+        raise_exception("TypeError", "object.__new__(X): X is not a type object (%s)")
         return null
     var obj = DSLObject.new()
     obj.klass = cls
@@ -309,7 +309,7 @@ class Foo:       # 等价于 class Foo(object):
 
 `PyGDS.Interpreter.execute_class` 处理用户定义的类（包括 `object` 自身）
 
-1. **求值基类列表**：逐个求值 `ClassStmt.bases` 中的表达式并校验为 `DSLClass`；`*iterable` 星参基类（PEP 448 类侧泛化）展开可迭代对象的每个元素各为一个基类（`Value after * must be an iterable, not X` / `all bases must be classes`）；列表为空且类名非 `object` 时默认补 `object`
+1. **求值基类列表**：逐个求值 `ClassStmt.bases` 中的表达式并校验为 `DSLClass`；`*iterable` 星参基类（PEP 448 类侧泛化）展开可迭代对象的每个元素各为一个基类（`Value after * must be an iterable, not X`；非类基类走元类候选解析，冲突报 metaclass conflict）；列表为空且类名非 `object` 时默认补 `object`
 2. **一致性检查**（先于类体执行）：直接基类重复检查、C3 线性化计算（冲突报 `TypeError`）、实例布局冲突检查
 3. **收集方法和类属性**（类体作用域 `class_env` 挂在模块环境之下）：
    - `FunctionStmt` → 创建 `DSLFunction`，存入 `methods`
@@ -449,7 +449,7 @@ ro.area = 100       # AttributeError: can't set attribute
 
 ### 类创建流程
 
-`execute_class` 依次执行：逐个求值基类表达式（`superclass must be a class` 校验）→ 无基类时默认补 `object` → 直接基类重复检查（`duplicate base class A`）→ 计算并缓存 C3 线性化（无法一致时报 `Cannot create a consistent method resolution order (MRO) for bases A, B`）→ 布局冲突检查（`multiple bases have instance lay-out conflict`，每个直接基类的布局根取其 MRO 上首个内建布局类型，异常类统一视为同一布局）→ 执行类体。`type(name, bases, dict)` 三参形式走同样的检查
+`execute_class` 依次执行：逐个求值基类表达式（非类基类按元类候选解析并转发调用文案；三参 `type` 路径报 `bases must be types`）→ 无基类时默认补 `object` → 直接基类重复检查（`duplicate base class A`）→ 计算并缓存 C3 线性化（无法一致时报 `Cannot create a consistent method resolution order (MRO) for bases A, B`）→ 布局冲突检查（`multiple bases have instance lay-out conflict`，每个直接基类的布局根取其 MRO 上首个内建布局类型，异常类统一视为同一布局）→ 执行类体。`type(name, bases, dict)` 三参形式走同样的检查
 
 ### MRO 驱动的查找点
 

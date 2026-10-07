@@ -337,8 +337,12 @@ list(reversed([1, 2, 3]))  # [3, 2, 1]
 
 Corresponds to Python `enumerate()`, returning a sequence of `(index, value)` pairs.
 
+- Returns a lazy `enumerate` iterator object (matching CPython): one-shot consumption, `iter(e) is e`, empty once exhausted
+- Elements are pulled lazily and compose with generators and infinite sequences; the source may suspend mid-consumption
+
 ```python
 list(enumerate(["a", "b"]))  # [(0, "a"), (1, "b")]
+print(type(enumerate([])).__name__)  # enumerate
 ```
 
 ### `iter(iterable)` / `iter(callable, sentinel)`
@@ -364,12 +368,17 @@ print(list(it3), list(it3))     # [1] [] (a generator cannot be consumed again o
 
 Corresponds to Python `zip()`, iterating over multiple iterables in parallel; with `strict=True`, if one iterable is exhausted while others still have items left, a `ValueError` is raised.
 
+- Returns a lazy `zip` iterator object (matching CPython): one-shot consumption, `iter(z) is z`, empty once exhausted
+- Members are pulled lazily and compose with generators and infinite sequences (e.g. `islice(zip(count(), "ab"), 2)`); member consumption may suspend mid-stream
+- The `strict` check raises at the first exhausted member with CPython's exact messages (including the plural form `argument 3 is shorter than arguments 1-2` for 3+ arguments)
+
 ```python
 list(zip([1, 2], ["a", "b"]))  # [(1, "a"), (2, "b")]
 try:
     list(zip([1, 2], [3], strict=True))
 except ValueError as e:
     print(e)                     # zip() argument 2 is shorter than argument 1
+print(type(zip()).__name__)      # zip
 ```
 
 ### `any(iterable)`
@@ -562,12 +571,16 @@ dir(C)                   # ["greet", ...] (sorted name list)
 Corresponds to Python `map()`, applying a function to every element of an iterable
 
 - Supports multiple iterables (elements passed to the function in parallel)
-- **Note**: this implementation eagerly evaluates and returns a list (unlike CPython's lazy map object), but it composes with `list()` / `for` loops etc. in the same way
+- Returns a lazy `map` iterator object (matching CPython): one-shot consumption, `iter(m) is m`, empty once exhausted; arguments must be iterable at the `map()` call site
+- Elements are pulled lazily and compose with generators and infinite sequences (e.g. `islice(map(f, count()), 3)`); consumption can suspend mid-stream
 
 ```python
 list(map(lambda x: x * 2, [1, 2, 3]))          # [2, 4, 6]
 list(map(str, [1, 2, 3]))                      # ["1", "2", "3"]
 list(map(lambda a, b: a + b, [1, 2], [10, 20])) # [11, 22]
+m = map(str, [1])
+print(type(m).__name__)                        # map
+print(list(m), list(m))                        # ['1'] [] (one-shot)
 ```
 
 ### `filter(func, iterable)`
@@ -575,18 +588,21 @@ list(map(lambda a, b: a + b, [1, 2], [10, 20])) # [11, 22]
 Corresponds to Python `filter()`, keeping only the elements that satisfy the condition
 
 - If `func` is `None`, filters by the truthiness of each element
-- **Note**: this implementation eagerly evaluates and returns a list
+- Returns a lazy `filter` iterator object (matching CPython): one-shot consumption, `iter(f) is f`, empty once exhausted
+- The predicate is called lazily and composes with generators and infinite sequences; the predicate body may suspend
 
 ```python
 list(filter(lambda x: x > 1, [0, 1, 2, 3]))   # [2, 3]
 list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
+f = filter(None, [1])
+print(type(f).__name__)                        # filter
 ```
 
 ---
 
 ## Built-in Modules (import)
 
-PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides nine built-in modules: `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator` and `time` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
+PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides eleven built-in modules: `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys` and `contextlib` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
 
 ### import Syntax
 
@@ -602,7 +618,7 @@ from math import *                # import all public members (non-underscore)
 
 | Category | Members |
 | :--- | :--- |
-| Constants | `pi` `e` `tau` |
+| Constants | `pi` `e` `tau` `inf` `nan` |
 | Basics | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
 | Exponential/log | `exp` `log` `log2` `log10` |
 | Trigonometry | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
@@ -642,6 +658,8 @@ math.remainder(1.5, 1)  # -0.5
 | `shuffle(seq)` | Shuffle a list in place |
 | `sample(population, k)` | k distinct random elements |
 | `gauss(mu=0.0, sigma=1.0)` | Normal-distribution sample (Box-Muller transform) |
+| `getrandbits(k)` | Random integer with k random bits |
+| `getstate()` / `setstate(state)` | Save and restore the generator's internal state |
 
 ```python
 import random
@@ -651,7 +669,7 @@ random.choices(["a", "b"], weights=[1, 0], k=3)   # ['a', 'a', 'a'] (zero-weight
 random.gauss(0, 1)     # a float drawn from N(0, 1)
 ```
 
-> **Note**: PyGDS uses a built-in xorshift32 PRNG, whose value sequence differs from CPython's Mersenne Twister; however `seed()` guarantees reproducible sequences within PyGDS.
+> **Note**: PyGDS's `random` module implements the same MT19937 (Mersenne Twister) as CPython: integer seeds follow CPython's `init_by_array` seeding path and the value sequence matches CPython (guarded by the `random_mt` case); string seeds are expanded through PyGDS's own hash and their sequence differs from CPython (a documented difference). `seed()` guarantees reproducible sequences within PyGDS.
 > **Note**: the sampling functions follow CPython. `choice` / `shuffle` take `len(seq)` and index/assign by integer, so a generator raises `TypeError: object of type`generator`has no len()`, a set raises `not subscriptable`, and `shuffle` raises `does not support item assignment` for tuples/strings/`range`; `choice` accepts strings and `range`, and a dict is indexed by key (raising `KeyError` when the key is not in `0..n-1`). `sample` accepts only lists/tuples/strings. The `weights` argument of `choices` only needs to be iterable, so a generator is accepted.
 
 ### `statistics` Module
@@ -718,6 +736,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `pairwise(iterable)` | Adjacent pairs; returns n-1 tuples |
 | `groupby(iterable, key=None)` | Adjacent grouping; yields `(key, grouper)` pairs where each grouper is a lazy one-shot iterator sharing a cursor with the outer iteration, and a grouper is exhausted as soon as the outer iteration advances |
 | `starmap(func, iterable)` | Calls `func` with each row unpacked as arguments; returns a list of results |
+| `tee(iterable, n=2)` | Derives n independent cursors from one iterable (returns an n-tuple) |
+| `chain.from_iterable(iterable)` | Concatenates the sub-iterables inside one iterable |
 
 ```python
 from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
@@ -751,6 +771,8 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 | `Counter.most_common(n=None)` | Returns `[(element, count)]` sorted by count descending (ties by insertion order) |
 | `defaultdict(default_factory[, init_dict])` | Missing keys automatically call the factory to create a default value |
 | `namedtuple(typename, field_names)` | Generates an immutable tuple subclass with named fields; `field_names` is a whitespace/comma-separated string or an iterable of strings; instances support indexing, iteration, unpacking and field-name access, and the class provides `_fields` / `_make(iterable)` / `_replace(**kw)` plus the instance method `_asdict()` |
+| `deque(iterable=[], maxlen=None)` | Double-ended queue, bounded deques silently discard from the opposite end on overflow, slicing unsupported |
+| `OrderedDict([init_dict])` | Order-preserving dict, repr carries a prefix, comparisons are order-sensitive |
 
 ```python
 from collections import Counter, defaultdict
@@ -783,6 +805,8 @@ Exposes the built-in operators as ordinary functions, which pairs well with func
 | Logic | `not_` `truth` |
 | Sequence | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
 | Getters | `itemgetter` `attrgetter` |
+| Matrix multiply | `matmul` |
+| Index | `index` (integer-protocol conversion, equivalent to `__index__`) |
 
 ```python
 import operator

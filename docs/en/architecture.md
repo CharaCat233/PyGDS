@@ -179,7 +179,7 @@ When a parse error occurs, the `PyGDS.Parser.skip_until_balanced` method can be 
 
 ## Part 3 - AST Node System
 
-The AST is divided into two base classes: **`PyGDS.Stmt`** (statements) and **`PyGDS.Expr`** (expressions).
+The AST is divided into two base classes: **`PyGDS.Stmt`** (statements) and **`PyGDS.Expr`** (expressions). The table below lists the core nodes; the `match`/`with`/`import`/`assert`/`del`/`async` statements and the f-string/super/slice expression nodes follow the AST section of `pygds.gd`.
 
 ### Stmt Nodes (Statements)
 
@@ -377,9 +377,7 @@ evaluate(Binary: a + b)
 
 Step 1: `PyGDS.DSLClass._lookup_method` — MRO inheritance chain lookup
 
-First searches for `__add__` in the current class's methods dictionary. If not found, follows the superclass pointer upward (MRO linear chain), all the way to the top (the `object` base class). Returns null if still not found.
-
-This is essentially a simplified MRO (Method Resolution Order), just a linear single chain rather than the full C3 linearization.
+First searches for `__add__` in the current class's methods dictionary. If not found, searches item by item along the C3-linearized MRO computed and cached at class creation (`DSLClass._compute_mro`, supporting multiple inheritance) up to the `object` base class. Returns null if still not found.
 
 Step 2: `PyGDS.Interpreter._call_magic_or_fallback` — The core of two-phase dispatch
 
@@ -502,22 +500,7 @@ The `__new__` of built-in types uses `Interpreter.api_*_new` functions to direct
 
 For related content, please refer to the [builtin documentation](./builtin.md).
 
-The inheritance hierarchy of built-in exceptions is as follows:
-
-```txt
-Exception
-├── TypeError
-├── ValueError
-├── RuntimeError
-├── NameError
-├── KeyError
-├── IndexError
-├── AttributeError
-├── ArithmeticError
-│   └── ZeroDivisionError
-├── StopIteration
-└── AssertionError
-```
+Built-in exceptions are rooted at `BaseException` (`Exception` and exceptions without an explicit base default under `Exception`); the full hierarchy and registration list are covered in [exception_system.md](./exception_system.md) under the built-in exception hierarchy. `except*` exception groups (`ExceptionGroup` / `BaseExceptionGroup`, PEP 654) and direct `BaseException` subclasses such as `GeneratorExit` / `SystemExit` / `KeyboardInterrupt` are all registered.
 
 Each exception type is a `DSLClass` with `__new__`, `__init__`, and `__str__` methods.
 

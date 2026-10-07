@@ -182,8 +182,12 @@ Has a special **key type restriction mechanism**.
 | `DSLInteger` | `int` |
 | `DSLFloat` | `float` |
 | `DSLBool` | `bool` |
+| `DSLTuple` (hashable elements) | Normalized `String` key |
+| `DSLFrozenSet` / `DSLBytes` / `DSLComplex` | Normalized `String` key |
+| `DSLNone` | Fixed `String` key |
+| User-class instances defining `__hash__` | Identity key |
 
-The `PyGDS.DSLDict._key_to_variant` method is responsible for this conversion. If the key type is not in the above list, it returns `null` and sets a `TypeError: unhashable type`.
+The `PyGDS.DSLDict._key_to_variant` method handles the conversion; genuinely unhashable types (`list` / `dict` / `set` / `bytearray` and user instances without `__hash__`, etc.) return `null` with a `TypeError: unhashable type`.
 
 ### DSLSet — Set Type
 
@@ -564,9 +568,8 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 ```python
 # Python: str.replace(old, new, count=-1)
 "hello".replace("l", "x") # "hexxo"
+"hello".replace("l", "x", 1) # "hexlo" (first occurrence only)
 ```
-
-> **Note**: The `count` parameter is not currently supported.
 
 #### `str.find(sub) -> int`
 
@@ -574,9 +577,9 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 # Python: str.find(sub)
 "hello".find("l")         # 2
 "hello".find("z")         # -1
+"hello".find("l", 3)      # 3 (from start)
+"hello".find("l", 0, 2)   # -1 (bounded by end)
 ```
-
-> **Note**: The `start`/`end` range parameters are not currently supported.
 
 #### `str.startswith(prefix) -> bool`
 
@@ -622,7 +625,7 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "HELLO".casefold()        # "hello"
 ```
 
-> **Note**: Currently equivalent to `lower()`. Full Unicode case folding is not implemented.
+> **Note**: Partial full case folding is implemented (`ß` to `ss`, `ﬁ` to `fi` and other common specials); remaining code points behave like `lower()`
 
 #### `str.title() -> str`
 

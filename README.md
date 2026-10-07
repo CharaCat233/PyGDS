@@ -171,8 +171,8 @@ dsl.run()
 | `bytearray` | ✅ 完整 | 构造（长度/bytes/整数可迭代/`str`+编码）、可变操作（下标与切片赋值、append/extend/insert/pop/remove/reverse/clear/copy）、与 bytes 互转；不可哈希 |
 | `memoryview` | ✅ 务实子集 | 一维 B 格式视图：len/下标/切片/迭代/`tobytes` / `hex` / `cast("B")` / `release`；bytes 底层只读、bytearray 底层可写透传 |
 | `open()` 文件 I/O | ✅ 务实子集 | 文本/二进制两态（`r`/`w`/`a`/`rb`/`wb`/`ab`），read/readline/readlines/write/writelines/close/seek/tell/flush 与行迭代；路径随宿主 FileAccess（相对路径按工程根解析）；`FileNotFoundError` / `UnsupportedOperation` 已注册 |
-| `with` 语句 | ✅ 完整 | 上下文管理器协议（`__enter__` / `__exit__`），单管理器与逗号分隔多管理器（进入按序退出逆序），括号化管理器列表（3.10 语法）与元组歧义回退，`as` 目标支持名字/元组与嵌套解包/星形/属性/下标；退出真值抑制在途异常；挂起重放不重复执行 `__enter__`；`with open(...)` 可用。`contextlib` 暂不支持（见 P1-71） |
-| 用户文件 `import` | ❌ 不支持 | 仅支持内置模块（math/random/statistics/functools/itertools/collections/string/operator/time/sys） |
+| `with` 语句 | ✅ 完整 | 上下文管理器协议（`__enter__` / `__exit__`），单管理器与逗号分隔多管理器（进入按序退出逆序），括号化管理器列表（3.10 语法）与元组歧义回退，`as` 目标支持名字/元组与嵌套解包/星形/属性/下标；退出真值抑制在途异常；挂起重放不重复执行 `__enter__`；`with open(...)` 可用。`contextlib` 模块已支持（`contextmanager` / `closing` / `suppress` / `ExitStack` / `nullcontext`） |
+| 用户文件 `import` | ✅ 完整 | `sys.path` 逐目录解析 `<名>.py`（`import 用户模块` / `from 用户模块 import x`，未命中报 `ImportError: No module named 'X'`），模块缓存、循环导入检测与沙箱盘符内路径规则齐备 |
 
 > **⚠️ 破坏性变更（v0.3.0）**：生成器表达式 `(x for x in iterable)` 的语义已从「急切求值为列表」改为「惰性生成器对象」
 > 旧代码若直接对生成器表达式结果做下标/`len()`/列表方法会报错，需先 `list(g)` / `tuple(g)` 转换
@@ -230,6 +230,35 @@ v0.7.0-alpha.7 审计发现的 P2-45（复核为误报）、P2-46（`%#o` 与 f-
 | P4 | `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号约 200 条（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
 | P5（原 I2-38） | 生成器对象丢弃时的隐式 close 不可实现 | Godot 4.x 的 `NOTIFICATION_PREDELETE` 触发时脚本实例已 detach，引用计数回收路径无法驱动 `finally`（alpha.8 批次二实测，理论修复路径被否定）；需要清理逻辑的代码应显式 `close()`；Godot 升级若松动应复核 |
 | P6 | 引擎退出检查对全局类脚本资源图的滞留告警 | 内嵌类方法体内的自引用构造（类 X 体内 `X.new()`）使引擎退出时不释放脚本核心类图并告警；触发构造已于 v0.8.0-alpha.9 经跨类工厂规避（退出告警清零），新增内嵌类应避免该形态；引擎升级若松动应复核 |
+
+### 审计临时登记（待修复后移除）
+
+以下条目为 2026-10-07 全项目审计新登记的与 CPython 的行为差异，尚未修复；修复后随版本移除本节。按成因归入 Issue（I1 明确报错或功能缺失 / I2 边缘差异）与 Design（D 有意模型）两系，编号沿用差异清单三系约定（I 系自 I1-74 / I2-63 起，D 系自 D5 起，永不复用）
+
+| 编号 | 内容 | 说明 |
+| :--- | :--- | :--- |
+| I1-74 | `str.format` 不支持字段内下标 / 属性访问 | `"{0[1]}".format([10, 20])` 与 `"{0.attr}".format(obj)` 报 `KeyError: '0[1]'` / `KeyError: '0.attr'`，CPython 支持索引与点号字段访问 |
+| I1-75 | lambda 参数列表不支持仅位置分隔符 `/` | `lambda a, /, b: ...` 报 `SyntaxError: Expected parameter name`；`def` 形态已支持 |
+| I1-76 | `round(True)` 报 `TypeError` | bool 为 int 子类，CPython 返回 `1`；PyGDS 的 round 仅按 int/float 分派 |
+| I1-77 | 大整数与浮点比较在部分方向误报 `OverflowError` | `10**400 > float("inf")` 报 `int too large to convert to float`，CPython 按精确比较返回 True；`<` 方向正常 |
+| I1-78 | `bytes(-1)` 静默返回 `b''` | CPython 报 `ValueError: negative count` |
+| I1-79 | `__doc__` / `__module__` / `__qualname__` / `__defaults__` 元属性缺失 | 函数、类、方法、lambda 与模块均无这些属性（`getattr` 走默认值）；`__name__` 已支持 |
+| I1-80 | 用户类 `__del__` 不会触发 | CPython 在引用归零时调用 `__del__`；PyGDS 的回收路径基于引擎 PREDELETE（同 P5 根源），不调用 `__del__` |
+| I1-81 | `operator.methodcaller` 未实现 | 其余 operator 成员齐备 |
+| I1-82 | `float.fromhex` 未实现 | CPython 的类方法内建（`classmethod_descriptor`）；`float.hex()` 已支持，反向解析缺失 |
+| I2-63 | 协议校验缺失：非法返回值静默接受 | `__len__` 返回负数、`__bool__` 返回非 bool、`__init__` 返回非 None、`__repr__` / `__str__` 返回非字符串，CPython 均报 `TypeError` / `ValueError`，PyGDS 静默接受（repr 回退默认形态） |
+| I2-64 | `str.format` 混用手动 / 自动编号不报错 | `"{1}{}".format(1, 2)` CPython 报 `ValueError: cannot switch from manual field specification to automatic field numbering`，PyGDS 静默接受 |
+| I2-65 | `except <非异常类>` 不报 `TypeError` | CPython 报 `catching classes that do not inherit from BaseException is not allowed`，PyGDS 静默跳过该子句后异常继续传播 |
+| I2-66 | 自定义异常未调 `super().__init__` 时 `str(e)` 回退类型名 | CPython 按 `args` 格式化消息（`str(E2(7))` 为 `"7"`），PyGDS 返回类名 `"E2"` |
+| I2-67 | `__hash__ = None` 的类仍可哈希 | CPython 报 `TypeError: unhashable type`，PyGDS 静默允许作字典键 |
+| I2-68 | 模块对象 repr 为简化形态 | `repr(math)` 为 `<module object>`，CPython 为 `<module 'math' (built-in)>` |
+| I2-69 | `type()` 三参错误文案未对齐 | CPython 为 `type.__new__() argument 3 must be dict, not int`，PyGDS 为 `type() argument 3 ...` |
+| I2-70 | `type(类型别名实例)` 返回 `type` | CPython 返回 `TypeAliasType` |
+| I2-71 | 点分 import 与相对导入的错误类别不同 | `import math.floor` 在解析期报 `Unexpected token '.'`（CPython 运行期报 `ModuleNotFoundError`）；`from . import x` 报 `SyntaxError`（CPython 报 `ImportError`） |
+| I2-72 | method_descriptor / wrapper_descriptor 的 repr 归属类名为占位 | `str(str.upper)` 输出 `<method 'upper' of '??' objects>`，CPython 输出 `of 'str' objects` |
+| I2-73 | 内建类型类上的魔法方法描述符不可访问 | `str.__add__` 报 `AttributeError`（CPython 返回 slot wrapper） |
+| I2-74 | 字符分类仅覆盖常见 Unicode 码段 | `isspace` / `isprintable` / `isdigit` / `isnumeric` 已覆盖 ASCII 与常用 Unicode 码段（上标数字、全角数字等）；引擎无 Unicode 数据库，其余 Nd / Nl / No 码段按非数字 / 非空白处理（与 P4 同类平台限制） |
+| D5 | CPython 3.11+ 的 4300 位 int↔str 转换上限未模拟 | CPython 的 `int_max_str_digits` 是其自身 DoS 防护；PyGDS 任意精度整数不设该限（有意模型） |
 
 ---
 

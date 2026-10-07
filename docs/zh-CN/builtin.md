@@ -337,8 +337,12 @@ list(reversed([1, 2, 3]))  # [3, 2, 1]
 
 对应 Python `enumerate()`，返回 `(index, value)` 枚举序列
 
+- 返回惰性 `enumerate` 迭代器对象（CPython 同形）：一次性消费，`iter(e) is e`，耗尽后为空
+- 元素惰性拉取，支持生成器与无限序列配合；源消费中途可挂起
+
 ```python
 list(enumerate(["a", "b"]))  # [(0, "a"), (1, "b")]
+print(type(enumerate([])).__name__)  # enumerate
 ```
 
 ### `iter(iterable)` / `iter(callable, sentinel)`
@@ -364,12 +368,17 @@ print(list(it3), list(it3))     # [1] [] (生成器耗尽后不可重复消费)
 
 对应 Python `zip()`，并行迭代多个可迭代对象；`strict=True` 时若某个可迭代对象先耗尽而其余仍有剩余，报 `ValueError`
 
+- 返回惰性 `zip` 迭代器对象（CPython 同形）：一次性消费，`iter(z) is z`，耗尽后为空
+- 成员惰性拉取，支持生成器与无限序列配合（如 `islice(zip(count(), "ab"), 2)`）；成员消费中途可挂起
+- `strict` 校验在首个成员耗尽处按 CPython 文案报错（多参时含 `argument 3 is shorter than arguments 1-2` 的复数形态）
+
 ```python
 list(zip([1, 2], ["a", "b"]))  # [(1, "a"), (2, "b")]
 try:
     list(zip([1, 2], [3], strict=True))
 except ValueError as e:
     print(e)                     # zip() argument 2 is shorter than argument 1
+print(type(zip()).__name__)      # zip
 ```
 
 ### `any(iterable)`
@@ -561,12 +570,16 @@ dir(C)                   # ["greet", ...] (排序后的名字列表)
 对应 Python `map()`，对可迭代对象的每个元素应用函数
 
 - 支持多个可迭代对象（逐元素并行传入函数）
-- **注意**：本实现为立即求值并返回列表（非 CPython 的惰性 map 对象），但行为上可与 `list()`/`for` 循环等配合使用
+- 返回惰性 `map` 迭代器对象（CPython 同形）：一次性消费，`iter(m) is m`，耗尽后为空，实参在 `map()` 调用处即要求可迭代
+- 成员惰性拉取，支持生成器与无限序列配合（如 `islice(map(f, count()), 3)`），消费中途可挂起
 
 ```python
 list(map(lambda x: x * 2, [1, 2, 3]))          # [2, 4, 6]
 list(map(str, [1, 2, 3]))                      # ["1", "2", "3"]
 list(map(lambda a, b: a + b, [1, 2], [10, 20])) # [11, 22]
+m = map(str, [1])
+print(type(m).__name__)                        # map
+print(list(m), list(m))                        # ['1'] [] (一次性)
 ```
 
 ### `filter(func, iterable)`
@@ -574,18 +587,21 @@ list(map(lambda a, b: a + b, [1, 2], [10, 20])) # [11, 22]
 对应 Python `filter()`，保留满足条件的元素
 
 - `func` 为 `None` 时按元素真值过滤
-- **注意**：本实现为立即求值并返回列表
+- 返回惰性 `filter` 迭代器对象（CPython 同形）：一次性消费，`iter(f) is f`，耗尽后为空
+- 谓词惰性调用，支持生成器与无限序列配合，谓词体内可挂起
 
 ```python
 list(filter(lambda x: x > 1, [0, 1, 2, 3]))   # [2, 3]
 list(filter(None, [0, 1, "", "a", []]))        # [1, "a"]
+f = filter(None, [1])
+print(type(f).__name__)                        # filter
 ```
 
 ---
 
 ## 内置模块 (import)
 
-PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time` 共九个内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
+PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib` 共十一个内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
 
 ### import 语法
 
@@ -601,7 +617,7 @@ from math import *                # 导入所有公开成员 (非下划线开头
 
 | 类别 | 成员 |
 | :--- | :--- |
-| 常量 | `pi` `e` `tau` |
+| 常量 | `pi` `e` `tau` `inf` `nan` |
 | 基础 | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
 | 指数/对数 | `exp` `log` `log2` `log10` |
 | 三角函数 | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
@@ -641,6 +657,8 @@ math.remainder(1.5, 1)  # -0.5
 | `shuffle(seq)` | 原地打乱列表 |
 | `sample(population, k)` | 返回 k 个不重复的随机元素 |
 | `gauss(mu=0.0, sigma=1.0)` | 正态分布采样（Box-Muller 变换） |
+| `getrandbits(k)` | 返回 k 个随机二进制位的整数 |
+| `getstate()` / `setstate(state)` | 保存与恢复生成器内部状态 |
 
 ```python
 import random
@@ -651,8 +669,8 @@ random.gauss(0, 1)     # 服从 N(0, 1) 的浮点数
 random.randint(1, 6)   # 1..6 内
 ```
 
-> **注意**：PyGDS 使用内置 xorshift32 PRNG，数值序列与 CPython 的 Mersenne Twister **不同**；但 `seed()` 可保证在 PyGDS 内部复现相同序列
-> **说明**：抽样函数的参数类型规则与 CPython 一致——`choice` / `shuffle` 取 `len(seq)` 后按整数下标索引/赋值，因此生成器报 `TypeError: object of type`generator`has no len()`、集合报 `not subscriptable`、`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`，字典按键取（键非 `0..n-1` 时 `KeyError`）；`sample` 仅接受列表/元组/字符串；`choices` 的 `weights` 只需可迭代，可传生成器
+> **注意**：PyGDS 的 `random` 实现与 CPython 同源的 MT19937（Mersenne Twister）：整数种子走 CPython 同款 `init_by_array` 播种路径，数值序列与 CPython 对齐（`random_mt` 用例守护）；字符串种子经 PyGDS 自有哈希展开，序列与 CPython 不同（文档化差异）。`seed()` 可保证在 PyGDS 内部复现相同序列
+> **说明**：抽样函数的参数类型规则与 CPython 一致——`choice` / `shuffle` 取 `len(seq)` 后按整数下标索引/赋值，因此生成器报 `TypeError: object of type`generator`has no len()`、集合报 `not subscriptable`、`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`，字典按键取（键非 `0..n-1` 时 `KeyError`）；`sample` 接受列表/元组/字符串/`range`；`choices` 的 `weights` 只需可迭代，可传生成器
 
 ### `statistics` 模块
 
@@ -717,6 +735,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `pairwise(iterable)` | 相邻元素配对，返回长度为 n-1 的元组列表 |
 | `groupby(iterable, key=None)` | 相邻分组，产出 `(key, grouper)` 对；grouper 为与外层共享游标的惰性一次性迭代器，外层推进后旧 grouper 立即耗尽 |
 | `starmap(func, iterable)` | 用每组参数解包调用 `func`，返回结果列表 |
+| `tee(iterable, n=2)` | 从一个可迭代对象派生 n 个独立游标（返回 n 元组） |
+| `chain.from_iterable(iterable)` | 拼接一个可迭代对象中的各子可迭代对象 |
 
 ```python
 from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
@@ -750,6 +770,8 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 | `Counter.most_common(n=None)` | 按出现次数降序返回 `[(元素, 次数)]` 列表，同次数按插入顺序 |
 | `defaultdict(default_factory[, init_dict])` | 缺失键自动调用工厂创建默认值 |
 | `namedtuple(typename, field_names)` | 生成带命名字段的不可变元组子类；`field_names` 为空白 / 逗号分隔的字符串或字符串可迭代对象；实例支持下标、迭代、解包与按字段名访问，类上提供 `_fields` / `_make(iterable)` / `_replace(**kw)` / 实例方法 `_asdict()` |
+| `deque(iterable=[], maxlen=None)` | 双端队列，有界时溢出静默挤出一端，不支持切片 |
+| `OrderedDict([init_dict])` | 有序字典，repr 带前缀，键序敏感比较 |
 
 ```python
 from collections import Counter, defaultdict
@@ -782,6 +804,8 @@ print(p._asdict()["x"])                     # 1
 | 逻辑 | `not_` `truth` |
 | 序列 | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
 | 取值器 | `itemgetter` `attrgetter` |
+| 矩阵乘 | `matmul` |
+| 索引 | `index`（整数协议转换，等价 `__index__`） |
 
 ```python
 import operator

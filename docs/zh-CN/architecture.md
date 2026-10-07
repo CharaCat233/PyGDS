@@ -179,7 +179,7 @@ expression_statement （处理赋值、增强赋值、解包赋值）
 
 ## 第三部分 - AST 节点体系
 
-AST 分为 **`PyGDS.Stmt`**（语句）和 **`PyGDS.Expr`**（表达式）两大基类
+AST 分为 **`PyGDS.Stmt`**（语句）和 **`PyGDS.Expr`**（表达式）两大基类。下表列出核心节点；`match`/`with`/`import`/`assert`/`del`/`async` 等语句与 f-string/super/slice 等表达式节点以 `pygds.gd` 的 AST 区段为准
 
 ### Stmt 节点（语句）
 
@@ -377,9 +377,7 @@ evaluate(Binary: a + b)
 
 第一步：`PyGDS.DSLClass._lookup_method` — MRO 继承链查找
 
-先在当前类的 methods 字典中查找 `__add__`，找不到则沿着 superclass 指针一路向上走（MRO 线性链），一直找到最顶层（object 基类），还没找到则返回 null
-
-这本质上是个简化版的 MRO（Method Resolution Order），只是线性单链而非完整的 C3 线性化
+先在当前类的 methods 字典中查找 `__add__`，找不到则沿类创建时计算并缓存的 C3 线性化序列（MRO，`DSLClass._compute_mro`，支持多继承）逐项查找，直到 object 基类，还没找到则返回 null
 
 第二步：`PyGDS.Interpreter._call_magic_or_fallback` — 两阶段分派核心
 
@@ -501,22 +499,7 @@ class MyInt(int):
 
 相关内容请查阅 [builtin 文档](./builtin.md)
 
-其中，内置异常的继承层级如下
-
-```txt
-Exception
-├── TypeError
-├── ValueError
-├── RuntimeError
-├── NameError
-├── KeyError
-├── IndexError
-├── AttributeError
-├── ArithmeticError
-│   └── ZeroDivisionError
-├── StopIteration
-└── AssertionError
-```
+其中，内置异常以 `BaseException` 为根（`Exception` 及未指定基类的异常默认挂在 `Exception` 下），完整层级与注册清单见 [exception_system.md](./exception_system.md) 的「内置异常层次结构」；`except*` 异常组（`ExceptionGroup` / `BaseExceptionGroup`，PEP 654）与 `GeneratorExit` / `SystemExit` / `KeyboardInterrupt` 等直系 `BaseException` 子类均已注册
 
 每个异常类型都是一个 `DSLClass`，具有 `__new__`、`__init__`、`__str__` 方法
 

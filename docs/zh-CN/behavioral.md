@@ -1698,7 +1698,7 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 
 ### class_builtin_init
 
-- 职责: 内建类型子类的用户 `__init__` 与构造分层 (可变子类 `__new__` 纯分配由 init 填充, 不可变子类 `__new__` 严格消费实参后 init 仍调用, init 签名错误带 `L.__init__` 限定名, 子类实例字典与属性读写, set/deque/frozenset 子类 repr 带类名, deque 经 `super().__init__` 转发, bool/range/slice/memoryview/NoneType 不可继承, init 内挂起重放副作用不重复); 用户 `__iter__` 返回非迭代对象的严格文案 (for / iter() / 推导式 / list() / 星形展开 / sorted / genexp 消费同文案, in 的 argument of type 文案, 挂起消费下重放轮宽松回退不循环)
+- 职责: 内建类型子类的用户 `__init__` 与构造分层 (可变子类 `__new__` 纯分配由 init 填充, 不可变子类 `__new__` 严格消费实参后 init 仍调用, init 签名错误带 `L.__init__` 限定名, 子类实例字典与属性读写, set/deque 子类 repr 带类名, deque 经 `super().__init__` 转发, bool/range/slice/memoryview/NoneType 不可继承, init 内挂起重放副作用不重复); 用户 `__iter__` 返回非迭代对象的严格文案 (for / iter() / 推导式 / list() / 星形展开 / sorted / genexp 消费同文案, in 的 argument of type 文案, 挂起消费下重放轮宽松回退不循环)
 - 比对: `same_output`
 - 源文件: [ci/cases/class_builtin_init.py](../../ci/cases/class_builtin_init.py)
 

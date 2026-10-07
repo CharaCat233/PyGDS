@@ -171,8 +171,8 @@ See the "Drive-Letter Virtual Sandbox" section of [usage.md](docs/en/usage.md) f
 | `bytearray` | ✅ Full | Construction (length/bytes/int iterable/`str`+encoding), mutation (index & slice assignment, append/extend/insert/pop/remove/reverse/clear/copy), bytes interop; unhashable |
 | `memoryview` | ✅ Pragmatic subset | One-dimensional B-format views: len/index/slice/iteration/`tobytes` / `hex` / `cast("B")` / `release`; bytes-backed views are read-only, bytearray-backed write through |
 | `open()` file I/O | ✅ Pragmatic subset | Text/binary modes (`r`/`w`/`a`/`rb`/`wb`/`ab`), read/readline/readlines/write/writelines/close/seek/tell/flush and line iteration; paths follow the host FileAccess (relative paths resolve against the project root); `FileNotFoundError` / `UnsupportedOperation` are registered |
-| `with` statement | ✅ Full | Context manager protocol (`__enter__` / `__exit__`), single and comma-separated multiple managers (entered in order, exited in reverse), `as` targets supporting names/tuple and nested unpacking/starred/attribute/subscript; a truthy exit value suppresses the in-flight exception; suspension replay never re-runs `__enter__`; `with open(...)` works. `contextlib` is not supported (see P1-71) |
-| User-file `import` | ❌ Not Supported | Built-in modules only (math/random/statistics/functools/itertools/collections/string/operator/time/sys) |
+| `with` statement | ✅ Full | Context manager protocol (`__enter__` / `__exit__`), single and comma-separated multiple managers (entered in order, exited in reverse), `as` targets supporting names/tuple and nested unpacking/starred/attribute/subscript; a truthy exit value suppresses the in-flight exception; suspension replay never re-runs `__enter__`; `with open(...)` works. The `contextlib` module is supported (`contextmanager` / `closing` / `suppress` / `ExitStack` / `nullcontext`) |
+| User-file `import` | ✅ Full | `<name>.py` resolved directory by directory along `sys.path` (`import usermodule` / `from usermodule import x`, miss raises `ImportError: No module named 'X'`), with module cache, circular-import detection and in-drive path rules inside the sandbox |
 
 > **⚠️ Breaking Change (v0.3.0)**: Generator expressions `(x for x in iterable)` have changed from "eagerly evaluated to a list" to "lazy generator object".
 > Code that directly subscripts/`len()`s or calls list methods on a generator expression result will fail — convert with `list(g)` / `tuple(g)` first
@@ -230,6 +230,35 @@ P2-45 (re-checked as a false positive), P2-46 (`%#o` and f-string `#` prefix lay
 | P4 | `\N{...}` supports only the built-in name table | Godot has no Unicode name database; PyGDS ships about 200 names covering printable ASCII full names and common symbols (e.g. `\N{BULLET}',`\N{LATIN CAPITAL LETTER A}'). Names outside the table raise `SyntaxError: unknown Unicode character name` matching CPython's behaviour for unknown names |
 | P5 (was I2-38) | Implicit close of discarded generator objects is unimplementable | At `NOTIFICATION_PREDELETE` time in Godot 4.x the script instance is already detached, so the refcount reclamation path cannot drive `finally` (measured in the alpha.8 second batch, the theoretical fix path was disproved); code needing cleanup should call `close()` explicitly; re-check if a Godot upgrade loosens this |
 | P6 | Engine exit check lingers on the global class script resource graph | A self-referencing construction inside an inner class body (`X.new()` within class X's own methods) makes the engine retain the script's core class graph at exit and emit a warning; the triggering construction was avoided in v0.8.0-alpha.9 via a cross-class factory (exit warnings cleared), new inner classes should avoid that form; re-check if a Godot upgrade loosens this |
+
+### Audit Temporary Registry (removed after fixes)
+
+The entries below are behavior differences versus CPython newly registered by the 2026-10-07 full-project audit, not yet fixed; this section is removed with the fixing release. They are grouped under Issue (I1: explicit errors or missing features / I2: edge differences) and Design (D: intentional model), following the difference-list numbering convention (the I series starts at I1-74 / I2-63 and the D series at D5; numbers are never reused).
+
+| ID | Content | Details |
+| :--- | :--- | :--- |
+| I1-74 | `str.format` does not support field indexing / attribute access | `"{0[1]}".format([10, 20])` and `"{0.attr}".format(obj)` raise `KeyError: '0[1]'` / `KeyError: '0.attr'`; CPython supports index and dotted field access |
+| I1-75 | lambda parameter lists do not support the positional-only marker `/` | `lambda a, /, b: ...` raises `SyntaxError: Expected parameter name`; the `def` form is supported |
+| I1-76 | `round(True)` raises `TypeError` | bool is an int subclass and CPython returns `1`; PyGDS's round dispatches only on int/float |
+| I1-77 | Big-integer vs float comparison raises `OverflowError` in some directions | `10**400 > float("inf")` raises `int too large to convert to float`; CPython compares exactly and returns True; the `<` direction works |
+| I1-78 | `bytes(-1)` silently returns `b''` | CPython raises `ValueError: negative count` |
+| I1-79 | The `__doc__` / `__module__` / `__qualname__` / `__defaults__` metadata attributes are missing | Functions, classes, methods, lambdas and modules lack these attributes (`getattr` falls through to defaults); `__name__` is supported |
+| I1-80 | User-class `__del__` is never invoked | CPython calls `__del__` when the reference count reaches zero; PyGDS's reclamation path is based on the engine PREDELETE (same root cause as P5) and does not call `__del__` |
+| I1-81 | `operator.methodcaller` is not implemented | The other operator members are complete |
+| I1-82 | `float.fromhex` is not implemented | A CPython class-method builtin (`classmethod_descriptor`); `float.hex()` is supported, the reverse parsing is missing |
+| I2-63 | Protocol validation missing: invalid return values silently accepted | Negative `__len__` returns, non-bool `__bool__` returns, non-None `__init__` returns and non-str `__repr__` / `__str__` returns raise `TypeError` / `ValueError` in CPython; PyGDS silently accepts them (repr falls back to the default form) |
+| I2-64 | `str.format` does not reject mixed manual / automatic numbering | `"{1}{}".format(1, 2)` raises `ValueError: cannot switch from manual field specification to automatic field numbering` in CPython; PyGDS silently accepts it |
+| I2-65 | `except <non-exception class>` does not raise `TypeError` | CPython raises `catching classes that do not inherit from BaseException is not allowed`; PyGDS silently skips the clause and the exception keeps propagating |
+| I2-66 | `str(e)` falls back to the class name for custom exceptions that skip `super().__init__` | CPython formats the message from `args` (`str(E2(7))` is `"7"`); PyGDS returns the class name `"E2"` |
+| I2-67 | Classes with `__hash__ = None` remain hashable | CPython raises `TypeError: unhashable type`; PyGDS silently allows them as dict keys |
+| I2-68 | Module object repr uses a simplified form | `repr(math)` is `<module object>`; CPython prints `<module 'math' (built-in)>` |
+| I2-69 | The three-argument `type()` error message is not aligned | CPython prints `type.__new__() argument 3 must be dict, not int`; PyGDS prints `type() argument 3 ...` |
+| I2-70 | `type(type-alias instance)` returns `type` | CPython returns `TypeAliasType` |
+| I2-71 | Dotted imports and relative imports raise different error categories | `import math.floor` fails at parse time with `Unexpected token '.'` (CPython raises `ModuleNotFoundError` at runtime); `from . import x` raises `SyntaxError` (CPython raises `ImportError`) |
+| I2-72 | method_descriptor / wrapper_descriptor repr uses a placeholder owner name | `str(str.upper)` prints `<method 'upper' of '??' objects>`; CPython prints `of 'str' objects` |
+| I2-73 | Magic-method descriptors are not accessible on built-in type classes | `str.__add__` raises `AttributeError` (CPython returns the slot wrapper) |
+| I2-74 | Character classification covers only common Unicode ranges | `isspace` / `isprintable` / `isdigit` / `isnumeric` cover ASCII plus common Unicode ranges (superscript digits, full-width digits, etc.); the engine has no Unicode database, so remaining Nd / Nl / No code points are treated as non-digit / non-space (same platform limitation as P4) |
+| D5 | CPython 3.11+'s 4300-digit int↔str conversion limit is not emulated | CPython's `int_max_str_digits` is its own DoS protection; PyGDS's arbitrary-precision integers impose no such limit (intentional model) |
 
 ---
 

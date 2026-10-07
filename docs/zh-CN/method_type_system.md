@@ -2,9 +2,9 @@
 
 ## 概述
 
-PyGDS 的方法类型系统严格对标 CPython 的六种底层函数/方法类型。每种类型在 Python 交互环境中都有不同的 `type()` 输出和不同的行为语义，PyGDS 通过 `_type_name()` 方法返回与 CPython 一致的名称
+PyGDS 的方法类型系统对标 CPython 的底层函数/方法/描述符类型。每种类型在 Python 交互环境中都有不同的 `type()` 输出和不同的行为语义，PyGDS 通过 `_type_name()` 方法返回与 CPython 一致的名称
 
-这六种类型分别定义在 `pygds.gd` 中，外加一种 Property 描述符类型
+以下类型分别定义在 `pygds.gd` 中（含 Property 与两组包装器描述符，共十种）
 
 | PyGDS 类 | CPython 对应 |
 | :--- | :--- |
@@ -12,9 +12,12 @@ PyGDS 的方法类型系统严格对标 CPython 的六种底层函数/方法类�
 | `PyGDS.DSLBuiltinFunction` | `PyCFunction_Type` |
 | `PyGDS.DSLMethod` | `PyMethod_Type` |
 | `PyGDS.DSLMethodDescriptor` | `PyMethodDescr_Type` |
+| `PyGDS.DSLClassMethodDescriptor` | `PyClassMethodDescr_Type` |
 | `PyGDS.DSLWrappedDescriptor` | `PyWrapperDescr_Type` |
 | `PyGDS.DSLMethodWrapper` | `PyMethodWrapper_Type` |
 | `PyGDS.DSLProperty` | `PyProperty_Type` |
+| `PyGDS.DSLStaticMethodWrapper` | `PyStaticMethod_Type` |
+| `PyGDS.DSLClassMethodWrapper` | `PyClassMethod_Type` |
 
 ---
 
@@ -26,6 +29,7 @@ PyGDS 的方法类型系统严格对标 CPython 的六种底层函数/方法类�
 | `DSLBuiltinFunction` | `"builtin_function_or_method"` | `PyCFunction_Type` | 内置函数或已绑定的内置方法 |
 | `DSLMethod` | `"method"` | `PyMethod_Type` | 用户定义的绑定方法（实例方法、类方法） |
 | `DSLMethodDescriptor` | `"method_descriptor"` | `PyMethodDescr_Type` | 类级非魔法内置方法描述符（如 `str.upper`） |
+| `DSLClassMethodDescriptor` | `"classmethod_descriptor"` | `PyClassMethodDescr_Type` | 类级内置类方法描述符（METH_CLASS，如 `int.from_bytes` / `bytes.fromhex` / `dict.fromkeys`）；类级与实例级访问都解包为 `builtin_function_or_method`，调用不并入接收者 |
 | `DSLWrappedDescriptor` | `"wrapper_descriptor"` | `PyWrapperDescr_Type` | 类级魔法方法描述符（如 `int.__add__`） |
 | `DSLMethodWrapper` | `"method-wrapper"` | `PyMethodWrapper_Type` | 实例级魔法方法包装器（如 `(1).__add__`） |
 | `DSLProperty` | `"property"` | `PyProperty_Type` | `@property` 装饰器生成的数据描述符 |
@@ -65,7 +69,7 @@ obj.static_method       # → function       [staticmethod 在实例上访问, �
 
 ---
 
-## 七种方法类型详解
+## 方法类型详解
 
 | 方法类型 | 位于 | 对标 CPython | `_type_name()` 返回值 |
 | :--- | :--- | :--- | :--- |
@@ -118,7 +122,7 @@ func __get__(instance, owner):
 | 普通函数（类级访问） | 0 | null | `self`（DSLFunction） |
 | 普通函数（实例级访问） | 0 | obj | `DSLMethod(instance, self)` |
 
-**调用机制：** `DSLFunction` 自身的 `magic_call()` 是占位方法，返回 `null`，实际调用由 `Interpreter.call_user_function()` 处理
+**调用机制：** `DSLFunction` 的 `magic_call()` 在持有类解释器引用时转发 `Interpreter.call_user_function()`，无引用时返回 `null`
 
 ---
 
@@ -185,7 +189,7 @@ class DSLMethodDescriptor extends DSLObject:
     var callback: Callable          # GDScript 回调
 ```
 
-**`_dsl_str()` 输出示例：** `"<method 'upper' of 'str' objects>"`
+**`_dsl_str()` 输出示例：** `"<method 'upper' of '??' objects>"`（归属类名当前为硬编码占位 `??`，`str(str.upper)` 即输出该形态）
 
 ***描述符协议***
 
@@ -207,6 +211,16 @@ func magic_call(args, kwargs):
 
 ---
 
+### DSLClassMethodDescriptor
+
+位于 `PyGDS.DSLClassMethodDescriptor`，对应 CPython 的 `PyClassMethodDescr_Type`（`METH_CLASS` 内建）
+
+**承载对象：** `int.from_bytes` / `bytes.fromhex` / `bytearray.fromhex` / `dict.fromkeys`
+
+**与 `DSLMethodDescriptor` 的差异：** 类级与实例级访问都返回同一个未绑定的 `DSLBuiltinFunction`，调用时不并入接收者。CPython 的类方法描述符在访问时绑定所属类（首参传入 cls），但 PyGDS 的实现签名没有 cls 首参，因此解包为不绑定形态——两种形态在可观察行为上一致（`(5).from_bytes(b, "big")` 与 `int.from_bytes(b, "big")` 同结果）
+
+**`__dict__` 形态：** 经 `class_attrs` 暴露时（`int.__dict__["from_bytes"]` / `dict.__dict__["fromkeys"]`），`type()` 输出 `classmethod_descriptor`，与 CPython 的 `__dict__` 形态一致
+
 ### DSLWrappedDescriptor
 
 类级别的魔法方法（双下划线方法）描述符，用于 `__add__`、`__str__`、`__eq__` 等特殊方法
@@ -217,7 +231,7 @@ class DSLWrappedDescriptor extends DSLObject:
     var callback: Callable          # GDScript 回调
 ```
 
-**`_dsl_str()` 输出示例：** `"<slot wrapper '__add__' of 'int' objects>"`
+**`_dsl_str()` 输出示例：** `"<slot wrapper '__add__' of '??' objects>"`（归属类名当前为硬编码占位 `??`）
 
 ***描述符协议***
 
@@ -354,6 +368,7 @@ func __get__(instance, owner) -> DSLObject
 | 描述符类型 | `instance == null`（类级访问） | `instance != null`（实例级访问） |
 | :--- | :--- | :--- |
 | `DSLMethodDescriptor` | 返回自身（`method_descriptor`） | 返回 `DSLBuiltinFunction(name, callback, __self__=instance)` |
+| `DSLClassMethodDescriptor` | 返回未绑定 `DSLBuiltinFunction`（`builtin_function_or_method`） | 同左（不并入接收者，PyGDS 的实现签名无 cls 首参） |
 | `DSLWrappedDescriptor` | 返回自身（`wrapper_descriptor`） | 返回 `DSLMethodWrapper(self, instance)` |
 | `DSLFunction`（普通） | 返回自身（`function`） | 返回 `DSLMethod(instance, self)` |
 | `DSLFunction`（classmethod） | 返回 `DSLMethod(owner, self)` | 返回 `DSLMethod(owner, self)` |

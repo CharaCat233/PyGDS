@@ -2,7 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
-## [Unreleased]
+## [0.8.1] - 2026-10-07
+
+### 修复
+
+- **`map` / `zip` / `enumerate` / `filter` 惰性化**：四内建从急切求值返回列表改为返回 CPython 同形的惰性迭代器对象——类型名对齐（`type(zip()).__name__` 为 `zip` 等）、`iter(x) is x`、一次性消费语义（耗尽后为空）；构造期即校验实参可迭代（文案对齐 CPython 的 `'int' object is not iterable` 通用形态与 `map() must have at least two arguments.` / `filter expected 2 arguments, got N` / `enumerate() missing required argument 'iterable'` 等参数文案，未知关键字实参报 `'x' is an invalid keyword argument for zip()`）；`zip` 的 `strict` 校验改为在首个成员耗尽处按 CPython 文案报错（补齐三参以上 `argument 3 is shorter than arguments 1-2` 复数形态）；无限序列不再触顶（`list(islice(zip(count(), "ab"), 2))` 与 CPython 同结果）；挂起重放经调用节点记忆化 + 成员迭代器退出消费窗口 + 部分行缓冲三件套保证（`zip(map(f, 生成器), 生成器)` 等嵌套形态逐行一致）
+- **method_descriptor 系可调用判定**：`_dsl_is_callable` 补齐 `DSLMethodDescriptor` / `DSLWrappedDescriptor` / `DSLMethodWrapper` / `DSLMethod` / `DSLStaticMethodWrapper`（classmethod 包装对象维持不可调用，CPython 同形）——`callable(str.lower)` 恢复 `True`，`sorted` / `list.sort` 的 `key=str.lower` 不再静默忽略 key（原按无 key 排序产出错误结果），`min` / `max` 的 `key=` 接受未绑定内建方法（原误报 `'method_descriptor' object is not callable`）
+- **`str.isspace` / `str.isprintable` / `str.isdigit` / `str.isnumeric` 字符集对齐**：`isspace` 补齐 `\v` / `\f` / `\x1c`-`\x1f` / `\x85` / `\xa0` 与 Unicode 空白码段；`isprintable` 补 C0/C1 控制、Cf 格式符、私用区与分隔符判定；`isdigit` / `isnumeric` 补上标 / 下标 / 全角数字与常用文字数字码段（`"²".isdigit()` 与 `"²".isnumeric()` 恢复 `True`）；引擎无 Unicode 数据库，其余码段维持平台限制
+- **`str.maketrans` 对齐 staticmethod 语义与码点表值**：实例调用 `"ab".maketrans("a", "1")` 不再把接收者并入实参（原误报 the first two maketrans arguments must have equal length；经 `DSLStaticMethodWrapper` 包装注册）；双参 / 三参形态的表值改为码点整数（`{97: 49}`，原为单字符字符串 `{97: '1'}`），`str.translate` 按码点整数取 `chr` 替换（超界报 `ValueError: character mapping must be in range(0x110000)`）
+- **内置类方法对齐 `classmethod_descriptor`（方法类型系统补全）**：新增 `DSLClassMethodDescriptor`（对应 CPython 的 `PyClassMethodDescr_Type`），`int.from_bytes` / `bytes.fromhex` / `bytearray.fromhex` / `dict.fromkeys` 改经其注册——访问形态对齐（`type(int.from_bytes).__name__` 为 `builtin_function_or_method`，`int.__dict__["from_bytes"]` / `dict.__dict__["fromkeys"]` 为 `classmethod_descriptor`），实例级调用不再并入接收者（原 `(b"").fromhex("4142")` 会误报参数个数）；方法类型系统文档（中英）同步扩为十类型对照表并补 `DSLClassMethodDescriptor` / `DSLStaticMethodWrapper`（staticmethod）/ `DSLClassMethodWrapper`（classmethod）小节
+- **语句重放挂起标记保全（连带修复）**：`execute()` 序幕仅在无在途挂起时才清 `_needs_replay`——嵌套函数体（如 `sorted` 的 key 实参 lambda）在外层语句挂起已传播后执行时，不再吞掉外层的重放诉求（原使 `print(sorted(带睡眠生成器))` 每轮重放多打印一行 None）
+
+### 文档
+
+- **行为文档对齐实现现状**：README 中英兼容性矩阵修正 `contextlib` 与用户文件 `import` 两行过时宣称（两者均已实现）；`builtin.md` 中英修正 random 模块 PRNG 描述（实为 MT19937 对齐，原误记 xorshift32）并补齐 sys / contextlib 模块与 math `inf` / `nan`、random `getrandbits` / `getstate` / `setstate`、itertools `tee` / `chain.from_iterable`、collections `deque` / `OrderedDict`、operator `matmul` / `index` 成员；`builtin_types.md` 中英修正 `str.replace` `count` / `str.find` `start` / `end` / `str.casefold` 三条过时的「不支持」注记并扩写 dict 键类型机制；`exception_system.md` 中英重写 `except*` 异常组章节（已实现）与内置异常层次树 / 注册顺序（补 LookupError / OSError / UnicodeError 系等约 18 类并修正 KeyError / IndexError 归属）、`_dsl_str` 与 `__context__` 行为描述、`_is_subclass_of_klass` 伪码改 MRO 判定、ConsoleReport 字段名；`method_type_system.md` 中英修正 method_descriptor / wrapper_descriptor repr 示例与 `DSLFunction.magic_call` 描述并扩为十类型对照表（补 classmethod_descriptor / staticmethod / classmethod）；`architecture.md` 中英修正 MRO 描述（完整 C3 线性化）与异常层级、AST 表补范围注记；`usage.md` 中英修复转义示例代码块的引号缺失；`behavioral.md` 修正 `class_builtin_init` 条目的 frozenset 宣称
+- **README 中英新增「审计临时登记」节**：登记 2026-10-07 全项目审计新发现且尚未修复的与 CPython 行为差异（I1-74 ~ I1-81 / I2-63 ~ I2-74 / D5，含 `str.format` 字段访问、lambda 仅位置分隔符、`round(True)`、大数与浮点比较方向、元属性缺失、`__del__` 不触发、`operator.methodcaller` 未实现、协议校验缺失等），修复后随版本移除
 
 ## [0.8.0] - 2026-10-07
 

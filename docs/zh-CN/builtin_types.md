@@ -182,8 +182,12 @@ class DSLDict extends DSLObject:
 | `DSLInteger` | `int` |
 | `DSLFloat` | `float` |
 | `DSLBool` | `bool` |
+| `DSLTuple`（元素可哈希） | 规范化 `String` 键 |
+| `DSLFrozenSet` / `DSLBytes` / `DSLComplex` | 规范化 `String` 键 |
+| `DSLNone` | 固定 `String` 键 |
+| 定义了 `__hash__` 的用户类实例 | 身份键 |
 
-`PyGDS.DSLDict._key_to_variant` 方法负责此转换，若键类型不在上述列表中，会返回 `null` 并设置 `TypeError: unhashable type`
+`PyGDS.DSLDict._key_to_variant` 方法负责此转换，真正不可哈希的类型（`list` / `dict` / `set` / `bytearray` 及未定义 `__hash__` 的用户实例等）返回 `null` 并报 `TypeError: unhashable type`
 
 ### DSLSet — 集合类型
 
@@ -570,9 +574,8 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 ```python
 # Python: str.replace(old, new, count=-1)
 "hello".replace("l", "x") # "hexxo"
+"hello".replace("l", "x", 1) # "hexlo" (仅替换第一处)
 ```
-
-> **注意**：当前不支持 `count` 参数
 
 #### `str.find(sub) -> int`
 
@@ -580,9 +583,9 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 # Python: str.find(sub)
 "hello".find("l")         # 2
 "hello".find("z")         # -1
+"hello".find("l", 3)      # 3 (start 起始)
+"hello".find("l", 0, 2)   # -1 (end 界定)
 ```
-
-> **注意**：当前不支持 `start`/`end` 范围参数
 
 #### `str.startswith(prefix) -> bool`
 
@@ -628,7 +631,7 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "HELLO".casefold()        # "hello"
 ```
 
-> **注意**：当前等价于 `lower()`，未实现完整 Unicode case folding
+> **说明**：已实现部分完整折叠（`ß`→`ss`、`ﬁ`→`fi` 等常见特例），其余码点等价 `lower()`
 
 #### `str.title() -> str`
 

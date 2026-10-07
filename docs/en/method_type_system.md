@@ -2,9 +2,9 @@
 
 ## Overview
 
-PyGDS's method type system strictly aligns with CPython's six underlying function/method types. Each type has a different `type()` output and different behavioral semantics in the Python interactive environment. PyGDS returns names consistent with CPython through the `_type_name()` method.
+PyGDS's method type system aligns with CPython's underlying function/method/descriptor types. Each type has a different `type()` output and different behavioral semantics in the Python interactive environment. PyGDS returns names consistent with CPython through the `_type_name()` method.
 
-These six types are defined in `pygds.gd`, plus an additional Property descriptor type.
+The following types are defined in `pygds.gd` (ten in total, including the Property descriptor and the two wrapper descriptors).
 
 | PyGDS Class | CPython Equivalent |
 | :--- | :--- |
@@ -12,9 +12,12 @@ These six types are defined in `pygds.gd`, plus an additional Property descripto
 | `PyGDS.DSLBuiltinFunction` | `PyCFunction_Type` |
 | `PyGDS.DSLMethod` | `PyMethod_Type` |
 | `PyGDS.DSLMethodDescriptor` | `PyMethodDescr_Type` |
+| `PyGDS.DSLClassMethodDescriptor` | `PyClassMethodDescr_Type` |
 | `PyGDS.DSLWrappedDescriptor` | `PyWrapperDescr_Type` |
 | `PyGDS.DSLMethodWrapper` | `PyMethodWrapper_Type` |
 | `PyGDS.DSLProperty` | `PyProperty_Type` |
+| `PyGDS.DSLStaticMethodWrapper` | `PyStaticMethod_Type` |
+| `PyGDS.DSLClassMethodWrapper` | `PyClassMethod_Type` |
 
 ---
 
@@ -118,7 +121,7 @@ func __get__(instance, owner):
 | Ordinary function (class-level access) | 0 | null | `self` (DSLFunction) |
 | Ordinary function (instance-level access) | 0 | obj | `DSLMethod(instance, self)` |
 
-**Call Mechanism:** `DSLFunction`'s own `magic_call()` is a placeholder method that returns `null`. The actual invocation is handled by `Interpreter.call_user_function()`.
+**Call Mechanism:** `DSLFunction`'s `magic_call()` forwards to `Interpreter.call_user_function()` when the class interpreter reference is held, and returns `null` otherwise.
 
 ---
 
@@ -185,7 +188,7 @@ class DSLMethodDescriptor extends DSLObject:
     var callback: Callable          # GDScript callback
 ```
 
-**`_dsl_str()` Output Example:** `"<method 'upper' of 'str' objects>"`
+**`_dsl_str()` Output Example:** `"<method 'upper' of '??' objects>"` (the owner class name is currently a hardcoded `??` placeholder; `str(str.upper)` prints this form)
 
 ***Descriptor Protocol***
 
@@ -207,6 +210,16 @@ func magic_call(args, kwargs):
 
 ---
 
+### DSLClassMethodDescriptor
+
+Located in `PyGDS.DSLClassMethodDescriptor`, corresponding to CPython's `PyClassMethodDescr_Type` (`METH_CLASS` builtins).
+
+**Carried by:** `int.from_bytes` / `bytes.fromhex` / `bytearray.fromhex` / `dict.fromkeys`
+
+**Difference from `DSLMethodDescriptor`:** both class- and instance-level access return the same unbound `DSLBuiltinFunction`, and calls do not prepend a receiver. CPython's class-method descriptor binds the owning class on access (passing cls as the first argument), but PyGDS's implementation signatures have no cls first parameter, so it unwraps to the unbound form — the two forms are observably identical (`(5).from_bytes(b, "big")` gives the same result as `int.from_bytes(b, "big")`).
+
+**`__dict__` form:** when exposed through `class_attrs` (`int.__dict__["from_bytes"]` / `dict.__dict__["fromkeys"]`), `type()` prints `classmethod_descriptor`, matching CPython's `__dict__` form.
+
 ### DSLWrappedDescriptor
 
 A class-level magic method (double-underscore method) descriptor, used for special methods like `__add__`, `__str__`, `__eq__`, etc.
@@ -217,7 +230,7 @@ class DSLWrappedDescriptor extends DSLObject:
     var callback: Callable          # GDScript callback
 ```
 
-**`_dsl_str()` Output Example:** `"<slot wrapper '__add__' of 'int' objects>"`
+**`_dsl_str()` Output Example:** `"<slot wrapper '__add__' of '??' objects>"` (the owner class name is currently a hardcoded `??` placeholder)
 
 ***Descriptor Protocol***
 
@@ -354,6 +367,7 @@ func __get__(instance, owner) -> DSLObject
 | Descriptor Type | `instance == null` (Class-level Access) | `instance != null` (Instance-level Access) |
 | :--- | :--- | :--- |
 | `DSLMethodDescriptor` | Returns itself (`method_descriptor`) | Returns `DSLBuiltinFunction(name, callback, __self__=instance)` |
+| `DSLClassMethodDescriptor` | Returns an unbound `DSLBuiltinFunction` (`builtin_function_or_method`) | Same (no receiver prepended; PyGDS's implementation signature has no cls first parameter) |
 | `DSLWrappedDescriptor` | Returns itself (`wrapper_descriptor`) | Returns `DSLMethodWrapper(self, instance)` |
 | `DSLFunction` (ordinary) | Returns itself (`function`) | Returns `DSLMethod(instance, self)` |
 | `DSLFunction` (classmethod) | Returns `DSLMethod(owner, self)` | Returns `DSLMethod(owner, self)` |

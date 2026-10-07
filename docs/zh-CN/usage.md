@@ -301,9 +301,9 @@ print([z for v in range(6) if (z := v * v) > 4])   # [9, 16, 25]
 字符串与 bytes 字面量支持完整转义序列：`\n` `\t` `\r` `\a` `\b` `\f` `\v` `\\` `\'` `\"`、十六进制 `\xNN`、八进制 `\NNN`（1-3 位）、Unicode `\uNNNN` / `\UXXXXXXXX` 与具名转义 `\N{名称}`（支持内置名称表：ASCII 可打印字符全名与常用符号，如 `\N{BULLET}`、`\N{LATIN CAPITAL LETTER A}`）。`r"..."` 原始字符串完全跳过解码
 
 ```python
-print(len(\x41))             # 1
-print(\u4e2d)                # 中
-print(len(b\x00))            # 1 (bytes 支持 NUL 字节)
+print(len("\x41"))           # 1
+print("\u4e2d")              # 中
+print(len(b"\x00"))          # 1 (bytes 支持 NUL 字节)
 ```
 
 非法转义（如 `\xZZ`、`\u12`）报 `SyntaxError`；未识别转义（如 `\8`）按 CPython 原样保留。str 字面量不支持 NUL 字符（`\x00` 报 `SyntaxError`，Godot String 的平台限制），bytes 不受限
@@ -1268,7 +1268,7 @@ print(f.closed)               # True
 
 > **与挂起系统交互**：`with` 体、`__enter__` 与 `__exit__` 体内的 `time.sleep`（及主动挂起 API）均可正常挂起推进。体挂起重放后不重复执行 `__enter__`（进入标记），异常在途时 `__exit__` 挂起照常恢复并按返回值决定抑制或传播。生成器体中的 `with` 可跨 `yield` 保持进入状态，`close()` 注入的 `GeneratorExit` 同样经过退出路径
 >
-> **暂不支持**：`contextlib` 模块（P1-71）。括号化管理器列表（3.10）已支持：`with (a as b, c as d):` 按管理器列表解析（无 `as` 的 `with (a, b):` 亦为列表），右括号后随 `as` 时回退为元组表达式
+> `contextlib` 模块已支持（`contextmanager` / `closing` / `suppress` / `ExitStack` / `nullcontext`）。括号化管理器列表（3.10）已支持：`with (a as b, c as d):` 按管理器列表解析（无 `as` 的 `with (a, b):` 亦为列表），右括号后随 `as` 时回退为元组表达式
 
 ### raise ... from 异常链
 

@@ -25,7 +25,7 @@ class DSLException extends DSLObject:
 | 方法 | 行为 |
 | :--- | :--- |
 | `_type_name()` | 返回 `error_type`（异常类型名） |
-| `_dsl_str()` | 若 `message` 非空：`"ErrorType: message"`；否则：`"ErrorType"` |
+| `_dsl_str()` | 返回 `message` 本身（类型前缀由 raise 站点以 `类型名: 消息` 形式拼接） |
 | `_dsl_bool()` | 始终返回 `true`（异常对象的布尔值总是真） |
 | `_dsl_eq(other)` | 比较 `error_type` 和 `message` 是否都相同 |
 
@@ -33,7 +33,7 @@ class DSLException extends DSLObject:
 
 ```gdscript
 var exc = DSLException.new("division by zero", "ZeroDivisionError", [])
-print(exc._dsl_str())    # ZeroDivisionError: division by zero
+print(exc._dsl_str())    # division by zero
 print(exc._type_name())  # ZeroDivisionError
 print(exc._dsl_bool())   # true
 ```
@@ -48,23 +48,41 @@ PyGDS 将异常类型定义为 **`DSLClass` 实例**，而非单独的构造函�
 
 ```python
 BaseException                      # 根基类 (已注册为可引用名, 可捕获 / 可继承)
-├── Exception                      # 常规异常基类
+├── Exception                      # 常规异常基类 (默认基类: 未指定基类的异常均挂此处)
+│   ├── TypeError
+│   ├── ValueError
+│   │   ├── StatisticsError        # statistics 模块抛出
+│   │   └── UnicodeError
+│   │       ├── UnicodeEncodeError
+│   │       └── UnicodeDecodeError
+│   ├── RuntimeError
+│   │   ├── RecursionError
+│   │   └── NotImplementedError
+│   ├── NameError
+│   │   └── UnboundLocalError
+│   ├── AttributeError
+│   ├── ArithmeticError
+│   │   ├── ZeroDivisionError
+│   │   ├── OverflowError
+│   │   └── FloatingPointError
+│   ├── StopIteration
+│   ├── AssertionError
+│   ├── EOFError
+│   ├── ImportError
+│   ├── LookupError
+│   │   ├── IndexError
+│   │   └── KeyError
+│   ├── MemoryError
+│   └── OSError
+│       ├── FileNotFoundError
+│       └── UnsupportedOperation   # io 模块语义的文件操作错误
 ├── GeneratorExit                  # 生成器关闭 (close() 注入, 不继承 Exception)
-├── TypeError                      # 类型错误
-├── ValueError                     # 值错误
-│   └── StatisticsError            # 统计错误 (statistics 模块抛出)
-├── RuntimeError                   # 运行时错误
-├── NameError                      # 名称错误
-│   └── UnboundLocalError          # 未绑定局部变量
-├── KeyError                       # 键错误
-├── IndexError                     # 索引错误
-├── AttributeError                 # 属性错误
-├── ArithmeticError                # 算术错误
-│   └── ZeroDivisionError          # 除零错误
-├── StopIteration                  # 迭代停止
-├── AssertionError                 # 断言错误
-├── EOFError                       # 输入结束
-└── ImportError                    # 导入错误
+├── SystemExit
+├── KeyboardInterrupt
+├── StopAsyncIteration             # async for 耗尽
+├── SyntaxError
+└── BaseExceptionGroup             # 异常组 (PEP 654)
+    └── ExceptionGroup
 ```
 
 ### 注册机制 — `_define_exception`
@@ -113,20 +131,41 @@ func _define_exception(type_name: String, base_name: String = "Exception"):
 
 ```gdscript
 _define_exception("BaseException", "")          # 根基类, 无父类
+_define_exception("SystemExit", "BaseException")
 _define_exception("Exception", "BaseException") # 常规异常基类
-_define_exception("GeneratorExit", "BaseException")        # 不继承 Exception
 _define_exception("TypeError")                  # 默认继承自 Exception
 _define_exception("ValueError")
 _define_exception("RuntimeError")
 _define_exception("NameError")
-_define_exception("UnboundLocalError", "NameError")        # 指定父类
-_define_exception("KeyError")
-_define_exception("IndexError")
 _define_exception("AttributeError")
 _define_exception("ArithmeticError")
 _define_exception("ZeroDivisionError", "ArithmeticError")   # 指定父类
 _define_exception("StopIteration")
+_define_exception("StopAsyncIteration", "Exception")
+_define_exception("SyntaxError", "Exception")
+_define_exception("KeyboardInterrupt", "BaseException")
+_define_exception("BaseExceptionGroup", "BaseException")
+_define_exception("ExceptionGroup", "BaseExceptionGroup")
+_define_exception("GeneratorExit", "BaseException")        # 不继承 Exception
 _define_exception("AssertionError")
+_define_exception("EOFError")
+_define_exception("ImportError")
+_define_exception("StatisticsError", "ValueError")
+_define_exception("OverflowError", "ArithmeticError")
+_define_exception("FloatingPointError", "ArithmeticError")
+_define_exception("LookupError")
+_define_exception("IndexError", "LookupError")
+_define_exception("KeyError", "LookupError")
+_define_exception("UnboundLocalError", "NameError")
+_define_exception("RecursionError", "RuntimeError")
+_define_exception("NotImplementedError", "RuntimeError")
+_define_exception("MemoryError")
+_define_exception("OSError")
+_define_exception("FileNotFoundError", "OSError")
+_define_exception("UnsupportedOperation", "OSError")
+_define_exception("UnicodeError", "ValueError")
+_define_exception("UnicodeEncodeError", "UnicodeError")
+_define_exception("UnicodeDecodeError", "UnicodeError")
 ```
 
 ---
@@ -269,7 +308,7 @@ if stmt is RaiseStmt:
             last_exception = exc                   # 5. 设置 last_exception
             report.error(err_type + ": " + err_msg) # 6. 报告错误
         else:
-            raise_exception("TypeError", "exceptions must derive from Exception")
+            raise_exception("TypeError", "exceptions must derive from BaseException")
         return ExecResult.RAISE                    # 7. 返回 RAISE 状态
 ```
 
@@ -288,7 +327,7 @@ raise SomeError("msg")
         ▼
 3. 验证异常类型合法性
    ├── 是 DSLObject 且继承自 Exception / 已注册异常类？ → 合法
-   └── 否 → raise TypeError("exceptions must derive from Exception")
+   └── 否 → raise TypeError("exceptions must derive from BaseException")
         │
         ▼
 4. 有 from 子句? → evaluate(cause) → _store_exception_cause(exc, cause)
@@ -313,7 +352,7 @@ raise SomeError("msg")
 - `from None`：`__cause__` 为 `None`，`__suppress_context__` 为 `True`（CPython 语义：显式 `from` 任何值都置位抑制标记）
 - `from` 一个异常类时先无参实例化再存入；`__cause__` 可被用户代码重新赋值
 
-无 `from` 子句时 `__cause__` 默认为 `None`、`__suppress_context__` 默认为 `False`（`_exception_init` 写入默认字段）。隐式 `__context__` 链与未捕获输出的链式回溯打印未实现
+无 `from` 子句时 `__cause__` 默认为 `None`、`__suppress_context__` 默认为 `False`（`_exception_init` 写入默认字段）。隐式 `__context__` 链（捕获后重抛的自动串联）已实现。未捕获输出的链式回溯打印未实现
 
 ### `raise` 重新抛出
 
@@ -377,15 +416,10 @@ func _is_exception_match(exc, type_expr) -> bool:
 
 ```gdscript
 func _is_subclass_of_klass(target: DSLClass) -> bool:
-    var current = klass
-    while current != null:
-        if current == target:
-            return true
-        current = current.superclass
-    return false
+    return klass != null and klass.mro.has(target)
 ```
 
-从当前实例的类开始，沿着 `superclass` 链向上查找，检查是否到达目标类
+沿类的 C3 线性化序列（MRO）判定：目标类出现在本类的 MRO 中即为子类（多继承下与逐级上溯 superclass 链结果不同，以 MRO 为准）
 
 ---
 
@@ -601,7 +635,7 @@ finally:
 class ConsoleReport:
     var has_error: bool = false        # 是否有未处理的错误
     var last_error: String = ""        # 最近一次错误信息
-    var log_entries: Array = []        # 日志条目列表
+    var messages: Array[Array] = []    # 日志条目列表
 ```
 
 ### 日志级别
@@ -685,6 +719,6 @@ except ValueError as e:
     print("outer caught:", e)        # outer caught: ValueError: inner
 ```
 
-## `except*` 异常组 — 暂不实现
+## `except*` 异常组（PEP 654）
 
-`except*` 语法与 `ExceptionGroup` / `BaseExceptionGroup`（Python 3.11）在 PyGDS 中**暂不实现**。该特性需要独立的 ExceptionGroup 运行时子系统（异常分组拆分、子组匹配与传播、`eg.group` / `eg.subgroup` 属性），而 PyGDS 没有 asyncio / TaskGroup 生态，实际使用场景有限；仅做语法接受而无正确语义违背「要么正确，要么明确报错」的原则。当前书写 `except*` 会明确报 `SyntaxError`（`Unexpected token '*'`），字面构造 `ExceptionGroup` 报 `NameError`。
+`except*` 语法与 `ExceptionGroup` / `BaseExceptionGroup` 已完整实现：`ExceptionGroup(msg, exceptions)` / `BaseExceptionGroup(msg, exceptions)` 构造校验对齐 CPython（空序列 / 非异常成员报 `ValueError`，`ExceptionGroup` 含 `BaseException` 直系成员或消息非 str 报 `TypeError`）；`except* 类型 as e:` 按子组匹配，裸异常自动包装，命中的子组绑定到 `as` 名，子句完成后余量继续传播；`subgroup(filter)` / `split(filter)` 提供编程式拆分。行为细节与逐例说明见 `ci/cases/exception_group.py` 与 `exception_except_star.py`。

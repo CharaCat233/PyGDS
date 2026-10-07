@@ -25,7 +25,7 @@ class DSLException extends DSLObject:
 | Method | Behavior |
 | :--- | :--- |
 | `_type_name()` | Returns `error_type` (the exception type name) |
-| `_dsl_str()` | If `message` is non-empty: `"ErrorType: message"`; otherwise: `"ErrorType"` |
+| `_dsl_str()` | Returns `message` itself (the type prefix is joined at the raise site as `TypeName: message`) |
 | `_dsl_bool()` | Always returns `true` (the boolean value of an exception object is always true) |
 | `_dsl_eq(other)` | Compares whether both `error_type` and `message` are the same |
 
@@ -33,7 +33,7 @@ class DSLException extends DSLObject:
 
 ```gdscript
 var exc = DSLException.new("division by zero", "ZeroDivisionError", [])
-print(exc._dsl_str())    # ZeroDivisionError: division by zero
+print(exc._dsl_str())    # division by zero
 print(exc._type_name())  # ZeroDivisionError
 print(exc._dsl_bool())   # true
 ```
@@ -48,23 +48,41 @@ PyGDS defines exception types as **`DSLClass` instances**, not as separate const
 
 ```python
 BaseException                      # Root class (registered as a referenceable name: catchable / inheritable)
-├── Exception                      # Base class for regular exceptions
+├── Exception                      # Base class for regular exceptions (default base)
+│   ├── TypeError
+│   ├── ValueError
+│   │   ├── StatisticsError        # Statistics error (raised by the statistics module)
+│   │   └── UnicodeError
+│   │       ├── UnicodeEncodeError
+│   │       └── UnicodeDecodeError
+│   ├── RuntimeError
+│   │   ├── RecursionError
+│   │   └── NotImplementedError
+│   ├── NameError
+│   │   └── UnboundLocalError
+│   ├── AttributeError
+│   ├── ArithmeticError
+│   │   ├── ZeroDivisionError
+│   │   ├── OverflowError
+│   │   └── FloatingPointError
+│   ├── StopIteration
+│   ├── AssertionError
+│   ├── EOFError
+│   ├── ImportError
+│   ├── LookupError
+│   │   ├── IndexError
+│   │   └── KeyError
+│   ├── MemoryError
+│   └── OSError
+│       ├── FileNotFoundError
+│       └── UnsupportedOperation   # io-module-style file operation errors
 ├── GeneratorExit                  # Generator closing (injected by close(), does not inherit Exception)
-├── TypeError                      # Type error
-├── ValueError                     # Value error
-│   └── StatisticsError            # Statistics error (raised by the statistics module)
-├── RuntimeError                   # Runtime error
-├── NameError                      # Name error
-│   └── UnboundLocalError          # Unbound local variable
-├── KeyError                       # Key error
-├── IndexError                     # Index error
-├── AttributeError                 # Attribute error
-├── ArithmeticError                # Arithmetic error
-│   └── ZeroDivisionError          # Division by zero error
-├── StopIteration                  # Iteration stop
-├── AssertionError                 # Assertion error
-├── EOFError                       # End of input
-└── ImportError                    # Import error
+├── SystemExit
+├── KeyboardInterrupt
+├── StopAsyncIteration             # async for exhaustion
+├── SyntaxError
+└── BaseExceptionGroup             # Exception groups (PEP 654)
+    └── ExceptionGroup
 ```
 
 ### Registration Mechanism — `_define_exception`
@@ -113,20 +131,41 @@ func _define_exception(type_name: String, base_name: String = "Exception"):
 
 ```gdscript
 _define_exception("BaseException", "")          # Root class, no parent
+_define_exception("SystemExit", "BaseException")
 _define_exception("Exception", "BaseException") # Base class for regular exceptions
-_define_exception("GeneratorExit", "BaseException")        # does not inherit Exception
 _define_exception("TypeError")                  # Defaults to inheriting from Exception
 _define_exception("ValueError")
 _define_exception("RuntimeError")
 _define_exception("NameError")
-_define_exception("UnboundLocalError", "NameError")        # parent specified
-_define_exception("KeyError")
-_define_exception("IndexError")
 _define_exception("AttributeError")
 _define_exception("ArithmeticError")
-_define_exception("ZeroDivisionError", "ArithmeticError")   # Specifies parent class
+_define_exception("ZeroDivisionError", "ArithmeticError")   # parent specified
 _define_exception("StopIteration")
+_define_exception("StopAsyncIteration", "Exception")
+_define_exception("SyntaxError", "Exception")
+_define_exception("KeyboardInterrupt", "BaseException")
+_define_exception("BaseExceptionGroup", "BaseException")
+_define_exception("ExceptionGroup", "BaseExceptionGroup")
+_define_exception("GeneratorExit", "BaseException")        # does not inherit Exception
 _define_exception("AssertionError")
+_define_exception("EOFError")
+_define_exception("ImportError")
+_define_exception("StatisticsError", "ValueError")
+_define_exception("OverflowError", "ArithmeticError")
+_define_exception("FloatingPointError", "ArithmeticError")
+_define_exception("LookupError")
+_define_exception("IndexError", "LookupError")
+_define_exception("KeyError", "LookupError")
+_define_exception("UnboundLocalError", "NameError")
+_define_exception("RecursionError", "RuntimeError")
+_define_exception("NotImplementedError", "RuntimeError")
+_define_exception("MemoryError")
+_define_exception("OSError")
+_define_exception("FileNotFoundError", "OSError")
+_define_exception("UnsupportedOperation", "OSError")
+_define_exception("UnicodeError", "ValueError")
+_define_exception("UnicodeEncodeError", "UnicodeError")
+_define_exception("UnicodeDecodeError", "UnicodeError")
 ```
 
 ---
@@ -268,7 +307,7 @@ if stmt is RaiseStmt:
             last_exception = exc                   # 5. Set last_exception
             report.error(err_type + ": " + err_msg) # 6. Report the error
         else:
-            raise_exception("TypeError", "exceptions must derive from Exception")
+            raise_exception("TypeError", "exceptions must derive from BaseException")
         return ExecResult.RAISE                    # 7. Return RAISE status
 ```
 
@@ -287,7 +326,7 @@ raise SomeError("msg")
         ▼
 3. Validate exception type legality
    ├── Is it a DSLObject inheriting from Exception / a registered exception class? → Valid
-   └── No → raise TypeError("exceptions must derive from Exception")
+   └── No → raise TypeError("exceptions must derive from BaseException")
         │
         ▼
 4. Has a from clause? → evaluate(cause) → _store_exception_cause(exc, cause)
@@ -312,7 +351,7 @@ For `raise X from Y`, the cause exception is stored into the exception instance 
 - `from None`: `__cause__` is `None` and `__suppress_context__` is `True` (CPython semantics: an explicit `from` of any value sets the suppression flag)
 - A class used after `from` is instantiated with no arguments first, then stored; `__cause__` can be reassigned by user code
 
-Without a `from` clause, `__cause__` defaults to `None` and `__suppress_context__` to `False` (default fields written by `_exception_init`). The implicit `__context__` chain and chained traceback printing for uncaught errors are not implemented
+Without a `from` clause, `__cause__` defaults to `None` and `__suppress_context__` to `False` (default fields written by `_exception_init`). The implicit `__context__` chain (automatic linking across re-raises after a catch) is implemented. Chained traceback printing for uncaught errors is not implemented
 
 ### `raise` Re-raising
 
@@ -376,15 +415,10 @@ Located in `PyGDS.DSLObject._is_subclass_of_klass`
 
 ```gdscript
 func _is_subclass_of_klass(target: DSLClass) -> bool:
-    var current = klass
-    while current != null:
-        if current == target:
-            return true
-        current = current.superclass
-    return false
+    return klass != null and klass.mro.has(target)
 ```
 
-Starting from the current instance's class, traverses upward along the `superclass` chain to check whether it reaches the target class.
+Checks the class's C3-linearized MRO: the target class being present in the MRO means subclass. With multiple inheritance this differs from walking the `superclass` chain; the MRO is authoritative.
 
 ---
 
@@ -600,7 +634,7 @@ Located in `PyGDS.ConsoleReport`
 class ConsoleReport:
     var has_error: bool = false        # Whether there is an unhandled error
     var last_error: String = ""        # The most recent error message
-    var log_entries: Array = []        # List of log entries
+    var messages: Array[Array] = []    # List of log entries
 ```
 
 ### Log Levels
@@ -684,6 +718,6 @@ except ValueError as e:
     print("outer caught:", e)        # outer caught: ValueError: inner
 ```
 
-## `except*` Exception Groups — Not Implemented
+## `except*` Exception Groups (PEP 654)
 
-The `except*` syntax and `ExceptionGroup` / `BaseExceptionGroup` (Python 3.11) are **not implemented** in PyGDS. The feature requires a dedicated ExceptionGroup runtime subsystem (group splitting, sub-group matching and propagation, `eg.group` / `eg.subgroup` attributes), while PyGDS has no asyncio / TaskGroup ecosystem and limited practical use cases; accepting the syntax without correct semantics would violate the "either correct or an explicit error" principle. Writing `except*` currently raises an explicit `SyntaxError` (`Unexpected token '*'`), and constructing `ExceptionGroup` literally raises `NameError`.
+The `except*` syntax and `ExceptionGroup` / `BaseExceptionGroup` are fully implemented: construction validation matches CPython (empty sequences / non-exception members raise `ValueError`; `ExceptionGroup` with a direct `BaseException` member or a non-str message raises `TypeError`); `except* Type as e:` matches by sub-group, bare exceptions are auto-wrapped, the matched sub-group binds to the `as` name, and the remainder keeps propagating after each clause completes; `subgroup(filter)` / `split(filter)` provide programmatic splitting. Behavioral details are covered by `ci/cases/exception_group.py` and `exception_except_star.py`.

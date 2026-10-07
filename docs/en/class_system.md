@@ -113,7 +113,7 @@ func _dsl_setattr(name: String, value: DSLObject):
     if fields != null:
         fields[name] = value
         return
-    last_error = "TypeError: '%s' object has no __dict__" % _type_name()
+    last_error = "AttributeError: '%s' object has no attribute '%s'" % [type_name, attr_name]
 ```
 
 **Setting priority:** Property descriptor (`__set__`) → Class `__setattr__` → Instance `fields` dictionary
@@ -227,7 +227,7 @@ Located in `PyGDS.Interpreter.api_object_new`.
 func api_object_new(args, _kwargs):
     var cls = args[0]
     if not cls is DSLClass:
-        raise_exception("TypeError", "object.__new__(X): X is not a type object")
+        raise_exception("TypeError", "object.__new__(X): X is not a type object (%s)")
         return null
     var obj = DSLObject.new()
     obj.klass = cls
@@ -309,7 +309,7 @@ Their `__new__` is bound to `api_<type>_new` (returning a raw DSLObject), and `_
 
 `PyGDS.Interpreter.execute_class` handles user-defined classes (including `object` itself).
 
-1. **Evaluate the base class list**: evaluate each expression in `ClassStmt.bases` and validate it as a `DSLClass`; `*iterable` star bases (PEP 448 class-side generalization) expand each element of the iterable as one base (`Value after * must be an iterable, not X` / `all bases must be classes`); when the list is empty and the class is not named `object`, default to `object`.
+1. **Evaluate the base class list**: evaluate each expression in `ClassStmt.bases` and validate it as a `DSLClass`; `*iterable` star bases (PEP 448 class-side generalization) expand each element of the iterable as one base (`Value after * must be an iterable, not X`; non-class bases go through metaclass-candidate resolution, with conflicts raising a metaclass conflict); when the list is empty and the class is not named `object`, default to `object`.
 2. **Consistency checks** (before the class body runs): duplicate direct base check, C3 linearization (raising `TypeError` on conflict), instance layout conflict check.
 3. **Collect methods and class attributes** (the class-body scope `class_env` hangs below the module environment):
    - `FunctionStmt` → create a `DSLFunction`, store in `methods`
@@ -449,7 +449,7 @@ Decorator expressions are evaluated through the `evaluate()` channel, so a `time
 
 ### Class Creation Flow
 
-`execute_class` runs in sequence: evaluate each base expression (`superclass must be a class` validation) → default to `object` when no bases are given → duplicate direct base check (`duplicate base class A`) → compute and cache the C3 linearization (raising `Cannot create a consistent method resolution order (MRO) for bases A, B` when inconsistent) → layout conflict check (`multiple bases have instance lay-out conflict`; each direct base's layout root is the first built-in layout type along its MRO, with exception classes treated as one shared layout) → execute the class body. The three-argument `type(name, bases, dict)` form runs the same checks.
+`execute_class` runs in sequence: evaluate each base expression (non-class bases go through metaclass-candidate resolution with forwarded call messages; the three-argument `type` path raises `bases must be types`) → default to `object` when no bases are given → duplicate direct base check (`duplicate base class A`) → compute and cache the C3 linearization (raising `Cannot create a consistent method resolution order (MRO) for bases A, B` when inconsistent) → layout conflict check (`multiple bases have instance lay-out conflict`; each direct base's layout root is the first built-in layout type along its MRO, with exception classes treated as one shared layout) → execute the class body. The three-argument `type(name, bases, dict)` form runs the same checks.
 
 ### MRO-Driven Lookup Points
 
