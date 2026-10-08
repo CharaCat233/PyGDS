@@ -8,6 +8,24 @@
 
 语句与表达式文法构造及其编译期 SyntaxError。边界原则：用例归入引入该行为的构造——`for` 内拆包属 `syntax_for`，推导式内的 `for` 属推导式家族；`match` 的重复绑定等编译期检查挂在 `syntax_match_*` 名下。
 
+### class_protocol_validate
+
+- 职责: 用户类魔法方法返回类型校验 (`__len__`/`__bool__`/`__init__`/`__repr__`/`__str__` 非法返回报 TypeError/ValueError)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
+
+### exception_except_bad_type
+
+- 职责: except 子句类型非法 (非 BaseException 子类) 报 TypeError
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_except_bad_type.py](../../ci/cases/exception_except_bad_type.py)
+
+### exception_str_uninit
+
+- 职责: 自定义异常未调 super().__init__ 时 str(e) 按 args 格式化
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
+
 ### syntax_annotation
 
 - 职责: 函数参数/返回值/变量的类型注解
@@ -1134,6 +1152,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 
 `1+0j` 与 `1` 为同键同哈希, 序比较报 `'<' not supported...`, 复数幂的整数指数走精确重复乘法, 非整数指数 (含 `**0.5`) 为 libm 极坐标路径, 比对须 `round(..., N)` (ci.md 规则 4)
 
+### type_ctor_three_args
+
+- 职责: type() 三参错误文案对齐 type.__new__()
+- 比对: `same_output`
+- 源文件: [ci/cases/type_ctor_three_args.py](../../ci/cases/type_ctor_three_args.py)
+
 ### type_matmul
 
 - 职责: `@` 矩阵乘运算符 (P2-16, 语法层): 内建类型的 `TypeError: unsupported operand type(s) for @` 文案, 用户 `__matmul__` / `__rmatmul__` 跨类型反射, 与 `*` 同优先级, `@=` 增强赋值与 `operator.matmul`
@@ -1387,6 +1411,12 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 - 职责: `format` 嵌套格式规格动态宽度与精度
 - 比对: `same_output`
 - 源文件: [ci/cases/type_str_format_nested.py](../../ci/cases/type_str_format_nested.py)
+
+### type_str_format_numbering
+
+- 职责: str.format 手动/自动字段编号混用报 ValueError
+- 比对: `same_output`
+- 源文件: [ci/cases/type_str_format_numbering.py](../../ci/cases/type_str_format_numbering.py)
 
 ### type_str_format_thousands
 
@@ -2183,3 +2213,9 @@ PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的�
 - 源文件: [ci/cases/suspend_zip_multi_arg.py](../../ci/cases/suspend_zip_multi_arg.py)
 
 zip 逐参消费, 某参数消费中途挂起时立即传播挂起并放弃本次调用, 不在 `_suspended` 置位下继续取下一个参数的迭代器 (用户 `__iter__` 会假挂起返回 null, 被误报 `zip() arg is not iterable`); 重放轮各参数经生成器记忆按出现次序复用 (I2-61)。附单参对照与实例带字段、三参、混合序列形态; 协议驱动的 `__iter__` / `__next__` 不借用 ambient 调用节点参与 retired 完成记录
+
+### type_type_alias_type
+
+- 职责: type(类型别名实例) 返回 TypeAliasType
+- 比对: `same_output`
+- 源文件: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)

@@ -2985,21 +2985,44 @@ class DSLObject:
 			var method = klass._lookup_method("__str__")
 			if method != null:
 				var res = klass._invoke_func(method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				var ip = Interpreter.active
+				if ip != null and ip.report.has_error:
+					return DSLString.new("")
 				if res is DSLString:
 					return res
+				# I2-63: __str__ 必须返回字符串 (CPython 文案按返回类型)
+				if res != null and ip != null and not ip._suspended:
+					ip.raise_exception("TypeError", "__str__ returned non-string (type %s)" % res._type_name())
+				return DSLString.new("")
 			# Fall back to __repr__ if __str__ is not defined
 			var repr_method = klass._lookup_method("__repr__")
 			if repr_method != null:
 				var rep_res = klass._invoke_func(repr_method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				var ip2 = Interpreter.active
+				if ip2 != null and ip2.report.has_error:
+					return DSLString.new("")
 				if rep_res is DSLString:
 					return rep_res
+				# I2-63: str() 经 __repr__ 回退时, 非字符串按 str() 路径文案报错 (CPython 同)
+				if rep_res != null and ip2 != null and not ip2._suspended:
+					ip2.raise_exception("TypeError", "__str__ returned non-string (type %s)" % rep_res._type_name())
+				return DSLString.new("")
 		return DSLString.new(_dsl_str())
 	
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if klass != null:
 			var method = klass._lookup_method("__repr__")
 			if method != null:
-				return klass._invoke_func(method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				var res = klass._invoke_func(method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				var ip = Interpreter.active
+				if ip != null and ip.report.has_error:
+					return DSLString.new("")
+				if res is DSLString:
+					return res
+				# I2-63: __repr__ 必须返回字符串 (CPython 文案按返回类型)
+				if res != null and ip != null and not ip._suspended:
+					ip.raise_exception("TypeError", "__repr__ returned non-string (type %s)" % res._type_name())
+				return DSLString.new("")
 		return DSLString.new("<" + _type_name() + " object>")
 	
 	## 从元素数组构建 set (dict 视图集合运算用)
@@ -3107,15 +3130,25 @@ class DSLObject:
 	## 真值判定, 按 CPython 的优先级查用户类协议 [br]
 	## __bool__ 优先, 无 __bool__ 但定义了 __len__ 时以非 0 为真, 两者都无则恒为真 [br]
 	## 与 __len__ / __str__ / __contains__ / __eq__ 的既有桥接保持同一形状 [br]
+	## __bool__ 返回非 bool 时按 CPython 报 TypeError (I2-63), 错误通道由调用方 [br]
+	## 经 report.has_error 传播; 返回 false 仅为占位, 不得据此继续执行语义 [br]
 	## [returns] 对象的真值
 	func _dsl_bool() -> bool:
 		if klass != null:
 			var bool_method = klass._lookup_method("__bool__")
 			if bool_method != null:
 				var bool_res = klass._invoke_func(bool_method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				var ip = Interpreter.active
+				if ip != null and ip.report.has_error:
+					return false
 				if bool_res is DSLBool:
 					return bool_res.value
-				return true
+				if bool_res == null:
+					# 挂起等未产出结果: 回退假值 (错误通道未置, 由挂起重放机制接手)
+					return false
+				if ip != null:
+					ip.raise_exception("TypeError", "__bool__ should return bool, returned %s" % bool_res._type_name())
+				return false
 			var len_method = klass._lookup_method("__len__")
 			if len_method != null:
 				var len_res = klass._invoke_func(len_method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
@@ -3491,7 +3524,7 @@ class DSLObject:
 			_pow10_exact.append(p)
 			p *= 10.0
 
-	## 正确舍入的十进制数转 double (str→float 的统一数值核心) [br]
+	## 正确舍入的十进制数转 double (str -> float 的统一数值核心) [br]
 	## 引擎的字符串解析对部分难例不做正确舍入且对极小指数返回 0, [br]
 	## 字面量 / float() / complex() / format 回转 / repr 往返验证统一经此解析 [br]
 	## 快路径: 有效尾数低于 2^53 且 |十进制指数| ≤ 22 时, 尾数与 10^±k 均为精确 [br]
@@ -3750,7 +3783,7 @@ class DSLObject:
 		else:
 			for i in range(-ep):
 				_digits_mul(dg, 5)
-			frac_len = -ep
+			frac_len = - ep
 			while dg.size() <= frac_len:
 				dg.insert(0, 0)
 		return [dg, frac_len]
@@ -4243,7 +4276,7 @@ class DSLBool extends DSLObject:
 
 	## 一元运算: 同样按整数语义处理
 	func magic_neg(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(-(1 if value else 0))
+		return DSLInteger.pooled(- (1 if value else 0))
 
 	func magic_pos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLInteger.pooled(1 if value else 0)
@@ -4889,7 +4922,7 @@ class DSLBigInt:
 		var mag = mag_add(limbs, [1]) if not neg else mag_sub(limbs, [1])
 		if mag.is_empty():
 			return [false, _zero_limbs()]
-		return [not neg, mag]
+		return [ not neg, mag]
 
 	## 带符号幂 (exp >= 0): 超出 MAX_BITS 返回 null (调用方报 MemoryError)
 	static func big_pow(neg: bool, limbs: Array[int], exp: int):
@@ -5507,7 +5540,7 @@ class DSLInteger extends DSLObject:
 				# 结果幅值超界预判: 负底数奇次幂允许恰为最小整数; 超界 -> 大数路径自动升级
 				var fbase = float(base)
 				if fbase < 0.0:
-					fbase = -fbase
+					fbase = - fbase
 				if fbase >= 2.0 and exp_int > 1:
 					var est = pow(fbase, float(exp_int))
 					var allow_min = base < 0 and exp_int % 2 == 1
@@ -6409,7 +6442,7 @@ class DSLComplex extends DSLObject:
 		return real != 0.0 or imag != 0.0
 
 	func magic_neg(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLComplex.new(-(args[0] as DSLComplex).real, -(args[0] as DSLComplex).imag)
+		return DSLComplex.new(- (args[0] as DSLComplex).real, - (args[0] as DSLComplex).imag)
 
 	func magic_pos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return args[0]
@@ -7336,11 +7369,20 @@ class DSLString extends DSLObject:
 		var primary = name_part.substr(0, p)
 		var val: DSLObject = null
 		if primary == "":
+			# I2-64: 自动编号与手动编号混用报 ValueError (CPython 文案按切换方向区分)
+			if idx_box[1] == "manual":
+				last_error = "ValueError: cannot switch from manual field specification to automatic field numbering"
+				return ""
+			idx_box[1] = "auto"
 			var a = idx_box[0]
 			if a < fmt_args.size():
 				val = fmt_args[a]
 			idx_box[0] = a + 1
 		elif _fmt_key_is_int(primary):
+			if idx_box[1] == "auto":
+				last_error = "ValueError: cannot switch from automatic field numbering to manual field specification"
+				return ""
+			idx_box[1] = "manual"
 			var a = int(primary)
 			if a >= 0 and a < fmt_args.size():
 				val = fmt_args[a]
@@ -7605,7 +7647,9 @@ class DSLString extends DSLObject:
 	func _is_py_ws(ch: String) -> bool:
 		return ch == " " or ch == "	" or ch == "
 " or ch == "
-" or ch == "" or ch == ""
+" or ch == "
+" or ch == "
+"
 
 	func builtin_split(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
@@ -8357,7 +8401,7 @@ class DSLString extends DSLObject:
 			elif rep_obj is DSLNone:
 				pass
 			elif rep_obj is DSLInteger:
-				# 码点整数映射为对应字符 (CPython 同形: {97: 120} → 'x')
+				# 码点整数映射为对应字符 (CPython 同形: {97: 120} -> 'x')
 				var cp = (rep_obj as DSLInteger).value
 				if (rep_obj as DSLInteger).is_big() or cp < 0 or cp > 0x10FFFF:
 					last_error = "ValueError: character mapping must be in range(0x110000)"
@@ -8499,7 +8543,8 @@ class DSLString extends DSLObject:
 		if template == "{}" and fmt_args.size() == 1 and fmt_args[0] is DSLString:
 			return fmt_args[0]
 		var result = ""
-		var idx_box = [0]
+		# idx_box[0] = 自动编号游标; idx_box[1] = 字段编号模式 ("" / "auto" / "manual", I2-64)
+		var idx_box = [0, ""]
 		var i = 0
 		# 上一次格式化可能残留 proto 侧错误, 先清除避免误判
 		last_error = ""
@@ -12509,7 +12554,7 @@ class DSLGeneratorContextManager extends DSLContextlibManager:
 	## 生成器耗尽判定: 耗尽以 StopIteration 表达 (迭代协议语义), [br]
 	## 命中时清理错误通道与 last_exception 并返回 true
 	func _cm_exhausted() -> bool:
-		if gen._finished and Interpreter.active.last_exception != null 				and Interpreter.active.last_exception._type_name() == "StopIteration":
+		if gen._finished and Interpreter.active.last_exception != null and Interpreter.active.last_exception._type_name() == "StopIteration":
 			Interpreter.active.report.clear_error()
 			Interpreter.active.last_exception = null
 			return true
@@ -15104,14 +15149,18 @@ class DSLClass extends DSLObject:
 			if pending.fields == null and DSLObject._builtin_class_by_name.get(self.name) != self:
 				pending.fields = {}
 			var pending_init = _lookup_method("__init__")
+			var pending_ret: DSLObject = null
 			if pending_init != null and pending._is_subclass_of_klass(self):
 				var pending_args: Array[DSLObject] = [pending]
 				pending_args.append_array(args)
-				_invoke_func(pending_init, pending_args, kwargs)
+				pending_ret = _invoke_func(pending_init, pending_args, kwargs)
 			if not interp._suspended:
 				interp._suspended_ctor_instance = null
 				interp._suspended_ctor_cls = null
 				interp._suspended_ctor_args.clear()
+				if pending_ret != null and not (pending_ret is DSLNone) and not interp.report.has_error:
+					# I2-63: 挂起重放完成的 __init__ 同样必须返回 None
+					interp.raise_exception("TypeError", "__init__() should return None, not '%s'" % pending_ret._type_name())
 			return pending
 		var new_func = _lookup_method("__new__")
 		var new_args: Array[DSLObject] = [self]
@@ -15145,12 +15194,15 @@ class DSLClass extends DSLObject:
 		if init_func != null and instance._is_subclass_of_klass(self):
 			var init_args: Array[DSLObject] = [instance]
 			init_args.append_array(args)
-			_invoke_func(init_func, init_args, kwargs)
+			var init_ret = _invoke_func(init_func, init_args, kwargs)
 			if interp._suspended:
 				interp._suspended_ctor_instance = instance
 				interp._suspended_ctor_cls = self
 				interp._suspended_ctor_args = args.duplicate()
 				interp._suspended_ctor_key = interp._sleep_root_key
+			elif init_ret != null and not (init_ret is DSLNone) and not interp.report.has_error:
+				# I2-63: __init__ 必须返回 None, 否则按 CPython 报 TypeError
+				interp.raise_exception("TypeError", "__init__() should return None, not '%s'" % init_ret._type_name())
 		return instance
 	
 	## 判断类是否异常体系子类 (沿 MRO 查到 Exception 或根 BaseException) [br]
@@ -20776,7 +20828,7 @@ class Parser:
 				var lit_tok = advance()
 				var folded: int = lit_tok.literal
 				if op.type == TokenType.MINUS:
-					folded = -folded
+					folded = - folded
 				return Literal.new(folded)
 			# 显形修正: 一元操作数取完整 power 表达式 (CPython 文法 u_expr -> power),
 			# 使 -10**30 解析为 -(10**30) 而非 (-10)**30
@@ -23476,6 +23528,20 @@ class Interpreter:
 	## [param exc] 被抛出的异常实例 [br]
 	## [param type_expr] except 子句的类型表达式 [br]
 	## [returns] 是否匹配
+	## 匹配期抛出「非法 except 类型」TypeError [br]
+	## 匹配期 report.has_error 恒为真 (在途异常已报告), 直接 raise 会使 report.error 成为 [br]
+	## no-op 且 magic_call 提前返回 (__init__ 不跑, _wrapped 为空), 顶层仍报告在途原异常; [br]
+	## 故临时清 has_error 使新异常完整构造并被记录为报告错误 (I2-65)
+	func _raise_invalid_except_type() -> void:
+		var saved_he = report.has_error
+		report.has_error = false
+		raise_exception("TypeError", "catching classes that do not inherit from BaseException is not allowed")
+		report.has_error = saved_he
+
+	## 判断异常是否命中 except 子句类型表达式 [br]
+	## 类型表达式必须是可捕获异常类 (自身或元组成员为 BaseException 子类的类), [br]
+	## 否则按 CPython 报 TypeError: catching classes that do not inherit from [br]
+	## BaseException is not allowed (I2-65); 元组的全部成员先整体校验再匹配
 	func _is_exception_match(exc, type_expr) -> bool:
 		if type_expr == null:
 			return true
@@ -23487,15 +23553,48 @@ class Interpreter:
 			return false
 		if type_obj is DSLTuple:
 			for item in type_obj.items:
+				if not _is_catchable_exception_class(item):
+					_raise_invalid_except_type()
+					return false
+			for item in type_obj.items:
 				if item is DSLClass and exc.fields != null:
 					if exc._is_subclass_of_klass(item):
 						return true
 			return false
 		if not type_obj is DSLClass:
+			_raise_invalid_except_type()
+			return false
+		if not _is_catchable_exception_class(type_obj):
+			_raise_invalid_except_type()
 			return false
 		if exc.fields != null:
 			return exc._is_subclass_of_klass(type_obj)
 		return false
+
+	## 类是否可作为 except 子句的捕获目标: 必须是沿 MRO 属于异常继承体系的类 [br]
+	## [param cls] 待判断对象 [br]
+	## [returns] 是可捕获异常类时返回 true
+	func _is_catchable_exception_class(cls) -> bool:
+		if not (cls is DSLClass):
+			return false
+		return _is_registered_exception_class(cls)
+
+	## I2-65: 检测匹配阶段是否已因非法 except 类型抛出 TypeError [br]
+	## 匹配期 report.has_error 恒为真 (在途异常已报告), report.error 是 no-op, [br]
+	## 匹配期构造的异常因 magic_call 提前返回而 _wrapped 为空 (args 仍预写 fields), [br]
+	## 故以「当前在途异常是文案精确匹配的 TypeError」为判据; 调用方须同时核对
+	## 匹配前在途异常身份已变化 (仅本次匹配新抛), 排除「原异常自身即该文案 TypeError」的误判
+	func _invalid_except_type_raised() -> bool:
+		if last_exception == null or last_exception._type_name() != "TypeError":
+			return false
+		var msg := ""
+		if last_exception._wrapped is DSLException:
+			msg = last_exception._wrapped.message
+		elif last_exception.fields != null and last_exception.fields.has("args") and last_exception.fields["args"] is DSLTuple:
+			var arg_items = last_exception.fields["args"].items
+			if arg_items.size() > 0 and arg_items[0] is DSLString:
+				msg = arg_items[0].value
+		return msg == "catching classes that do not inherit from BaseException is not allowed"
 	
 	## 判断 try 语句是否为 except* 形态 (解析期保证全部子句同型) [br]
 	## [param stmt] try 语句节点 [br]
@@ -23595,7 +23694,11 @@ class Interpreter:
 		var ever_matched = false
 		while idx < stmt.except_clauses.size():
 			var clause = stmt.except_clauses[idx]
+			var match_exc = last_exception
 			var matched = _starred_match(star_exc, clause.exception_type)
+			if last_exception != match_exc and _invalid_except_type_raised():
+				# I2-65: except* 子句类型非法 (非 BaseException 子类), 传播 TypeError
+				return ExecResult.RAISE
 			if matched.is_empty():
 				idx += 1
 				continue
@@ -23930,7 +24033,13 @@ class Interpreter:
 		var raw = wrapper._wrapped
 		if raw and raw is DSLException:
 			return DSLString.new(raw._dsl_str())
-		return DSLString.new(wrapper._type_name())
+		# I2-66: 自定义异常未调 super().__init__ 时 _wrapped 为空, str(e) 按 args
+		# 格式化 (CPython 同: 无参为空串, 单参 str/KeyError repr, 多参元组 repr);
+		# args 由构造期 BaseException.__new__ 记录 (magic_call 预写 fields)
+		var pos_args: Array[DSLObject] = []
+		if wrapper.fields != null and wrapper.fields.has("args") and wrapper.fields["args"] is DSLTuple:
+			pos_args = wrapper.fields["args"].items
+		return DSLString.new(_exception_message(wrapper.klass, pos_args))
 
 	## 内置异常 __repr__ 回调 [br]
 	## 格式: 类型名后跟参数 repr, 如 KeyError('b') / ValueError() [br]
@@ -24312,6 +24421,12 @@ class Interpreter:
 		var anextaw_type_class = DSLClass.new("anext_awaitable", obj_class, {}, self)
 		anextaw_type_class.klass = type_class
 		_builtin_type_classes["anext_awaitable"] = anextaw_type_class
+		# PEP 695 类型别名的类型类: type(别名) 的返回值 (I2-70), 不入内建名
+		# CPython 的 TypeAliasType 定义于 typing 模块, repr 带 typing. 前缀
+		var typealias_type_class = DSLClass.new("TypeAliasType", obj_class, {}, self)
+		typealias_type_class.klass = type_class
+		typealias_type_class.module_prefix = "typing."
+		_builtin_type_classes["TypeAliasType"] = typealias_type_class
 
 		# klass 为空的内建值解析 __class__ 的注册表 (键为 _type_name())
 		DSLObject._builtin_class_by_name["int"] = int_class
@@ -27781,7 +27896,11 @@ class Interpreter:
 				return ExecResult.SUSPENDED
 			if cond == null or report.has_error:
 				return ExecResult.ERROR
-			if cond._dsl_bool():
+			var cond_truthy = cond._dsl_bool()
+			if report.has_error:
+				# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+				return ExecResult.ERROR
+			if cond_truthy:
 				# 设置 resume_info
 				var f = _exec_stack.back() if _exec_stack.size() > 0 else null
 				if f != null and f is Dictionary:
@@ -27796,7 +27915,11 @@ class Interpreter:
 						return ExecResult.SUSPENDED
 					if cond == null or report.has_error:
 						return ExecResult.ERROR
-					if cond._dsl_bool():
+					var branch_truthy = cond._dsl_bool()
+					if report.has_error:
+						# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+						return ExecResult.ERROR
+					if branch_truthy:
 						var f = _exec_stack.back() if _exec_stack.size() > 0 else null
 						if f != null and f is Dictionary:
 							f.resume_info = {"type": "if", "branch": "elif", "elif_idx": branch_idx}
@@ -27834,8 +27957,12 @@ class Interpreter:
 						return ExecResult.SUSPENDED
 					if guard_val == null or report.has_error:
 						return ExecResult.ERROR
-					if not guard_val._dsl_bool():
-						continue
+					if guard_val._dsl_bool():
+						return exec_block(case_clause.body, environment)
+					if report.has_error:
+						# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+						return ExecResult.ERROR
+					continue
 				return exec_block(case_clause.body, environment)
 			return ExecResult.NORMAL
 		
@@ -27864,6 +27991,9 @@ class Interpreter:
 						return ExecResult.ERROR
 					if not cond._dsl_bool():
 						break
+					if report.has_error:
+						# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+						return ExecResult.ERROR
 				skip_cond = false
 				
 				# 设置 resume_info
@@ -28020,8 +28150,9 @@ class Interpreter:
 			
 		if stmt is TypeAliasStmt:
 			# PEP 695: 别名绑定为 TypeAliasType 对象 (__value__ 惰性求值)
+			# klass 挂 TypeAliasType 类型类 (I2-70): type(别名) 与别名.__class__ 均指向它
 			var alias_obj = DSLTypeAlias.new(stmt.name, stmt.value, environment)
-			alias_obj.klass = globals.get_val_safe("type")
+			alias_obj.klass = _builtin_type_classes.get("TypeAliasType")
 			alias_obj.interp = self
 			environment.define(stmt.name, alias_obj)
 			return ExecResult.NORMAL
@@ -28248,7 +28379,11 @@ class Interpreter:
 				return ExecResult.SUSPENDED
 			if test_val == null:
 				return ExecResult.ERROR
-			if not test_val._dsl_bool():
+			var test_truthy = test_val._dsl_bool()
+			if report.has_error:
+				# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+				return ExecResult.ERROR
+			if not test_truthy:
 				var msg = ""
 				if stmt.message != null:
 					var msg_val = evaluate(stmt.message)
@@ -28470,6 +28605,7 @@ class Interpreter:
 				var caught = false
 				for i in range(stmt.except_clauses.size()):
 					var clause = stmt.except_clauses[i]
+					var match_exc = last_exception
 					if _is_exception_match(last_exception, clause.exception_type):
 						report.clear_error()
 						if clause.as_name != "":
@@ -28493,6 +28629,10 @@ class Interpreter:
 						if clause.as_name != "":
 							environment.values.erase(clause.as_name)
 						caught = true
+						break
+					if last_exception != match_exc and _invalid_except_type_raised():
+						# I2-65: except 子句类型非法 (非 BaseException 子类), 中止匹配传播 TypeError
+						caught = false
 						break
 				if not caught:
 					res = ExecResult.RAISE
@@ -28718,11 +28858,16 @@ class Interpreter:
 					res = ExecResult.ERROR
 				idx -= 1
 				continue
+			var exit_exc = last_exception
 			if in_flight and val._dsl_bool():
 				# 抑制: last_exception 与错误通道双通道清位, 外层管理器按无异常退出
 				last_exception = null
 				report.clear_error()
 				res = ExecResult.NORMAL
+			elif last_exception != exit_exc:
+				# I2-63: __exit__ 真值判定时 __bool__ 返回非 bool 报 TypeError
+				# (在途异常时 report.has_error 恒为真不可作判据, 以在途异常身份变化识别)
+				res = ExecResult.ERROR
 			idx -= 1
 		# 退出完成: 仍在途的异常写回错误通道 (挂起暂存还原), 已抑制 / 无异常的丢弃残留
 		if res == ExecResult.RAISE:
@@ -29357,6 +29502,9 @@ class Interpreter:
 				sc_left.last_error = ""
 				# and: 左为真才取右; or: 左为假才取右
 				var take_right: bool = sc_left._dsl_bool() if expr.operator.type == TokenType.AND else not sc_left._dsl_bool()
+				if report.has_error:
+					# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+					return null
 				if not take_right:
 					return sc_left
 				var sc_right = null
@@ -29546,7 +29694,11 @@ class Interpreter:
 			var cond = evaluate(expr.condition)
 			if cond == null:
 				return null
-			if cond._dsl_bool():
+			var cond_truthy = cond._dsl_bool()
+			if report.has_error:
+				# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+				return null
+			if cond_truthy:
 				return evaluate(expr.true_expr)
 			else:
 				return evaluate(expr.false_expr)
@@ -32711,8 +32863,28 @@ order (MRO) for bases %s" % ", ".join(names))
 			var len_method = obj.klass._lookup_method("__len__")
 			if len_method != null:
 				var res = obj.klass._invoke_func(len_method, [obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if _suspended:
+					return null
+				if report.has_error:
+					return null
+				if res is DSLBool:
+					# bool 是 int 子类 (CPython 同): True → 1, False → 0
+					return DSLInteger.pooled(1 if res.value else 0)
 				if res is DSLInteger:
+					if res.is_big():
+						# I2-63: 大数长度无法装入索引位宽 (CPython 同)
+						raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
+						return null
+					if res.value < 0:
+						# I2-63: __len__ 返回负数
+						raise_exception("ValueError", "__len__() should return >= 0")
+						return null
 					return res
+				# 内置实现的 __len__ 以 null 返回 + last_error 表达错误 (如 memoryview 释放)
+				# 时落入容器分派取用 last_error; 用户 __len__ 返回非整数按 CPython 报 TypeError
+				if res != null and obj.last_error == "":
+					raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % res._type_name())
+					return null
 		if obj._wrapped != null:
 			obj = obj._wrapped
 		if obj is DSLList:
@@ -32796,6 +32968,9 @@ order (MRO) for bases %s" % ", ".join(names))
 			if i > 0:
 				s += sep
 			var str_result = args[i].magic_str([args[i]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if report.has_error:
+				# I2-63: 任一模数 __str__/__repr__ 返回非法值已抛错: 整行不输出 (CPython 同)
+				return null
 			s += str_result.value if str_result is DSLString else args[i]._dsl_str()
 		s += end
 		report.print_msg(s)
@@ -34974,11 +35149,11 @@ order (MRO) for bases %s" % ", ".join(names))
 	func _type_metaclass(name_obj: DSLObject, bases_obj: DSLObject, attrs_obj: DSLObject, init_sub_kw = null) -> DSLObject:
 		# Validate name
 		if not name_obj is DSLString:
-			raise_exception("TypeError", "type() argument 1 must be str, not " + name_obj._type_name())
+			raise_exception("TypeError", "type.__new__() argument 1 must be str, not " + name_obj._type_name())
 			return null
 		# Validate dict
 		if not attrs_obj is DSLDict:
-			raise_exception("TypeError", "type() argument 3 must be dict, not " + attrs_obj._type_name())
+			raise_exception("TypeError", "type.__new__() argument 3 must be dict, not " + attrs_obj._type_name())
 			return null
 		# Determine superclass
 		var base_objs: Array = []
@@ -34997,7 +35172,8 @@ order (MRO) for bases %s" % ", ".join(names))
 		elif bases_obj is DSLClass:
 			base_objs.append(bases_obj)
 		else:
-			raise_exception("TypeError", "bases must be types")
+			# I2-69: bases 既非元组也非类对象时报 CPython 同文案 (按实际类型名)
+			raise_exception("TypeError", "type.__new__() argument 2 must be tuple, not " + bases_obj._type_name())
 			return null
 		var superclass = base_objs[0] if base_objs.size() > 0 else globals.get_val_safe("object")
 		if superclass == null:
@@ -35026,8 +35202,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			var names: Array = []
 			for b in base_objs:
 				names.append(b.name)
-			raise_exception("TypeError", "Cannot create a consistent method resolution
-order (MRO) for bases %s" % ", ".join(names))
+			raise_exception("TypeError", "Cannot create a consistent method resolution order (MRO) for bases %s" % ", ".join(names))
 			return null
 		if _has_layout_conflict(base_objs):
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
@@ -35187,7 +35362,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			return [null, false, start]
 		var val: float = DSLObject._float_parse(num_text)[1]
 		if neg:
-			val = -val
+			val = - val
 		return [val, is_imag, pos]
 
 	func api_int_new(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -35358,7 +35533,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			if exp_part.length() > 9:
 				exp_val = 999999999
 			if exp_neg:
-				exp_val = -exp_val
+				exp_val = - exp_val
 		# 大数尾数与二进制指数: 值 = 尾数 × 2^(指数 - 4×小数位数)
 		var m_limbs = DSLBigInt.from_digits(mant, 16, false)[1]
 		var e = exp_val - 4 * frac_digits

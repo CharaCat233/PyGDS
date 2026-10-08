@@ -105,10 +105,25 @@ dsl.run()
 
 This table is a support overview; for the detailed syntax and semantics of each feature see [usage.md#DSL Syntax Reference](docs/en/usage.md#dsl-syntax-reference).
 
+Support-level markers:
+
+- ✅ Full = behavior matches CPython
+- 🟡 Subset = a pragmatic subset with clear limitations
+- 🔵 Accepted = syntax accepted, semantics ignored or emulated
+- ❌ Missing = parse-time or runtime error
+
 | Feature | Support | Notes |
 | :--- | :--- | :--- |
+| **Basic syntax & operators** | | |
 | Operators | ✅ Full | Binary/unary/comparison/augmented all supported |
 | Variable assignment | ✅ Full | Regular/multiple/unpacking/augmented assignment and assignment expressions (`:=`) |
+| Multiple assignment targets | ✅ Full | Subscript/attribute/key targets and chained suffixes |
+| Subscript access | ✅ Full | Subscript read/write and slice assignment/deletion |
+| Attribute access | ✅ Full | `obj.attr` read/write |
+| `is` / `is not` | ✅ Full | Identity operators |
+| `id()` | ✅ Full | Object identifiers |
+| `global` / `nonlocal` | ✅ Full | Variable scope declarations |
+| **Built-in scalar types** | | |
 | Integers (`int`) | ✅ Full | All operators and number literals (arbitrary precision) |
 | Floats (`float`) | ✅ Full | Same operator support as `int` |
 | Complex (`complex`) | ✅ Full | `1j` literals, construction, arithmetic, comparison and dict keys |
@@ -116,7 +131,8 @@ This table is a support overview; for the detailed syntax and semantics of each 
 | Strings (`str`) | ✅ Full | Common methods plus `%` / `format` / `f-string` formatting |
 | Bytes (`bytes`) | ✅ Full | Literals/constructor and the full method family |
 | Byte Arrays (`bytearray`) | ✅ Full | Mutable byte sequence, construction and methods |
-| Memory Views (`memoryview`) | ✅ Pragmatic subset | One-dimensional B-format views (read-only / write-through) |
+| Memory Views (`memoryview`) | 🟡 Subset | One-dimensional B-format views (read-only / write-through) |
+| **Container types** | | |
 | Lists (`list`) | ✅ Full | Common methods: `append`/`extend`/`pop`/`sort`, etc. |
 | Tuples (`tuple`) | ✅ Full | Immutable sequence |
 | Ranges (`range`) | ✅ Full | A distinct lazy sequence (`len`/indexing/slicing/iteration) |
@@ -125,37 +141,40 @@ This table is a support overview; for the detailed syntax and semantics of each 
 | Sets (`set`) | ✅ Full | Literal, constructor, set operations and methods |
 | Frozen Sets (`frozenset`) | ✅ Full | Immutable set, hashable |
 | Slices (`slice`) | ✅ Full | Reusable slice objects and indexing |
+| **Control flow** | | |
 | `if`/`elif`/`else` | ✅ Full | Including the ternary operator |
 | `while` loops | ✅ Full | Including `break`/`continue` |
 | `for` loops | ✅ Full | Iteration over lists/tuples/strings/dicts |
+| `match`/`case` pattern matching | ✅ Full | Soft keywords; all pattern forms and compile-time checks |
+| **Functions & closures** | | |
 | Function definitions | ✅ Full | All parameter forms and anonymous functions (`lambda`) |
-| Class definitions | ✅ Full | Inheritance (multiple), overrides, class/static methods and magic methods |
-| Exception handling | ✅ Full | `try`/`except`/`else`/`finally`/`raise`, custom exceptions and exception groups (PEP 654) |
-| `is` / `is not` | ✅ Full | Identity operators |
-| `id()` | ✅ Full | Object identifiers |
-| `global`/`nonlocal` | ✅ Full | Variable scope declarations |
 | Comprehensions | ✅ Full | List/generator/dict/set comprehensions (multiple `for` and the bare form included) |
 | `*`, `**` unpacking | ✅ Full | Literal and call-site unpacking |
-| Subscript access | ✅ Full | Subscript read/write and slice assignment/deletion |
-| Attribute access | ✅ Full | `obj.attr` read/write |
+| Decorators | ✅ Full | Arbitrary expression decorators and the `@staticmethod` / `@classmethod` / `@property` built-in forms |
+| Generators/`yield` | ✅ Full | Generator functions with `yield` / `yield from` / `send` / `throw` / `close` |
+| **Object-oriented** | | |
+| Class definitions | ✅ Full | Inheritance (multiple), overrides, class/static methods and magic methods |
+| `super()` | ✅ Full | Calls parent methods/constructors along the MRO |
 | Method type system | ✅ Full | Method/descriptor types matching CPython |
 | Descriptor protocol | ✅ Full | `__get__` implementing class-level/instance-level binding |
-| `super()` | ✅ Full | Calls parent methods/constructors along the MRO |
 | `getattr`/`setattr`/`delattr`/`hasattr` | ✅ Full | Built-in reflection functions |
-| `map()`/`filter()` | ✅ Full | Lazy iterators (same shape as CPython) |
-| Runtime error line numbers | ✅ Full | Uncaught exceptions include `(line N)` |
-| Built-in modules | ✅ Pragmatic subset | Common modules built in (`math` / `random` / `time`, etc.), see [builtin.md#Built-in Modules](docs/en/builtin.md#built-in-modules-import) |
-| Multiple assignment targets | ✅ Full | Subscript/attribute/key targets and chained suffixes |
-| `match`/`case` pattern matching | ✅ Full | Soft keywords; all pattern forms and compile-time checks |
-| `async`/`await` | ✅ Pragmatic subset | Coroutine-object emulation (`async def` / `await` / `async for` / `async with` / async generators, driven synchronously, no event loop) |
+| Generic type parameters and `type` aliases | 🔵 Accepted | PEP 695 syntax accepted (type semantics ignored) |
+| **Exception handling** | | |
+| Exception handling | ✅ Full | `try`/`except`/`else`/`finally`/`raise`, custom exceptions and exception groups (PEP 654) |
 | `raise ... from` exception chaining | ✅ Full | `__cause__` / `__suppress_context__` |
-| `__name__` / `__file__` | ✅ Full | Entry guard and `set_script_path()` injection included |
-| Generic type parameters and `type` aliases | ✅ Syntax accepted | PEP 695 syntax accepted (type semantics ignored) |
-| Generators/`yield` | ✅ Full | Generator functions with `yield` / `yield from` / `send` / `throw` / `close` |
-| Decorators | ✅ Full | Arbitrary expression decorators and the `@staticmethod` / `@classmethod` / `@property` built-in forms |
-| `open()` file I/O | ✅ Pragmatic subset | Text/binary file objects (`r`/`w`/`a`/`rb`/`wb`/`ab`) |
-| `with` statement | ✅ Full | Context manager protocol (including `contextlib`) |
+| **Built-in functions** | | |
+| `map()` / `filter()` | ✅ Full | Lazy iterators (same shape as CPython) |
+| **Modules & imports** | | |
+| Built-in modules | 🟡 Subset | Common modules built in (`math` / `random` / `time`, etc.), see [builtin.md#Built-in Modules](docs/en/builtin.md#built-in-modules-import) |
 | User-file `import` | ✅ Full | `<name>.py` resolved directory by directory along `sys.path` |
+| `__name__` / `__file__` | ✅ Full | Entry guard and `set_script_path()` injection included |
+| **Files & context** | | |
+| `open()` file I/O | 🟡 Subset | Text/binary file objects (`r`/`w`/`a`/`rb`/`wb`/`ab`) |
+| `with` statement | ✅ Full | Context manager protocol (including `contextlib`) |
+| **Asynchronous** | | |
+| `async` / `await` | 🟡 Subset | Coroutine-object emulation (`async def` / `await` / `async for` / `async with` / async generators, driven synchronously, no event loop) |
+| **Runtime & debugging** | | |
+| Runtime error line numbers | ✅ Full | Uncaught exceptions include `(line N)` |
 
 > **⚠️ Breaking Change (v0.3.0)**: Generator expressions `(x for x in iterable)` have changed from "eagerly evaluated to a list" to "lazy generator object".
 > Code that directly subscripts/`len()`s or calls list methods on a generator expression result will fail — convert with `list(g)` / `tuple(g)` first
@@ -181,13 +200,7 @@ The following lists the known differences and limitations between PyGDS and CPyt
 | ID | Item | Details |
 | :--- | :--- | :--- |
 | I1-80 | User-class `__del__` is never invoked | CPython calls `__del__` when the reference count reaches zero; PyGDS's reclamation path is based on the engine PREDELETE (same root cause as P5) and does not call `__del__` |
-| I2-63 | Protocol validation missing: invalid return values silently accepted | Negative `__len__` returns, non-bool `__bool__` returns, non-None `__init__` returns and non-str `__repr__` / `__str__` returns raise `TypeError` / `ValueError` in CPython; PyGDS silently accepts them (repr falls back to the default form) |
-| I2-64 | `str.format` does not reject mixed manual / automatic numbering | `"{1}{}".format(1, 2)` raises `ValueError: cannot switch from manual field specification to automatic field numbering` in CPython; PyGDS silently accepts it |
-| I2-65 | `except <non-exception class>` does not raise `TypeError` | CPython raises `catching classes that do not inherit from BaseException is not allowed`; PyGDS silently skips the clause and the exception keeps propagating |
-| I2-66 | `str(e)` falls back to the class name for custom exceptions that skip `super().__init__` | CPython formats the message from `args` (`str(E2(7))` is `"7"`); PyGDS returns the class name `"E2"` |
 | I2-68 | Module object repr uses a simplified form | `repr(math)` is `<module object>`; CPython prints `<module 'math' (built-in)>` |
-| I2-69 | The three-argument `type()` error message is not aligned | CPython prints `type.__new__() argument 3 must be dict, not int`; PyGDS prints `type() argument 3 ...` |
-| I2-70 | `type(type-alias instance)` returns `type` | CPython returns `TypeAliasType` |
 | I2-71 | Dotted imports and relative imports raise different error categories | `import math.floor` fails at parse time with `Unexpected token '.'` (CPython raises `ModuleNotFoundError` at runtime); `from . import x` raises `SyntaxError` (CPython raises `ImportError`) |
 | I2-72 | method_descriptor / wrapper_descriptor repr uses a placeholder owner name | `str(str.upper)` prints `<method 'upper' of '??' objects>`; CPython prints `of 'str' objects` |
 | I2-73 | Magic-method descriptors are not accessible on built-in type classes | `str.__add__` raises `AttributeError` (CPython returns the slot wrapper) |

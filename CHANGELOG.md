@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.2-alpha.3] - 2026-10-08
+
+### 修复
+
+- **协议返回类型校验（I2-63）**：用户类 `__len__` 返回负数报 `ValueError: __len__() should return >= 0`、返回非整数报 `TypeError: '<type>' object cannot be interpreted as an integer`、返回大数报 `OverflowError: cannot fit 'int' into an index-sized integer`（bool 按 int 子类接受）；`__bool__` 返回非 bool 报 `TypeError: __bool__ should return bool, returned <type>`，覆盖 `bool()` / `if` / `while` / `and` / `or` / `not` / 三目 / 推导式过滤 / `any` / `all` 等真值站点；`__init__` 返回非 None 报 `TypeError: __init__() should return None, not '<type>'`（含挂起重放完成态）；`__repr__` / `__str__` 返回非字符串报 `TypeError: __repr__ returned non-string (type <type>)` / `__str__ returned non-string (type <type>)`（str() 经 `__repr__` 回退时报 str() 路径文案），`print` 出错整行不输出
+- **`str.format` 手动 / 自动编号混用（I2-64）**：`"{1}{}".format(1, 2)` 与 `"{}{1}"` 按切换方向报 `ValueError: cannot switch from manual field specification to automatic field numbering`（或反向文案）；嵌套格式规格与关键字实参参与编号模式跟踪
+- **`except` 非异常类报 `TypeError`（I2-65）**：匹配阶段的 except / except* 类型表达式必须是 BaseException 子类（元组全部成员先整体校验），否则报 `TypeError: catching classes that do not inherit from BaseException is not allowed`；首个子句命中后的非法子句不再校验（CPython 短路语义），try 体未抛异常时不触发
+- **自定义异常 `str(e)` 按 args 格式化（I2-66）**：未调 `super().__init__` 的用户异常不再回退类型名，按构造期记录的 args 格式化（无参空串 / 单参 str / 多参元组 repr / KeyError 子类单参 repr）
+- **`type()` 三参错误文案对齐（I2-69）**：argument 1 / 2 / 3 类型错误文案前缀改为 `type.__new__()`（`type("Bad", (), 5)` 报 `type.__new__() argument 3 must be dict, not int` 等）
+- **`type(别名)` 返回 `TypeAliasType`（I2-70）**：`type Alias1 = int` 后 `type(Alias1)` 返回 TypeAliasType 类型类（`__name__` 为 `TypeAliasType`，repr 带 `typing.` 前缀与 CPython 一致），别名 `__class__` 同步指向
+
+### 文档
+
+- README 中英「已知差异与限制」移除已修复的 I2-63 / I2-64 / I2-65 / I2-66 / I2-69 / I2-70 六条
+- behavioral.md 中英各补 6 条新用例条目（class_protocol_validate / exception_except_bad_type / exception_str_uninit / type_ctor_three_args / type_str_format_numbering / type_type_alias_type）
+- README 中英兼容性矩阵按主题分组（基础语法与运算符 / 内置标量类型 / 容器类型 / 控制流 / 函数与闭包 / 面向对象 / 异常处理 / 内置函数 / 模块与导入 / 文件与上下文 / 异步 / 运行时与调试），顶端补支持程度标记说明（✅ 完整 / 🟡 子集 / 🔵 接受 / ❌ 缺失）；「务实子集 / 语法接受」统一改归 🟡 子集 / 🔵 接受，消除原「✅」前缀下的程度混淆
+
 ## [0.8.2-alpha.2] - 2026-10-07
 
 ### 修复

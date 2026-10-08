@@ -8,6 +8,24 @@ Comparison values: `same_output` = both ends complete and stdout matches verbati
 
 Grammar constructs (statements and expressions) and their compile-time `SyntaxError`s. Boundary rule: a case belongs to the construct that introduces the behavior — unpacking inside a `for` target belongs to `syntax_for`, while the `for` inside a comprehension belongs to the comprehension family; compile-time checks such as duplicate `match` bindings live under `syntax_match_*`.
 
+### class_protocol_validate
+
+- Responsibility: User-class magic method return type validation (invalid `__len__`/`__bool__`/`__init__`/`__repr__`/`__str__` return raises TypeError/ValueError)
+- Comparison: `same_output`
+- Source: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
+
+### exception_except_bad_type
+
+- Responsibility: except clause with a non-BaseException-subclass type raises TypeError
+- Comparison: `same_output`
+- Source: [ci/cases/exception_except_bad_type.py](../../ci/cases/exception_except_bad_type.py)
+
+### exception_str_uninit
+
+- Responsibility: Custom exception without super().__init__ formats str(e) from args
+- Comparison: `same_output`
+- Source: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
+
 ### syntax_annotation
 
 - Responsibility: Type annotations on function parameters, return values and variables
@@ -1134,6 +1152,12 @@ bytearray is unhashable (dict keys raise `unhashable type: 'bytearray'`); `bytes
 
 `1+0j` shares key and hash with `1`; ordering raises `'<' not supported...`; complex power uses exact repeated multiplication for integer exponents and the libm polar path for non-integer ones (including `**0.5`) — compare with `round(..., N)` (ci.md rule 4)
 
+### type_ctor_three_args
+
+- Responsibility: type() 3-arg error messages aligned to type.__new__()
+- Comparison: `same_output`
+- Source: [ci/cases/type_ctor_three_args.py](../../ci/cases/type_ctor_three_args.py)
+
 ### type_matmul
 
 - Responsibility: the `@` matrix-multiply operator (P2-16, syntax level): `TypeError: unsupported operand type(s) for @` on builtin types, user `__matmul__` / `__rmatmul__` cross-type reflection, same precedence as `*`, `@=` augmented assignment and `operator.matmul`
@@ -1387,6 +1411,12 @@ range arguments keep arbitrary precision instead of converging to the index widt
 - Responsibility: `format` nested format specs with dynamic width and precision
 - Comparison: `same_output`
 - Source: [ci/cases/type_str_format_nested.py](../../ci/cases/type_str_format_nested.py)
+
+### type_str_format_numbering
+
+- Responsibility: str.format manual/automatic field numbering mixing raises ValueError
+- Comparison: `same_output`
+- Source: [ci/cases/type_str_format_numbering.py](../../ci/cases/type_str_format_numbering.py)
 
 ### type_str_format_thousands
 
@@ -2183,3 +2213,9 @@ Suspension on `sleep` inside `__next__` propagates to consumers via the iterator
 - Source: [ci/cases/suspend_zip_multi_arg.py](../../ci/cases/suspend_zip_multi_arg.py)
 
 zip consumes argument by argument; when one argument's consumption suspends mid-way it propagates the suspension immediately and abandons the call instead of fetching the next argument's iterator while `_suspended` is set (the user `__iter__` would spuriously suspend and return null, misreported as `zip() arg is not iterable`); replay rounds reuse each argument's generator via the generator memo in occurrence order (I2-61). Includes single-argument comparison plus fielded instances, three arguments, and mixed sequence forms; protocol-driven `__iter__` / `__next__` calls no longer borrow the ambient call node for retired completion records
+
+### type_type_alias_type
+
+- Responsibility: type(type alias instance) returns TypeAliasType
+- Comparison: `same_output`
+- Source: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)

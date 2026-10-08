@@ -105,10 +105,25 @@ dsl.run()
 
 本表为支持程度概览，各特性的详细语法与语义见 [usage.md#DSL 语法参考](docs/zh-CN/usage.md#dsl-语法参考)
 
+支持程度标记说明：
+
+- ✅ 完整 = 行为与 CPython 一致
+- 🟡 子集 = 仅实现务实子集，有明确限制
+- 🔵 接受 = 语法接受，语义忽略或模拟
+- ❌ 缺失 = 解析或运行时直接报错
+
 | 特性 | 支持程度 | 说明 |
 | :--- | :--- | :--- |
+| **基础语法与运算符** | | |
 | 运算符 | ✅ 完整 | 二元/一元/比较/增强赋值全部支持 |
 | 变量赋值 | ✅ 完整 | 普通/多重/解包/增强赋值与赋值表达式（`:=`） |
+| 多重赋值目标 | ✅ 完整 | 下标/属性/键目标与链式后缀 |
+| 下标访问 | ✅ 完整 | 下标读写与切片赋值/删除 |
+| 属性访问 | ✅ 完整 | `obj.attr` 读写 |
+| `is` / `is not` | ✅ 完整 | 身份运算符 |
+| `id()` | ✅ 完整 | 对象标识符 |
+| `global` / `nonlocal` | ✅ 完整 | 变量作用域声明 |
+| **内置标量类型** | | |
 | 整数 (`int`) | ✅ 完整 | 含全部运算符与数字字面量（任意精度） |
 | 浮点数 (`float`) | ✅ 完整 | 同 `int` 的运算符支持 |
 | 复数 (`complex`) | ✅ 完整 | 含 `1j` 字面量、构造、算术、比较与字典键 |
@@ -116,7 +131,8 @@ dsl.run()
 | 字符串 (`str`) | ✅ 完整 | 含常用方法与 `%` / `format` / `f-string` 格式化 |
 | 字节串 (`bytes`) | ✅ 完整 | 字面量/构造与全部方法族 |
 | 字节数组 (`bytearray`) | ✅ 完整 | 可变字节序列，含构造与方法 |
-| 内存视图 (`memoryview`) | ✅ 务实子集 | 一维 B 格式视图（只读/可写透传） |
+| 内存视图 (`memoryview`) | 🟡 子集 | 一维 B 格式视图（只读/可写透传） |
+| **容器类型** | | |
 | 列表 (`list`) | ✅ 完整 | 含 `append`/`extend`/`pop`/`sort` 等常用方法 |
 | 元组 (`tuple`) | ✅ 完整 | 不可变序列 |
 | 范围 (`range`) | ✅ 完整 | 独立惰性序列（`len`/索引/切片/迭代） |
@@ -125,37 +141,40 @@ dsl.run()
 | 集合 (`set`) | ✅ 完整 | 字面量、构造、集合运算与方法 |
 | 冻结集合 (`frozenset`) | ✅ 完整 | 不可变集合，可哈希 |
 | 切片 (`slice`) | ✅ 完整 | 可复用的切片对象与索引 |
+| **控制流** | | |
 | `if`/`elif`/`else` 语句 | ✅ 完整 | 含三目运算符 |
 | `while` 循环 | ✅ 完整 | 含 `break`/`continue` |
 | `for` 循环 | ✅ 完整 | 支持列表/元组/字符串/字典遍历 |
+| `match`/`case` 模式匹配 | ✅ 完整 | 软关键字，全部模式形态与编译期检查 |
+| **函数与闭包** | | |
 | 函数定义 | ✅ 完整 | 含全部参数形态与匿名函数（`lambda`） |
-| 类定义 | ✅ 完整 | 含继承（多继承）、覆写、类/静态方法与魔法方法 |
-| 异常处理 | ✅ 完整 | 含 `try`/`except`/`else`/`finally`/`raise`、自定义异常与异常组（PEP 654） |
-| `is` / `is not` | ✅ 完整 | 身份运算符 |
-| `id()` | ✅ 完整 | 对象标识符 |
-| `global`/`nonlocal` | ✅ 完整 | 变量作用域声明 |
 | 推导式 | ✅ 完整 | 列表/生成器/字典/集合推导式（含多 `for` 与裸写法） |
 | `*`、`**` 解包 | ✅ 完整 | 字面量与调用处解包 |
-| 下标访问 | ✅ 完整 | 下标读写与切片赋值/删除 |
-| 属性访问 | ✅ 完整 | `obj.attr` 读写 |
+| 装饰器 | ✅ 完整 | 任意表达式装饰器与 `@staticmethod` / `@classmethod` / `@property` 等内建形式 |
+| 生成器 / `yield` | ✅ 完整 | 生成器函数与 `yield` / `yield from` / `send` / `throw` / `close` |
+| **面向对象** | | |
+| 类定义 | ✅ 完整 | 含继承（多继承）、覆写、类/静态方法与魔法方法 |
+| `super()` | ✅ 完整 | 沿 MRO 调用父类方法/构造函数 |
 | 方法类型系统 | ✅ 完整 | 方法/描述符类型对标 CPython |
 | Descriptor 协议 | ✅ 完整 | `__get__` 实现类级/实例级绑定 |
-| `super()` | ✅ 完整 | 沿 MRO 调用父类方法/构造函数 |
 | `getattr`/`setattr`/`delattr`/`hasattr` | ✅ 完整 | 内置反射函数 |
-| `map()`/`filter()` | ✅ 完整 | 惰性迭代器（CPython 同形） |
-| 运行时错误行号 | ✅ 完整 | 未捕获异常附带 `(line N)` |
-| 内置模块 | ✅ 务实子集 | 内置 `math` / `random` / `time` 等常用模块，详见 [builtin.md#内置模块](docs/zh-CN/builtin.md#内置模块-import) |
-| 多重赋值目标 | ✅ 完整 | 下标/属性/键目标与链式后缀 |
-| `match`/`case` 模式匹配 | ✅ 完整 | 软关键字；全部模式形态与编译期检查 |
-| `async`/`await` | ✅ 务实子集 | 协程对象模拟（`async def` / `await` / `async for` / `async with` / 异步生成器，同步驱动，无事件循环） |
+| 泛型类型参数与 `type` 别名 | 🔵 接受 | PEP 695 语法接受（忽略类型语义） |
+| **异常处理** | | |
+| 异常处理 | ✅ 完整 | 含 `try`/`except`/`else`/`finally`/`raise`、自定义异常与异常组（PEP 654） |
 | `raise ... from` 异常链 | ✅ 完整 | `__cause__` / `__suppress_context__` |
-| `__name__` / `__file__` | ✅ 完整 | 含入口守卫与 `set_script_path()` 注入 |
-| 泛型类型参数与 `type` 别名 | ✅ 语法接受 | PEP 695 语法接受（忽略类型语义） |
-| 生成器/`yield` | ✅ 完整 | 生成器函数与 `yield` / `yield from` / `send` / `throw` / `close` |
-| 装饰器 | ✅ 完整 | 任意表达式装饰器与 `@staticmethod` / `@classmethod` / `@property` 等内建形式 |
-| `open()` 文件 I/O | ✅ 务实子集 | 文本/二进制文件对象（`r`/`w`/`a`/`rb`/`wb`/`ab`） |
-| `with` 语句 | ✅ 完整 | 上下文管理器协议（含 `contextlib`） |
+| **内置函数** | | |
+| `map()` / `filter()` | ✅ 完整 | 惰性迭代器（CPython 同形） |
+| **模块与导入** | | |
+| 内置模块 | 🟡 子集 | 内置 `math` / `random` / `time` 等常用模块，完整列表见 [builtin.md#内置模块](docs/zh-CN/builtin.md#内置模块-import) |
 | 用户文件 `import` | ✅ 完整 | `sys.path` 逐目录解析 `<name>.py` |
+| `__name__` / `__file__` | ✅ 完整 | 含入口守卫与 `set_script_path()` 注入 |
+| **文件与上下文** | | |
+| `open()` 文件 I/O | 🟡 子集 | 文本/二进制文件对象（`r`/`w`/`a`/`rb`/`wb`/`ab`） |
+| `with` 语句 | ✅ 完整 | 上下文管理器协议（含 `contextlib`） |
+| **异步** | | |
+| `async` / `await` | 🟡 子集 | 协程对象模拟（`async def` / `await` / `async for` / `async with` / 异步生成器，同步驱动，无事件循环） |
+| **运行时与调试** | | |
+| 运行时错误行号 | ✅ 完整 | 未捕获异常附带 `(line N)` |
 
 > **⚠️ 破坏性变更（v0.3.0）**：生成器表达式 `(x for x in iterable)` 的语义已从「急切求值为列表」改为「惰性生成器对象」
 > 旧代码若直接对生成器表达式结果做下标/`len()`/列表方法会报错，需先 `list(g)` / `tuple(g)` 转换
@@ -181,13 +200,7 @@ dsl.run()
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
 | I1-80 | 用户类 `__del__` 不会触发 | CPython 在引用归零时调用 `__del__`；PyGDS 的回收路径基于引擎 PREDELETE（同 P5 根源），不调用 `__del__` |
-| I2-63 | 协议校验缺失：非法返回值静默接受 | `__len__` 返回负数、`__bool__` 返回非 bool、`__init__` 返回非 None、`__repr__` / `__str__` 返回非字符串，CPython 均报 `TypeError` / `ValueError`，PyGDS 静默接受（repr 回退默认形态） |
-| I2-64 | `str.format` 混用手动 / 自动编号不报错 | `"{1}{}".format(1, 2)` CPython 报 `ValueError: cannot switch from manual field specification to automatic field numbering`，PyGDS 静默接受 |
-| I2-65 | `except <非异常类>` 不报 `TypeError` | CPython 报 `catching classes that do not inherit from BaseException is not allowed`，PyGDS 静默跳过该子句后异常继续传播 |
-| I2-66 | 自定义异常未调 `super().__init__` 时 `str(e)` 回退类型名 | CPython 按 `args` 格式化消息（`str(E2(7))` 为 `"7"`），PyGDS 返回类名 `"E2"` |
 | I2-68 | 模块对象 repr 为简化形态 | `repr(math)` 为 `<module object>`，CPython 为 `<module 'math' (built-in)>` |
-| I2-69 | `type()` 三参错误文案未对齐 | CPython 为 `type.__new__() argument 3 must be dict, not int`，PyGDS 为 `type() argument 3 ...` |
-| I2-70 | `type(类型别名实例)` 返回 `type` | CPython 返回 `TypeAliasType` |
 | I2-71 | 点分 import 与相对导入的错误类别不同 | `import math.floor` 在解析期报 `Unexpected token '.'`（CPython 运行期报 `ModuleNotFoundError`）；`from . import x` 报 `SyntaxError`（CPython 报 `ImportError`） |
 | I2-72 | method_descriptor / wrapper_descriptor 的 repr 归属类名为占位 | `str(str.upper)` 输出 `<method 'upper' of '??' objects>`，CPython 输出 `of 'str' objects` |
 | I2-73 | 内建类型类上的魔法方法描述符不可访问 | `str.__add__` 报 `AttributeError`（CPython 返回 slot wrapper） |
