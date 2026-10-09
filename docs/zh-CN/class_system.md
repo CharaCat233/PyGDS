@@ -95,28 +95,38 @@ func _dsl_getattribute(name: String) -> DSLObject:
 
 ```gdscript
 func _dsl_setattr(name: String, value: DSLObject):
-    # 1. 如果存在属性描述符, 使用 __set__ 设置
+    # 1. 属性描述符 (`__set__`) 与用户数据描述符: 均优先于实例字段
     if klass != null:
-        var attr = klass._dsl_getattribute(name)
-        if attr != null and not (attr is DSLNone) and attr.has_method("__set__"):
-            attr.__set__(self, value)
+        var prop = klass._dsl_getattribute(name)
+        if prop != null and not (prop is DSLNone) and prop.has_method("__set__"):
+            prop.__set__(self, value)
             return
-
-    # 2. 如果类定义了 __setattr__, 调用它
+        if prop != null and prop._is_user_descriptor() and prop.klass._lookup_method("__set__") != null:
+            prop._call_user_descriptor_set(self, value)
+            return
+        # 2. 用户自定义 __setattr__, 调用它
+        var method = klass._lookup_method("__setattr__")
+        if method != null:
+            klass._invoke_func(method, [self, DSLString.new(name), value] as Array[DSLObject], {} as Dictionary)
+            return
+    # 3. __slots__ 白名单: 仅当 MRO 上所有类都声明 slots 时限制实例写入
     if klass != null:
-        var setattr_method = klass._lookup_method("__setattr__")
-        if setattr_method != null:
-            klass._invoke_func(setattr_method, [self, DSLString.new(name), value] as Array[DSLObject], {} as Dictionary)
+        var slot_names = _collect_slot_names(klass)
+        if slot_names != null and not slot_names.has(name):
+            last_error = "AttributeError: '%s' object has no attribute '%s'" % [_type_name(), name]
             return
-
-    # 3. 直接存储在实例的 fields 字典中
+    # 4. 直接存储在实例的 fields 字典中
     if fields != null:
         fields[name] = value
         return
     last_error = "AttributeError: '%s' object has no attribute '%s'" % [_type_name(), 属性名]
 ```
 
-**设置优先级：** 属性描述符 (`__set__`) → 类 `__setattr__` → 实例 `fields` 字典
+**设置优先级：** 属性描述符 (`__set__`) → 用户数据描述符 (`__set__`) → 类 `__setattr__` → `__slots__` 白名单 → 实例 `fields` 字典
+
+**`__slots__` 白名单：** 用户类声明 `__slots__ = ['a', 'b']`（tuple / list / set / 单字符串）时，`_collect_slot_names` 沿 MRO 收集全部声明——**仅当 MRO 上所有类（除 `object`）都声明 `__slots__`** 时才产生白名单，任一类未声明（实例携带 `__dict__`）则返回 null、不限制写入；白名单生效时写入名单外的属性报 `AttributeError: '<class>' object has no attribute '<name>'`，名单内属性仍存进 `fields`（`__slots__` 不影响属性存储，仅做写入白名单校验）
+
+**用户数据描述符：** 用户类自定义数据描述符（含 `__get__` 与 `__set__` 的对象）写入时经 `__set__` 调用（`_call_user_descriptor_set`），优先于实例字段——与 `@property` 数据描述符同级（`@property` 是 `DSLProperty` 内置实现，用户数据描述符是自定义类实例，两者都走描述符协议）
 
 ### `_dsl_str()` — 字符串表示
 

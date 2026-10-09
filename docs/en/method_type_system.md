@@ -188,7 +188,7 @@ class DSLMethodDescriptor extends DSLObject:
     var callback: Callable          # GDScript callback
 ```
 
-**`_dsl_str()` Output Example:** `"<method 'upper' of '??' objects>"` (the owner class name is currently a hardcoded `??` placeholder; `str(str.upper)` prints this form)
+**`_dsl_str()` Output Example:** `"<method 'upper' of 'str' objects>"` (the owner class name is the defining type; `str(str.upper)` prints this form)
 
 ***Descriptor Protocol***
 
@@ -230,7 +230,7 @@ class DSLWrappedDescriptor extends DSLObject:
     var callback: Callable          # GDScript callback
 ```
 
-**`_dsl_str()` Output Example:** `"<slot wrapper '__add__' of '??' objects>"` (the owner class name is currently a hardcoded `??` placeholder)
+**`_dsl_str()` Output Example:** `"<slot wrapper '__add__' of 'int' objects>"` (the owner class name is the defining type; `str(int.__add__)` prints this form)
 
 ***Descriptor Protocol***
 
@@ -476,3 +476,4 @@ When the interpreter evaluates a binary operation like `a + b`:
 4. Finds `DSLWrappedDescriptor` → calls `__get__(left, left.klass)` → returns `DSLMethodWrapper`
 5. Calls `DSLMethodWrapper.magic_call([right])` → automatically inserts `bound_self` → actually calls `magic_add([left, right])`
 6. If no magic method is found → falls back to `fallback()` → directly calls `left._dsl_add(right)`
+

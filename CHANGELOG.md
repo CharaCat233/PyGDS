@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.2] - 2026-10-08
+
+### 修复
+
+- **移除 `MemoryError` 重复注册（审计收尾）**：`_define_exception("MemoryError")` 仅保留一处（原 24534 位置，紧随 `NotImplementedError` 之后）；第二处（`UnsupportedOperation` 之后）为重复定义（无行为影响），删除。同批审计收尾核对确认 `tests/审计发现清单.md` 全部语言差异条目均已修复（去向详见内部 `tests/已知问题清单.md`「审计收尾转存」节，该审计源文件已删除）
+
+### 文档
+
+- **class_system.md 补 `__slots__` 白名单（审计 D12 残余）**：`_dsl_setattr` 文档更新为实际实现——写入优先级补「用户数据描述符 `__set__`」与「`__slots__` 白名单」两层；`__slots__` 白名单语义：仅当 MRO 上所有类（除 `object`）都声明 `__slots__` 时才限制名单外写入（报 `AttributeError`），名单内属性仍存 `fields`；用户数据描述符与 `@property` 同级走描述符协议
+- **method_type_system.md 更新描述符 repr 示例（审计 D13 残余）**：`method_descriptor` / `wrapper_descriptor` 的 `_dsl_str()` 输出示例由 `??` 占位更新为实际定义类型（`<method 'upper' of 'str' objects>` / `<slot wrapper '__add__' of 'int' objects>`），与 alpha.4 的 I2-72 修复一致
+
 ## [0.8.2-alpha.4] - 2026-10-08
 
 ### 修复

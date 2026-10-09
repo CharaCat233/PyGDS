@@ -24535,7 +24535,6 @@ class Interpreter:
 		_define_exception("OSError")
 		_define_exception("FileNotFoundError", "OSError")
 		_define_exception("UnsupportedOperation", "OSError")
-		_define_exception("MemoryError")
 		_define_exception("UnicodeError", "ValueError")
 		_define_exception("UnicodeEncodeError", "UnicodeError")
 		_define_exception("UnicodeDecodeError", "UnicodeError")

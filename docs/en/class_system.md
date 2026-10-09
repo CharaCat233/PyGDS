@@ -95,28 +95,38 @@ Located in `PyGDS.DSLObject._dsl_setattr`.
 
 ```gdscript
 func _dsl_setattr(name: String, value: DSLObject):
-    # 1. If a property descriptor exists, use __set__ to set
+    # 1. Property descriptors (`__set__`) and user data descriptors take priority over fields
     if klass != null:
-        var attr = klass._dsl_getattribute(name)
-        if attr != null and not (attr is DSLNone) and attr.has_method("__set__"):
-            attr.__set__(self, value)
+        var prop = klass._dsl_getattribute(name)
+        if prop != null and not (prop is DSLNone) and prop.has_method("__set__"):
+            prop.__set__(self, value)
             return
-
-    # 2. If the class defines __setattr__, call it
+        if prop != null and prop._is_user_descriptor() and prop.klass._lookup_method("__set__") != null:
+            prop._call_user_descriptor_set(self, value)
+            return
+        # 2. User-defined __setattr__ is invoked
+        var method = klass._lookup_method("__setattr__")
+        if method != null:
+            klass._invoke_func(method, [self, DSLString.new(name), value] as Array[DSLObject], {} as Dictionary)
+            return
+    # 3. __slots__ white-list: restricts instance writes only when every class in the MRO declares slots
     if klass != null:
-        var setattr_method = klass._lookup_method("__setattr__")
-        if setattr_method != null:
-            klass._invoke_func(setattr_method, [self, DSLString.new(name), value] as Array[DSLObject], {} as Dictionary)
+        var slot_names = _collect_slot_names(klass)
+        if slot_names != null and not slot_names.has(name):
+            last_error = "AttributeError: '%s' object has no attribute '%s'" % [_type_name(), name]
             return
-
-    # 3. Store directly in the instance's fields dictionary
+    # 4. Store directly in the instance's fields dictionary
     if fields != null:
         fields[name] = value
         return
-    last_error = "AttributeError: '%s' object has no attribute '%s'" % [type_name, attr_name]
+    last_error = "AttributeError: '%s' object has no attribute '%s'" % [_type_name(), attr_name]
 ```
 
-**Setting priority:** Property descriptor (`__set__`) → Class `__setattr__` → Instance `fields` dictionary
+**Setting priority:** Property descriptor (`__set__`) → User data descriptor (`__set__`) → Class `__setattr__` → `__slots__` white-list → Instance `fields` dictionary
+
+**`__slots__` white-list:** when a user class declares `__slots__ = ['a', 'b']` (tuple / list / set / single string), `_collect_slot_names` gathers the declarations along the MRO — the white-list is produced **only when every class on the MRO (other than `object`) declares `__slots__`**; if any class omits it (the instance then carries a `__dict__`), it returns null and writes are unrestricted. When the white-list is active, writing an attribute outside it raises `AttributeError: '<class>' object has no attribute '<name>'`; names inside it still store into `fields` (`__slots__` only acts as a write white-list, it does not change attribute storage)
+
+**User data descriptors:** when a user-defined data descriptor (an object with both `__get__` and `__set__`) is assigned, the write goes through `__set__` (`_call_user_descriptor_set`), taking priority over instance fields — on par with `@property` data descriptors (`@property` is the built-in `DSLProperty` implementation, a user data descriptor is a custom class instance; both follow the descriptor protocol)
 
 ### `_dsl_str()` — String Representation
 

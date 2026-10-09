@@ -189,7 +189,7 @@ class DSLMethodDescriptor extends DSLObject:
     var callback: Callable          # GDScript 回调
 ```
 
-**`_dsl_str()` 输出示例：** `"<method 'upper' of '??' objects>"`（归属类名当前为硬编码占位 `??`，`str(str.upper)` 即输出该形态）
+**`_dsl_str()` 输出示例：** `"<method 'upper' of 'str' objects>"`（归属类名取定义类型，`str(str.upper)` 即输出该形态）
 
 ***描述符协议***
 
@@ -231,7 +231,7 @@ class DSLWrappedDescriptor extends DSLObject:
     var callback: Callable          # GDScript 回调
 ```
 
-**`_dsl_str()` 输出示例：** `"<slot wrapper '__add__' of '??' objects>"`（归属类名当前为硬编码占位 `??`）
+**`_dsl_str()` 输出示例：** `"<slot wrapper '__add__' of 'int' objects>"`（归属类名取定义类型，`str(int.__add__)` 即输出该形态）
 
 ***描述符协议***
 
