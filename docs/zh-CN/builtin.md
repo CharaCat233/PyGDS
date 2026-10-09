@@ -129,41 +129,6 @@ print("Hello", "World", sep=", ")    # Hello, World
 print("Hello", end="!")              # Hello!
 ```
 
-### `info(msg)`
-
-模仿 Python `logging.info()`，输出 INFO 级别的日志消息
-
-```python
-info("程序启动完成")
-```
-
-### `warn(msg)`
-
-模仿 Python `logging.warn()`，输出 WARN 级别的日志消息
-
-`warn()` 是 `warning()` 的别名，两者等价
-
-```python
-warn("配置项缺失，使用默认值")
-warning("已弃用的 API，请迁移")
-```
-
-### `warning(msg)`
-
-模仿 Python `logging.warning()`，输出 WARN 级别的日志消息
-
-```python
-warning("建议使用新的 API")
-```
-
-### `error(msg)`
-
-模仿 Python `logging.error()`，输出 ERROR 级别的日志消息
-
-```python
-error("数据库连接失败")
-```
-
 ### `len(obj)`
 
 对应 Python `len()`，返回序列或集合的长度
@@ -601,7 +566,7 @@ print(type(f).__name__)                        # filter
 
 ## 内置模块 (import)
 
-PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib` 内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
+PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib`、`bisect`、`heapq`、`base64`、`json`、`logging` 内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
 
 ### import 语法
 
@@ -885,6 +850,26 @@ print(list(counter()))                                  # [0, 1, 2]
 import string
 string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 string.digits          # '0123456789'
+```
+
+### `logging` 模块（日志输出）
+
+| 函数 | 级别 |
+| :--- | :--- |
+| `info(msg)` | INFO |
+| `warning(msg)` | WARN |
+| `warn(msg)` | WARN（`warning` 的别名，两者等价） |
+| `error(msg)` | ERROR |
+
+日志输出写入 `console_output`，受宿主日志级别（`set_log_level`）过滤；返回值均为 `None`
+
+```python
+import logging
+
+logging.info("程序启动完成")
+logging.warn("配置项缺失，使用默认值")
+logging.warning("已弃用的 API，请迁移")
+logging.error("数据库连接失败")
 ```
 
 ---

@@ -68,7 +68,7 @@ When debug mode is disabled, output is not printed to the console in real time, 
 
 ## Log Level Control
 
-PyGDS provides built-in logging functions whose output is controlled by log levels.
+PyGDS provides a `logging` module whose output is controlled by log levels.
 
 ```gdscript
 dsl.set_log_level(PyGDS.ConsoleReport.Level.WARN)
@@ -84,13 +84,18 @@ dsl.set_log_level(PyGDS.ConsoleReport.Level.WARN)
 | `ConsoleReport.Level.ERROR` | Show only error and fatal |
 | `ConsoleReport.Level.FATAL` | Show only fatal (least verbose) |
 
-### DSL Built-in Logging Functions
+### logging Module Functions
 
 ```python
-info("this is info log")       # Corresponds to ConsoleReport.Level.INFO
-warn("this is warning log")    # Corresponds to ConsoleReport.Level.WARN
-error("this is error log")     # Corresponds to ConsoleReport.Level.ERROR
+import logging
+
+logging.info("this is info log")          # Corresponds to ConsoleReport.Level.INFO
+logging.warn("this is warning log")       # Corresponds to ConsoleReport.Level.WARN
+logging.warning("this is warning log")    # Alias of warn; both are equivalent
+logging.error("this is error log")        # Corresponds to ConsoleReport.Level.ERROR
 ```
+
+Logs are written to `console_output` and filtered by `set_log_level`; all return `None`.
 
 ---
 
@@ -108,7 +113,7 @@ print(dsl.console_output)    # Accumulated output of all logs and errors
 ```
 
 - `print_output`: Contains only the output from the `print()` function.
-- `console_output`: Contains all console output, including logs (`info`/`warn`/`error`), error reports, etc.
+- `console_output`: Contains all console output, including logs (the `logging` module's `info`/`warn`/`warning`/`error`), error reports, etc.
 
 ---
 
@@ -921,7 +926,7 @@ Arguments are evaluated in source order; duplicate keywords (including against `
 
 ### import and Built-in Modules
 
-Supports `import` / `from-import` of built-in modules (`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys`):
+Supports `import` / `from-import` of built-in modules; the full list is in the [built-in module documentation](./builtin.md#import-and-built-in-modules):
 
 ```python
 import math
@@ -1627,10 +1632,12 @@ The error message is available via `dsl.report.last_error`, in the format `Error
 x = 42
 print("DEBUG: x =", x)       # Output to print_output
 
-# Use logging functions
-info("entering function foo")
-warn("potential issue detected")
-error("unexpected state")
+# Use logging functions (logging module)
+import logging
+
+logging.info("entering function foo")
+logging.warn("potential issue detected")
+logging.error("unexpected state")
 ```
 
 ---

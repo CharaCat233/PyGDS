@@ -51,9 +51,12 @@ func _ready() -> void:
     dsl.set_debug_mode(true)
 
     dsl.write_dsl_script("""
+import logging
+
 print("Hello, PyGDS!")
-info("这是一条 INFO 日志")
-warn("这是一条 WARN 日志")
+
+logging.info("这是一条 INFO 日志")
+logging.warn("这是一条 WARN 日志")
 """)
     dsl.run()
 
@@ -189,6 +192,8 @@ dsl.run()
 > **⚠️ 破坏性变更（v0.6.0-alpha.2）**：异常对象的 `str(e)` 改为返回消息文本（此前为异常类型名，无参为空串），`repr(e)` 为 `TypeName('msg')` 格式，`e.args` 返回参数元组；`type` 变为类对象（`print(type)` 输出 `<class 'type'>`）；`dir()` 无参仅返回用户定义名，内置类型实例返回方法名列表
 >
 > **⚠️ 破坏性变更（v0.8.0-alpha.1）**：`with` 现为保留关键字，不能再用作变量名/函数名等标识符（此前可当普通标识符用）；若旧代码以 `with` 命名变量，需改名
+>
+> **⚠️ 破坏性变更（v0.8.6）**：`info()` / `warn()` / `warning()` / `error()` 已从全局内置函数迁移到 `logging` 模块，须 `import logging` 后用 `logging.info(...)` 等形式调用；裸名调用报 `NameError`（与 CPython 一致）
 
 ---
 
@@ -205,7 +210,7 @@ dsl.run()
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
 | D3 | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
-| D6 | 内置模块 repr 标 (built-in) | PyGDS 将 `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` 全部实现为 GDScript 内置模块，repr 为 `<module 'x' (built-in)>`；CPython 对应模块为 .py 文件，repr 为 `<module 'x' from '...py'>`（对 PyGDS 实为内置，非缺陷） |
+| D6 | 内置模块 repr 标 (built-in) | PyGDS 将 `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` / `logging` 等模块实现为 GDScript 内置模块，repr 为 `<module 'x' (built-in)>`；CPython 对应模块为 .py 文件，repr 为 `<module 'x' from '...py'>`（对 PyGDS 实为内置，非缺陷） |
 | D7 | 用户模块 repr 的 from 'path' 用脚本可见路径 | 用户模块 `repr` 的源路径取脚本可见形态：沙箱内为盘符相对路径（如 `<module 'm' from 'MOD1:/m.py'>`），不暴露 `user://` 真实路径；CPython 为绝对路径（沙箱设计的既定正确行为） |
 
 ### 平台层差异（Platform）

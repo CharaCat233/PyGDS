@@ -7745,7 +7745,7 @@ class DSLString extends DSLObject:
 	
 	## Python 空白字符判定 (空格 / 制表 / 换行 / 回车 / 换页 / 垂直制表)
 	func _is_py_ws(ch: String) -> bool:
-		# 空白分割集 (CPython str.split/rsplit 默认分隔 = isspace 全集): 含  与扩展空白
+		# 空白分割集 (CPython str.split/rsplit 默认分隔 = isspace 全集): 含 \r 与扩展空白
 		var cp = ch.unicode_at(0)
 		if cp == 0x20 or (cp >= 0x09 and cp <= 0x0d) or (cp >= 0x1c and cp <= 0x1f):
 			return true
@@ -8575,8 +8575,9 @@ class DSLString extends DSLObject:
 			maxsplit = args[2].value
 		var result = DSLList.new()
 		if use_default:
-			# 默认按空白分割 (与 split 同规则, 跳过空项); 结果保持从左到右顺序 (CPython rsplit 同)
-			var words: Array = []  # [start, end) 位置对
+			# 默认按空白分割 (与 split 同规则, 跳过空项), 结果保持从左到右顺序
+			# [start, end) 位置对
+			var words: Array = []
 			var pos = 0
 			while pos < s.length():
 				while pos < s.length() and _is_py_ws(s[pos]):
@@ -24537,10 +24538,6 @@ class Interpreter:
 		DSLFloat._type_class = float_class
 		_builtin_type_classes["bytes"] = bytes_cls
 		globals.define("print", _make_builtin("print", Callable(self, "builtin_print")))
-		globals.define("info", _make_builtin("info", Callable(self, "builtin_info")))
-		globals.define("warn", _make_builtin("warn", Callable(self, "builtin_warn")))
-		globals.define("warning", _make_builtin("warning", Callable(self, "builtin_warning")))
-		globals.define("error", _make_builtin("error", Callable(self, "builtin_error")))
 		globals.define("id", _make_builtin("id", Callable(self, "builtin_id")))
 		globals.define("callable", _make_builtin("callable", Callable(self, "builtin_callable")))
 		globals.define("input", _make_builtin("input", Callable(self, "builtin_input")))
@@ -24737,6 +24734,7 @@ class Interpreter:
 		modules["heapq"] = _create_heapq_module()
 		modules["base64"] = _create_base64_module()
 		modules["json"] = _create_json_module()
+		modules["logging"] = _create_logging_module()
 
 		# I2-68: 登记时全部为内置模块 (用户模块经 _load_user_module 延迟加入, 默认非内置)
 		for mname in modules:
@@ -25152,7 +25150,7 @@ class Interpreter:
 		return DSLBytes.new(dec)
 
 	func _b64_urlsafe_encode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var alt = DSLBytes.new([45, 95])  # b'-_'
+		var alt = DSLBytes.new([45, 95]) # b'-_'
 		return _b64_b64encode([args[0], alt], {})
 
 	func _b64_urlsafe_decode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -25507,7 +25505,8 @@ class Interpreter:
 
 	## 解析 JSON 字符串 (含转义), 返回内容 (不含引号)
 	func _json_parse_string() -> String:
-		_json_pos += 1  # 跳过开引号
+		# 跳过开引号
+		_json_pos += 1
 		var out = ""
 		while true:
 			if _json_pos >= _json_text.length():
@@ -25563,7 +25562,8 @@ class Interpreter:
 
 	## 解析 JSON 数组
 	func _json_parse_array() -> DSLObject:
-		_json_pos += 1  # 跳过 [
+		# 跳过 [
+		_json_pos += 1
 		var items: Array[DSLObject] = []
 		_json_skip_ws()
 		if _json_peek() == "]":
@@ -25588,7 +25588,8 @@ class Interpreter:
 
 	## 解析 JSON 对象 (键必须是字符串)
 	func _json_parse_object() -> DSLObject:
-		_json_pos += 1  # 跳过 {
+		# 跳过 {
+		_json_pos += 1
 		var d = DSLDict.new()
 		_json_skip_ws()
 		if _json_peek() == "}":
@@ -25682,8 +25683,6 @@ class Interpreter:
 		if text == null or report.has_error:
 			return null
 		return _json_loads([text] as Array[DSLObject], {})
-
-
 
 	## @contextmanager 装饰器: 接受生成器函数, 返回可调用包装
 	func _ctxlib_contextmanager(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -25816,6 +25815,52 @@ class Interpreter:
 			raise_exception("TypeError", "monotonic_ns() takes no arguments (%d given)" % args.size())
 			return null
 		return DSLInteger.pooled(int(Time.get_ticks_usec() * 1000))
+
+	## 创建 logging 模块: info / warn / warning / error [br]
+	## 输出写入 console_output, 受日志级别 (set_log_level) 过滤, [br]
+	## warn 为 warning 的别名 (CPython 同) [br]
+	## [returns] DSLModule
+	func _create_logging_module() -> DSLModule:
+		var mod = DSLModule.new("logging")
+		mod.members["info"] = _make_builtin("info", Callable(self, "_logging_info"))
+		mod.members["warn"] = _make_builtin("warn", Callable(self, "_logging_warn"))
+		mod.members["warning"] = _make_builtin("warning", Callable(self, "_logging_warning"))
+		mod.members["error"] = _make_builtin("error", Callable(self, "_logging_error"))
+		return mod
+
+	## logging.info(msg) — 输出 INFO 级日志 [br]
+	## [param args] [msg] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] None
+	func _logging_info(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLNone:
+		var s = args[0]._dsl_str() if args.size() >= 1 else ""
+		report.info(s)
+		return get_none()
+
+	## logging.warning(msg) — 输出 WARN 级日志 [br]
+	## [param args] [msg] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] None
+	func _logging_warning(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLNone:
+		var s = args[0]._dsl_str() if args.size() >= 1 else ""
+		report.warn(s)
+		return get_none()
+
+	## logging.warn(msg) — warning 的别名 [br]
+	## [param args] [msg] [br]
+	## [param kwargs] 关键字参数 (透传) [br]
+	## [returns] None
+	func _logging_warn(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLNone:
+		return _logging_warning(args, kwargs)
+
+	## logging.error(msg) — 输出 ERROR 级日志 [br]
+	## [param args] [msg] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] None
+	func _logging_error(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLNone:
+		var s = args[0]._dsl_str() if args.size() >= 1 else ""
+		report.err(s)
+		return get_none()
 
 	## 从模块注册表获取模块 [br]
 	## [param name] 模块名 [br]
@@ -34366,28 +34411,6 @@ class Interpreter:
 			s += str_result.value if str_result is DSLString else args[i]._dsl_str()
 		s += end
 		report.print_msg(s)
-		return DSLNone.new()
-	
-	## info(*args) - 输出信息日志
-	func builtin_info(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLNone:
-		var s = args[0]._dsl_str() if args.size() >= 1 else ""
-		report.info(s)
-		return DSLNone.new()
-		
-	## warn(*args) - 输出警告日志
-	func builtin_warn(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLNone:
-		return builtin_warning(args, kwargs)
-		
-	## warning(*args) - 输出警告日志
-	func builtin_warning(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLNone:
-		var s = args[0]._dsl_str() if args.size() >= 1 else ""
-		report.warn(s)
-		return DSLNone.new()
-		
-	## error(*args) - 输出错误日志
-	func builtin_error(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLNone:
-		var s = args[0]._dsl_str() if args.size() >= 1 else ""
-		report.err(s)
 		return DSLNone.new()
 	
 	## str(obj) - 转换为字符串

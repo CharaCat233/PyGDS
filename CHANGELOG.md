@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.6] - 2026-10-09
+
+### 变更
+
+- **日志函数迁移至 `logging` 模块**：`info()` / `warn()` / `warning()` / `error()` 由全局内置函数迁移为 `logging` 模块成员，须 `import logging` 后以 `logging.info(...)` 等形式调用；裸名调用报 `NameError`（与 CPython 一致，CPython 亦无这些全局内置名）；`warn` 保持 `warning` 别名关系，两者等价；输出渠道不变（写入 `console_output`，受 `set_log_level` 过滤），返回值统一为 `None` 单例（`is None` 成立）
+- 顺带整理 `str.rsplit` / JSON 解析 / base64 小节的代码注释排布，`_is_py_ws` 注释内的游离回车字节改为 `\r` 文本（无行为变化）
+
+### 测试
+
+- 新增 1 例：`module_logging`（模块成员可调用性 / 返回值 `is None` / `from logging import info, error` / 四个裸名逐一报 `NameError`，`same_output`）；behavioral.md 中英同步（374 条）
+
+### 文档
+
+- README 中英新增 v0.8.6 破坏性变更条目，快速开始示例改用 `logging` 模块；D6 条目模块枚举补 `logging`
+- builtin.md 中英移除四个全局函数条目，内置模块列表补齐（`logging` 与已实现的 `bisect` / `heapq` / `base64` / `json` / `sys`），新增 `logging` 模块小节；usage.md 中英「日志级别控制」「获取输出」「调试技巧」「import 与内置模块」小节同步
+- behavioral.md 中英模块小节导语更新为完整模块清单（16 个内置模块）
+
 ## [0.8.5] - 2026-10-09
 
 ### 修复

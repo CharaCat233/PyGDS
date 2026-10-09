@@ -51,9 +51,12 @@ func _ready() -> void:
     dsl.set_debug_mode(true)
 
     dsl.write_dsl_script("""
+import logging
+
 print("Hello, PyGDS!")
-info("This is an INFO log")
-warn("This is a WARN log")
+
+logging.info("This is an INFO log")
+logging.warn("This is a WARN log")
 """)
     dsl.run()
 
@@ -189,6 +192,8 @@ Support-level markers:
 > **⚠️ Breaking Change (v0.6.0-alpha.2)**: `str(e)` of exception objects now returns the message text (previously the exception type name, empty string for no args), `repr(e)` prints `TypeName('msg')`, and `e.args` returns the argument tuple; `type` is now a class object (`print(type)` prints `<class 'type'>`); a no-arg `dir()` returns only user-defined names and built-in type instances list their method names
 >
 > **⚠️ Breaking Change (v0.8.0-alpha.1)**: `with` is now a reserved keyword and can no longer be used as an identifier (variable/function name, etc.). Code that used `with` as a name must rename it.
+>
+> **⚠️ Breaking Change (v0.8.6)**: `info()` / `warn()` / `warning()` / `error()` have moved from global built-in functions into the `logging` module — use `import logging` and call `logging.info(...)` etc. Bare-name calls now raise `NameError` (matching CPython).
 
 ---
 
@@ -205,7 +210,7 @@ The following lists the known differences and limitations between PyGDS and CPyt
 | ID | Item | Details |
 | :--- | :--- | :--- |
 | D3 | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
-| D6 | Built-in module repr marked (built-in) | PyGDS implements `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` entirely as GDScript built-in modules, so their repr is `<module 'x' (built-in)>`; the CPython counterparts are .py files with `<module 'x' from '...py'>` (they genuinely are built-in to PyGDS, not a defect) |
+| D6 | Built-in module repr marked (built-in) | PyGDS implements `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` / `logging` and similar modules as GDScript built-ins, so their repr is `<module 'x' (built-in)>`; the CPython counterparts are .py files with `<module 'x' from '...py'>` (they genuinely are built-in to PyGDS, not a defect) |
 | D7 | User-module repr from 'path' uses the script-visible path | A user module's repr source path is the script-visible form: inside the sandbox it is a drive-relative path (e.g. `<module 'm' from 'MOD1:/m.py'>`) and never exposes the real `user://` path; CPython uses absolute paths (the intended correct behaviour of the sandbox design) |
 
 ### Platform-Layer Differences (Platform)

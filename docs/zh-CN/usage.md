@@ -68,7 +68,7 @@ dsl.set_debug_mode(false)
 
 ## 日志级别控制
 
-PyGDS 提供了内置的日志函数，其输出受日志级别控制
+PyGDS 提供了 `logging` 模块，其输出受日志级别控制
 
 ```gdscript
 dsl.set_log_level(PyGDS.ConsoleReport.Level.WARN)
@@ -84,13 +84,18 @@ dsl.set_log_level(PyGDS.ConsoleReport.Level.WARN)
 | `ConsoleReport.Level.ERROR` | 只显示 error 和 fatal |
 | `ConsoleReport.Level.FATAL` | 只显示 fatal（最精简） |
 
-### DSL 内置日志函数
+### logging 模块日志函数
 
 ```python
-info("this is info log")       # 对应 ConsoleReport.Level.INFO
-warn("this is warning log")    # 对应 ConsoleReport.Level.WARN
-error("this is error log")     # 对应 ConsoleReport.Level.ERROR
+import logging
+
+logging.info("this is info log")          # 对应 ConsoleReport.Level.INFO
+logging.warn("this is warning log")       # 对应 ConsoleReport.Level.WARN
+logging.warning("this is warning log")    # warn 的别名, 两者等价
+logging.error("this is error log")        # 对应 ConsoleReport.Level.ERROR
 ```
+
+日志写入 `console_output` 并受 `set_log_level` 过滤，返回值均为 `None`
 
 ---
 
@@ -108,7 +113,7 @@ print(dsl.console_output)    # 所有日志和错误输出的累积
 ```
 
 - `print_output`：仅包含 `print()` 函数的输出
-- `console_output`：包含日志（`info`/`warn`/`error`）、错误报告等所有控制台输出
+- `console_output`：包含日志（`logging` 模块的 `info`/`warn`/`warning`/`error`）、错误报告等所有控制台输出
 
 ---
 
@@ -920,7 +925,7 @@ f(**{"a": 1}, b=2, **{"c": 3})   # {} {'a': 1, 'b': 2, 'c': 3}
 
 ### import 与内置模块
 
-支持 `import` / `from-import` 导入内置模块（`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys`）：
+支持 `import` / `from-import` 导入内置模块，完整列表见 [内置模块文档](./builtin.md#内置模块-import)：
 
 ```python
 import math
@@ -1625,10 +1630,12 @@ c = a + undefined_var         # NameError: name 'undefined_var' is not defined (
 x = 42
 print("DEBUG: x =", x)       # 输出到 print_output
 
-# 使用日志函数
-info("entering function foo")
-warn("potential issue detected")
-error("unexpected state")
+# 使用日志函数 (logging 模块)
+import logging
+
+logging.info("entering function foo")
+logging.warn("potential issue detected")
+logging.error("unexpected state")
 ```
 
 ---

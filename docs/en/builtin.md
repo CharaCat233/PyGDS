@@ -129,41 +129,6 @@ print("Hello", "World", sep=", ")    # Hello, World
 print("Hello", end="!")              # Hello!
 ```
 
-### `info(msg)`
-
-Mimics Python `logging.info()`, outputting an INFO-level log message.
-
-```python
-info("Application started successfully")
-```
-
-### `warn(msg)`
-
-Mimics Python `logging.warn()`, outputting a WARN-level log message.
-
-`warn()` is an alias for `warning()`; both are equivalent.
-
-```python
-warn("Configuration item missing, using default")
-warning("Deprecated API, please migrate")
-```
-
-### `warning(msg)`
-
-Mimics Python `logging.warning()`, outputting a WARN-level log message.
-
-```python
-warning("It is recommended to use the new API")
-```
-
-### `error(msg)`
-
-Mimics Python `logging.error()`, outputting an ERROR-level log message.
-
-```python
-error("Database connection failed")
-```
-
 ### `len(obj)`
 
 Corresponds to Python `len()`, returning the length of a sequence or collection.
@@ -602,7 +567,7 @@ print(type(f).__name__)                        # filter
 
 ## Built-in Modules (import)
 
-PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the built-in modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys` and `contextlib` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
+PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the built-in modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys`, `contextlib`, `bisect`, `heapq`, `base64`, `json` and `logging` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
 
 ### import Syntax
 
@@ -888,6 +853,26 @@ print(list(counter()))                                  # [0, 1, 2]
 import string
 string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 string.digits          # '0123456789'
+```
+
+### `logging` Module (Log Output)
+
+| Function | Level |
+| :--- | :--- |
+| `info(msg)` | INFO |
+| `warning(msg)` | WARN |
+| `warn(msg)` | WARN (an alias of `warning`; both are equivalent) |
+| `error(msg)` | ERROR |
+
+Log output is written to `console_output` and filtered by the host log level (`set_log_level`); all return `None`.
+
+```python
+import logging
+
+logging.info("Application started successfully")
+logging.warn("Configuration item missing, using default")
+logging.warning("Deprecated API, please migrate")
+logging.error("Database connection failed")
 ```
 
 ---

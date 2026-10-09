@@ -1548,7 +1548,7 @@ range arguments keep arbitrary precision instead of converging to the index widt
 
 ## Standard Library Modules (`module_*`)
 
-The nine built-in modules (math/random/statistics/functools/itertools/collections/string/operator/time). A single function with enough behavior of its own is split into a sub-file (e.g. `module_math_sqrt`).
+PyGDS's built-in standard library modules (`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys` / `time` / `contextlib` / `bisect` / `heapq` / `base64` / `json` / `logging`); the full list is in [builtin.md](./builtin.md). A single function with enough behavior of its own is split into a sub-file (e.g. `module_math_sqrt`).
 
 ### module_base64
 
@@ -1695,6 +1695,14 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Source: [ci/cases/module_json.py](../../ci/cases/module_json.py)
 
 `dumps` supports `indent`/`sort_keys`/`separators`/`ensure_ascii` (floats via shortest-roundtrip repr, arbitrary-precision big ints, non-string keys escaped by their literal, unserializable types raise `TypeError`); `loads` fully parses (string escapes/leading-zero validation/nesting), invalid JSON raises `JSONDecodeError` (a ValueError subclass); bool dict keys serialize as `"1"` instead of `"true"` because DSLDict collapses bool/int keys (documented edge)
+
+### module_logging
+
+- Responsibility: `logging` module info/warn/warning/error calls and bare-name removal
+- Comparison: `same_output`
+- Source: [ci/cases/module_logging.py](../../ci/cases/module_logging.py)
+
+`info`/`warn`/`warning`/`error` write to console_output subject to log-level filtering and return None (the singleton, so `is None` holds), `warn` is an alias of `warning`
 
 ### module_math
 

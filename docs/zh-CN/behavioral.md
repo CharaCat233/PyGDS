@@ -1548,7 +1548,7 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 
 ## 标准库模块（module_*）
 
-PyGDS 内置的九个标准库模块（math/random/statistics/functools/itertools/collections/string/operator/time）。单一函数行为多到值得独立时拆出子文件（如 `module_math_sqrt`）。
+PyGDS 内置的标准库模块（`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys` / `time` / `contextlib` / `bisect` / `heapq` / `base64` / `json` / `logging`），完整列表见 [builtin.md](./builtin.md)。单一函数行为多到值得独立时拆出子文件（如 `module_math_sqrt`）
 
 ### module_base64
 
@@ -1695,6 +1695,14 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 源文件: [ci/cases/module_json.py](../../ci/cases/module_json.py)
 
 `dumps` 支持 `indent`/`sort_keys`/`separators`/`ensure_ascii` (float 经最短往返 repr, 大整数任意精度, 非字符串键按字面量转义, 不可序列化类型报 `TypeError`); `loads` 完整解析 (字符串转义/数字前导零校验/嵌套), 非法 JSON 报 `JSONDecodeError` (ValueError 子类); bool 字典键因 DSLDict 折叠 bool/int 键而序列化为 `"1"` 而非 `"true"` (文档化边缘)
+
+### module_logging
+
+- 职责: logging 模块 info/warn/warning/error 调用
+- 比对: `same_output`
+- 源文件: [ci/cases/module_logging.py](../../ci/cases/module_logging.py)
+
+`info`/`warn`/`warning`/`error` 输出写入 console_output 并受日志级别过滤, 返回值均为 None (单例, `is None` 成立), `warn` 为 `warning` 的别名
 
 ### module_math
 
