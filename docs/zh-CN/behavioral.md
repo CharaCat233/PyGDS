@@ -14,17 +14,29 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
 
+### exception_bool_rare
+
+- 职责: `__bool__` 非 bool 在稀路径的错误传播 (异常组 filter 类型校验 / 惰性谓词 / operator / any / all)
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
+
 ### exception_except_bad_type
 
-- 职责: except 子句类型非法 (非 BaseException 子类) 报 TypeError
+- 职责: except 子句类型非法 (非 `BaseException` 子类) 报 `TypeError`
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_except_bad_type.py](../../ci/cases/exception_except_bad_type.py)
 
 ### exception_str_uninit
 
-- 职责: 自定义异常未调 super().__init__ 时 str(e) 按 args 格式化
+- 职责: 自定义异常未调 `super().__init__` 时 `str(e)` 按 `args` 格式化
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
+
+### module_repr
+
+- 职责: 模块 repr 形态 (内置 `<module 'x' (built-in)>`)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_repr.py](../../ci/cases/module_repr.py)
 
 ### syntax_annotation
 
@@ -337,6 +349,12 @@
 - 职责: 导入语句别名、星号导入与 `ImportError`
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_import.py](../../ci/cases/syntax_import.py)
+
+### syntax_import_dotted
+
+- 职责: 点分 import 与相对导入的错误类别 (运行期 ModuleNotFoundError / ImportError)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_import_dotted.py](../../ci/cases/syntax_import_dotted.py)
 
 ### syntax_import_future
 
@@ -1126,7 +1144,7 @@
 
 ### type_bytes_format
 
-- 职责: `bytes` `%` 格式化占位符与对齐填充
+- 职责: bytes % 格式化占位符、对齐填充与数值转换实参校验
 - 比对: `same_output`
 - 源文件: [ci/cases/type_bytes_format.py](../../ci/cases/type_bytes_format.py)
 
@@ -1154,9 +1172,21 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 
 ### type_ctor_three_args
 
-- 职责: type() 三参错误文案对齐 type.__new__()
+- 职责: type() 三参错误文案对齐 `type.__new__()`
 - 比对: `same_output`
 - 源文件: [ci/cases/type_ctor_three_args.py](../../ci/cases/type_ctor_three_args.py)
+
+### type_descriptor_repr
+
+- 职责: method_descriptor / wrapper_descriptor 的 repr 归属类名
+- 比对: `same_output`
+- 源文件: [ci/cases/type_descriptor_repr.py](../../ci/cases/type_descriptor_repr.py)
+
+### type_magic_class_access
+
+- 职责: 内建类型类上魔法方法描述符可访问与调用 (含 bool/bytes/bytearray/set/frozenset 与 method-descriptor 形态)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_magic_class_access.py](../../ci/cases/type_magic_class_access.py)
 
 ### type_matmul
 
@@ -1393,6 +1423,12 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 - 职责: `slice` 对象构造/属性/索引
 - 比对: `same_output`
 - 源文件: [ci/cases/type_slice.py](../../ci/cases/type_slice.py)
+
+### type_str_classification
+
+- 职责: str 字符分类的 Unicode 码位全码段 (isdecimal/isdigit/isnumeric/isprintable/isspace)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_str_classification.py](../../ci/cases/type_str_classification.py)
 
 ### type_str_decode
 

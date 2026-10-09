@@ -197,14 +197,7 @@ dsl.run()
 
 ### 语言核心差异（Issue）
 
-| 编号 | 内容 | 说明 |
-| :--- | :--- | :--- |
-| I1-80 | 用户类 `__del__` 不会触发 | CPython 在引用归零时调用 `__del__`；PyGDS 的回收路径基于引擎 PREDELETE（同 P5 根源），不调用 `__del__` |
-| I2-68 | 模块对象 repr 为简化形态 | `repr(math)` 为 `<module object>`，CPython 为 `<module 'math' (built-in)>` |
-| I2-71 | 点分 import 与相对导入的错误类别不同 | `import math.floor` 在解析期报 `Unexpected token '.'`（CPython 运行期报 `ModuleNotFoundError`）；`from . import x` 报 `SyntaxError`（CPython 报 `ImportError`） |
-| I2-72 | method_descriptor / wrapper_descriptor 的 repr 归属类名为占位 | `str(str.upper)` 输出 `<method 'upper' of '??' objects>`，CPython 输出 `of 'str' objects` |
-| I2-73 | 内建类型类上的魔法方法描述符不可访问 | `str.__add__` 报 `AttributeError`（CPython 返回 slot wrapper） |
-| I2-74 | 字符分类仅覆盖常见 Unicode 码段 | `isspace` / `isprintable` / `isdigit` / `isnumeric` 已覆盖 ASCII 与常用 Unicode 码段（上标数字、全角数字等）；引擎无 Unicode 数据库，其余 Nd / Nl / No 码段按非数字 / 非空白处理（与 P4 同类平台限制） |
+（当前无未处理条目：原 I1-80 用户类 `__del__` 已并入 P5，原 I2-74 字符分类已实现全码段对齐、未分配码位残余并入 P4）
 
 ### 设计层差异（Design）
 
@@ -213,6 +206,8 @@ dsl.run()
 | D2 | `hash` 数值与 CPython 不同（默认稳定模型） | PyGDS 对 `hash(None)` 等默认使用稳定哈希值（进程间可复现），CPython 为进程随机化哈希；等值对象的哈希相等性等语义一致。已提供对齐开关：`run()` 前设 `stable_identity_hash = false` 即对齐 CPython 3.12 的进程随机化语义 |
 | D3 | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
 | D5 | CPython 3.11+ 的 4300 位 int 与 str 转换上限未模拟 | CPython 的 `int_max_str_digits` 是其自身 DoS 防护；PyGDS 任意精度整数不设该限（有意模型） |
+| D6 | 内置模块 repr 标 (built-in) | PyGDS 将 `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` 全部实现为 GDScript 内置模块，repr 为 `<module 'x' (built-in)>`；CPython 对应模块为 .py 文件，repr 为 `<module 'x' from '...py'>`（对 PyGDS 实为内置，非缺陷） |
+| D7 | 用户模块 repr 的 from 'path' 用脚本可见路径 | 用户模块 `repr` 的源路径取脚本可见形态：沙箱内为盘符相对路径（如 `<module 'm' from 'MOD1:/m.py'>`），不暴露 `user://` 真实路径；CPython 为绝对路径（沙箱设计的既定正确行为） |
 
 ### 平台层差异（Platform）
 
@@ -220,8 +215,8 @@ dsl.run()
 | :--- | :--- | :--- |
 | P2 | 引擎 VM 调用栈 2048 帧硬上限 | 深递归叠加深表达式时引擎以 `Stack overflow` 硬中止调用链，PyGDS 静默丢失后续输出（CPython 可正常完成或抛出可捕获的 `RecursionError`）；表达式求值/解析的 GDScript 帧深不受调用深度约束 |
 | P3 | str 字面量不支持 NUL 字符 | Godot 的 String 无法保存 U+0000（会被替换为 U+FFFD），因此 `'\x00'` / `'\0'` 等 str 转义在解码时明确报 `SyntaxError`；bytes 侧不受影响（`b'\x00'` 正常） |
-| P4 | `\N{名称}` 仅支持内置名称表 | Godot 无 Unicode 名称数据库；PyGDS 内置 ASCII 可打印字符全名与常用符号的名称表（如 `\N{BULLET}'、`\N{LATIN CAPITAL LETTER A}'），表外名称按 CPython 语义报 `SyntaxError: unknown Unicode character name` |
-| P5 | 生成器对象丢弃时的隐式 close 不可实现 | Godot 4.x 的 `NOTIFICATION_PREDELETE` 触发时脚本实例已 detach，引用计数回收路径无法驱动 `finally`（alpha.8 批次二实测，理论修复路径被否定）；需要清理逻辑的代码应显式 `close()`；Godot 升级若松动应复核 |
+| P4 | Unicode 名称与字符分类数据库缺失 | Godot 无 Unicode 名称与赋值数据库。`\N{名称}` 内置 ASCII 可打印字符全名与常用符号名称表，表外按 CPython 语义报 `SyntaxError: unknown Unicode character name`；`isdecimal` / `isdigit` / `isnumeric` / `isspace` 已内置 Nd / No / Nl / Zs 全码位区间表对齐 CPython，`isprintable` 对未分配 (Cn) 码位按可打印处理（无赋值数据库判定） |
+| P5 | 对象回收回调不可驱动（生成器隐式 close 与用户类 `__del__`） | Godot 4.x 的 `NOTIFICATION_PREDELETE` 触发时脚本实例已 detach，引用计数回收路径无法驱动生成器 `finally` 或用户类 `__del__`（alpha.8 批次二实测与 I1-80 同根源，理论修复路径被否定）；需要清理逻辑的代码应显式 `close()`；Godot 升级若松动应复核 |
 | P6 | 引擎退出检查对全局类脚本资源图的滞留告警 | 内嵌类方法体内的自引用构造（类 X 体内 `X.new()`）使引擎退出时不释放脚本核心类图并告警；触发构造已于 v0.8.0-alpha.9 经跨类工厂规避（退出告警清零），新增内嵌类应避免该形态；引擎升级若松动应复核 |
 
 ---

@@ -2,6 +2,24 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.2-alpha.4] - 2026-10-08
+
+### 修复
+
+- **模块 repr 形态（I2-68）**：内置模块 repr 由 `<module object>` 对齐为 `<module 'math' (built-in)>`（`DSLModule` 增 `is_builtin` 标记，登记时统一置位）；用户模块为 `<module 'name' from 'path'>`（源路径取脚本可见形态，沙箱内为盘符相对路径，不暴露 `user://` 真实路径）；`str()` 与 `repr()` 同形
+- **点分 import 与相对导入错误类别（I2-71）**：`import a.b` / `from a.b import x` 由解析期 `Unexpected token '.'` 改为运行期按 CPython 逐级定位失败点报 `ModuleNotFoundError`（首段不存在报 `No module named '<首段>'`，首段为模块而整名不存在的报 `No module named '<整名>'; '<首段>' is not a package`）；相对导入（`from . import x` / `from ..mod import x`）解析期接受、运行期报 `ImportError: attempted relative import with no known parent package`；新增 `ModuleNotFoundError` 异常类（ImportError 子类）
+- **method_descriptor / wrapper_descriptor 的 repr 归属类名（I2-72）**：`str(str.upper)` 由 `<method 'upper' of '??' objects>` 对齐为 `of 'str' objects`（归属类名经回调绑定对象推导，显式 `owner_name` 优先）；异常描述符 `__init__` 归类型名、`__str__`/`__repr__` 归 `BaseException`，`object` 类描述符归 `object`（回调绑定解释器，显式标注）；描述符 `repr()` 与 `str()` 同形
+- **内建类型类上魔法方法描述符完整可访问（I2-73）**：int / float / complex / str / list / tuple / dict / memoryview / bool / bytes / bytearray / set / frozenset 类的魔法方法描述符全部挂载——八类经各类型描述符表，bool / bytes / bytearray / set / frozenset 新增经「分发描述符」（`_make_class_magic_desc`，经 `args[0]` 路由到实际实例的 `magic_<名>`，使 `self` 与 `last_error` 落在实例而非共享 proto）挂载；`str.__add__` / `bool.__or__` / `bytes.__add__` 等由 `AttributeError` 变为可访问的 slot wrapper 并可调用；`DSLBool` / `DSLBytes` 的 self 系魔法方法改为 `args[0]` 基（对齐调用约定）；list / dict 的 `__getitem__`、dict / set / frozenset 的 `__contains__` 对齐 CPython 的 method_descriptor 形态；归属类名按 CPython「定义类型」标注（`bool.__add__` 归 int、`bool.__str__` 归 object 等）；`__str__` 仅 str / bool 安全挂载（其余类型因派生类 `__repr__` 回退语义不挂），`__hash__` / `__call__` 不挂，`__bool__` 在 CPython 不暴露的容器类（str / list / tuple / dict）不再挂载；`_call_magic_or_fallback` 修复描述符把 null 结果包成 DSLNone 掩盖 `last_error` 的错误漏检
+- **`__bool__` 非 bool 在稀路径的错误传播（I2-63）**：异常组 `subgroup` / `split` 的 filter 类型校验（非异常类 / 类元组 / 可调用报 CPython 同文案 `TypeError: expected a function, exception type or tuple of exception types`）；可调用 filter 返回坏真值对象、`filter` / `takewhile` / `dropwhile` 惰性谓词、`operator.truth` / `not_` 的 `__bool__` 非 bool 均按 CPython 传播 TypeError
+- **bytes / bytearray `%` 格式化数值转换实参校验（I2-63 连带）**：`%d` / `%i` / `%u` 对字节类 / 字符串实参按 CPython 报 `TypeError: %d format: a real number is required, not <type>`（不再静默按 0）、`%x` / `%X` / `%o` 报 `an integer is required`（浮点亦拒）、`%f` / `%e` / `%g` 报 `float argument required`；`%s` / `%b` 的 `%b requires a bytes-like object...` 文案修正 `%` 转义（原 `%b` 被 GDScript 格式化当占位符致类型名未替换）
+- **字符分类 Unicode 码位全对齐（I2-74）**：`isdecimal` / `isdigit` / `isnumeric` / `isspace` 内置 Nd / No / Nl / Zs 全码位区间表（`_is_py_decimal` / `_is_py_digit` / `_is_py_numeric` + 区间二分查找，isnumeric 另含带 Numeric_Type 的 CJK 数字表意字），全码位核对与 CPython 0 差异；`isprintable` 补 Cf 格式符全码段（21 区间）；未分配 (Cn) 码位的 isprintable 判定按可打印处理（引擎无赋值数据库，残余并入 P4）
+- **对象回收回调登记合并（I1-80 → P5）**：用户类 `__del__` 与生成器隐式 close 同根源（PREDELETE 触发时实例已 detach），合并为 P5「对象回收回调不可驱动」
+
+### 文档
+
+- README 中英「已知差异与限制」移除已修复的 I2-68 / I2-71 / I2-72 / I2-73 / I2-74 五条与 I1-80（并入 P5）；Issue 系维持清零；P5 合并 `__del__`、P4 并入字符分类未分配码位残余；新增 Design D6（PyGDS 内置模块 repr 标 `(built-in)` vs CPython .py 模块 from 'path'）与 D7（用户模块 repr 源路径用脚本可见 / 盘符相对路径，沙箱设计的既定正确行为）明确 I2-68 / I2-71 的差异处
+- behavioral.md 中英各补 6 条新用例条目（module_repr / syntax_import_dotted / type_descriptor_repr / type_magic_class_access / type_str_classification / exception_bool_rare）
+
 ## [0.8.2-alpha.3] - 2026-10-08
 
 ### 修复

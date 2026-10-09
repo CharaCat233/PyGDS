@@ -197,14 +197,7 @@ The following lists the known differences and limitations between PyGDS and CPyt
 
 ### Language-Core Differences (Issue)
 
-| ID | Item | Details |
-| :--- | :--- | :--- |
-| I1-80 | User-class `__del__` is never invoked | CPython calls `__del__` when the reference count reaches zero; PyGDS's reclamation path is based on the engine PREDELETE (same root cause as P5) and does not call `__del__` |
-| I2-68 | Module object repr uses a simplified form | `repr(math)` is `<module object>`; CPython prints `<module 'math' (built-in)>` |
-| I2-71 | Dotted imports and relative imports raise different error categories | `import math.floor` fails at parse time with `Unexpected token '.'` (CPython raises `ModuleNotFoundError` at runtime); `from . import x` raises `SyntaxError` (CPython raises `ImportError`) |
-| I2-72 | method_descriptor / wrapper_descriptor repr uses a placeholder owner name | `str(str.upper)` prints `<method 'upper' of '??' objects>`; CPython prints `of 'str' objects` |
-| I2-73 | Magic-method descriptors are not accessible on built-in type classes | `str.__add__` raises `AttributeError` (CPython returns the slot wrapper) |
-| I2-74 | Character classification covers only common Unicode ranges | `isspace` / `isprintable` / `isdigit` / `isnumeric` cover ASCII plus common Unicode ranges (superscript digits, full-width digits, etc.); the engine has no Unicode database, so remaining Nd / Nl / No code points are treated as non-digit / non-space (same platform limitation as P4) |
+(No unfixed entries currently: the former I1-80 user-class `__del__` was merged into P5, and the former I2-74 character classification now has full code-point coverage with its unassigned residual merged into P4)
 
 ### Design-Layer Differences (Design)
 
@@ -213,6 +206,8 @@ The following lists the known differences and limitations between PyGDS and CPyt
 | D2 | `hash` values differ from CPython (stable model by default) | PyGDS uses stable hash values for `hash(None)` etc. by default (reproducible across processes), while CPython hashes are process-randomised; the equality/hash-consistency semantics match. An alignment switch exists: set `stable_identity_hash = false` before `run()` to align with CPython 3.12's process randomisation |
 | D3 | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
 | D5 | CPython 3.11+'s 4300-digit int↔str conversion limit is not emulated | CPython's `int_max_str_digits` is its own DoS protection; PyGDS's arbitrary-precision integers impose no such limit (intentional model) |
+| D6 | Built-in module repr marked (built-in) | PyGDS implements `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` entirely as GDScript built-in modules, so their repr is `<module 'x' (built-in)>`; the CPython counterparts are .py files with `<module 'x' from '...py'>` (they genuinely are built-in to PyGDS, not a defect) |
+| D7 | User-module repr from 'path' uses the script-visible path | A user module's repr source path is the script-visible form: inside the sandbox it is a drive-relative path (e.g. `<module 'm' from 'MOD1:/m.py'>`) and never exposes the real `user://` path; CPython uses absolute paths (the intended correct behaviour of the sandbox design) |
 
 ### Platform-Layer Differences (Platform)
 
@@ -220,8 +215,8 @@ The following lists the known differences and limitations between PyGDS and CPyt
 | :--- | :--- | :--- |
 | P2 | Engine VM call-stack hard limit of 2048 frames | Deep recursion combined with deep expressions makes the engine hard-abort the call chain with `Stack overflow`, silently losing the remaining output (CPython either completes or raises a catchable `RecursionError`); the GDScript frame depth of expression evaluation / parsing is not bounded by the call-depth limit |
 | P3 | str literals cannot contain NUL | Godot's String cannot store U+0000 (it would be replaced with U+FFFD), so `'\x00'` / `'\0'` str escapes raise `SyntaxError` at decode time; bytes are unaffected (`b'\x00'` works) |
-| P4 | `\N{...}` supports only the built-in name table | Godot has no Unicode name database; PyGDS ships a name table covering printable ASCII full names and common symbols (e.g. `\N{BULLET}',`\N{LATIN CAPITAL LETTER A}'). Names outside the table raise `SyntaxError: unknown Unicode character name` matching CPython's behaviour for unknown names |
-| P5 | Implicit close of discarded generator objects is unimplementable | At `NOTIFICATION_PREDELETE` time in Godot 4.x the script instance is already detached, so the refcount reclamation path cannot drive `finally` (measured in the alpha.8 second batch, the theoretical fix path was disproved); code needing cleanup should call `close()` explicitly; re-check if a Godot upgrade loosens this |
+| P4 | Missing Unicode name / character-classification databases | Godot has no Unicode name or assignment database. `\N{...}` ships a name table covering printable ASCII full names and common symbols; names outside raise `SyntaxError: unknown Unicode character name`. `isdecimal` / `isdigit` / `isnumeric` / `isspace` now carry full Nd / No / Nl / Zs code-point range tables aligned to CPython, while `isprintable` treats unassigned (Cn) code points as printable (no assignment database) |
+| P5 | Object-reclamation callbacks are undrivable (generator implicit close and user-class `__del__`) | At `NOTIFICATION_PREDELETE` time in Godot 4.x the script instance is already detached, so the refcount reclamation path can drive neither generator `finally` nor user-class `__del__` (measured in the alpha.8 second batch, same root cause as I1-80; the theoretical fix path was disproved); code needing cleanup should call `close()` explicitly; re-check if a Godot upgrade loosens this |
 | P6 | Engine exit check lingers on the global class script resource graph | A self-referencing construction inside an inner class body (`X.new()` within class X's own methods) makes the engine retain the script's core class graph at exit and emit a warning; the triggering construction was avoided in v0.8.0-alpha.9 via a cross-class factory (exit warnings cleared), new inner classes should avoid that form; re-check if a Godot upgrade loosens this |
 
 ---

@@ -2253,14 +2253,19 @@ class FromImportStmt extends Stmt:
 	var names: Array
 	## 是否星号导入 (from math import *)
 	var star: bool = false
+	## 相对导入 (from . import x / from .mod import x, I2-71): PyGDS 无父包上下文,
+	## 运行期按 CPython 报 ImportError
+	var relative: bool = false
 	## 构造 from-import 语句 [br]
 	## [param m] 模块名 [br]
 	## [param n] names 数组 [br]
-	## [param s] 是否星号导入
-	func _init(m, n, s = false):
+	## [param s] 是否星号导入 [br]
+	## [param r] 是否相对导入
+	func _init(m, n, s = false, r = false):
 		module = m
 		names = n
 		star = s
+		relative = r
 
 ## try/except/finally 异常处理语句 [br]
 ## 支持多个 except 子句和一个可选的 finally 子句
@@ -4205,7 +4210,8 @@ class DSLBool extends DSLObject:
 		if uo is DSLComplex and (op == "+" or op == "-" or op == "*" or op == "/" or op == "**"):
 			var op_map = {"+": "magic_add", "-": "magic_sub", "*": "magic_mul", "/": "magic_div", "**": "magic_pow"}
 			return DSLComplex.delegate(op_map[op], self, uo)
-		var lhs = _as_int()
+		# 以 args[0] 为左操作数 (类级描述符经 proto 绑定调用时 self 是 proto, I2-73)
+		var lhs = (args[0] as DSLBool)._as_int()
 		var rhs = args[1]
 		if rhs is DSLBool:
 			rhs = (rhs as DSLBool)._as_int()
@@ -4274,15 +4280,15 @@ class DSLBool extends DSLObject:
 	func magic_pow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return _bool_binary(args, "**")
 
-	## 一元运算: 同样按整数语义处理
-	func magic_neg(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(- (1 if value else 0))
+	## 一元运算: 同样按整数语义处理 (以 args[0] 计, 兼容类级描述符绑定调用, I2-73)
+	func magic_neg(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(- (1 if (args[0] as DSLBool).value else 0))
 
 	func magic_pos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(1 if value else 0)
+		return DSLInteger.pooled(1 if (args[0] as DSLBool).value else 0)
 
-	func magic_invert(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(~(1 if value else 0))
+	func magic_invert(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(~(1 if (args[0] as DSLBool).value else 0))
 
 	## 位运算: 与整数互操作
 	func _bool_bitop(args: Array[DSLObject], op: String) -> DSLObject:
@@ -4293,9 +4299,9 @@ class DSLBool extends DSLObject:
 			return _arithmetic_type_error(op, rhs)
 		var rhsi = rhs as DSLInteger
 		if rhsi.is_big():
-			# 与大数的位运算走整数路径 (结果恒为 int)
-			return _as_int()._binop_big(rhsi, op)
-		var l = 1 if value else 0
+			# 与大数的位运算走整数路径 (结果恒为 int); 左操作数以 args[0] 计 (I2-73)
+			return (args[0] as DSLBool)._as_int()._binop_big(rhsi, op)
+		var l = 1 if (args[0] as DSLBool).value else 0
 		var res = 0
 		match op:
 			"<<":
@@ -4340,7 +4346,7 @@ class DSLBool extends DSLObject:
 	## 大小比较: bool 与数值之间按整数比较
 	func _bool_cmp(args: Array[DSLObject], op: String) -> DSLBool:
 		var rhs = args[1]
-		var l = 1 if value else 0
+		var l = 1 if (args[0] as DSLBool).value else 0
 		if rhs is DSLBool:
 			rhs = (rhs as DSLBool)._as_int()
 		if rhs is DSLInteger:
@@ -7914,25 +7920,18 @@ class DSLString extends DSLObject:
 		if raw.length() == 0:
 			return DSLBool.new(false)
 		for ch in raw:
-			if not ch.is_valid_int():
+			if not _is_py_decimal(ch.unicode_at(0)):
 				return DSLBool.new(false)
 		return DSLBool.new(true)
 
-	## str.isnumeric() (等价于 isdecimal)
+	## str.isnumeric(): Nd + No + Nl 全集 (I2-74)
 	func builtin_isnumeric(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		# isnumeric 覆盖 isdigit 全集再加常见数值字符 (分数/圈数字), CPython 同形
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
 		for ch in raw:
-			var code = ch.unicode_at(0)
-			if _is_py_digit(code):
-				continue
-			if code >= 0xbc and code <= 0xbe:
-				continue
-			if (code >= 0x2460 and code <= 0x2468) or (code >= 0x2488 and code <= 0x2490):
-				continue
-			return DSLBool.new(false)
+			if not _is_py_numeric(ch.unicode_at(0)):
+				return DSLBool.new(false)
 		return DSLBool.new(true)
 
 	## str.isprintable()
@@ -8135,27 +8134,53 @@ class DSLString extends DSLObject:
 				return DSLBool.new(false)
 		return DSLBool.new(true)
 
-	## CPython str.isdigit 的常见 Unicode 数字码段: ASCII 数字之外覆盖上标/下标 [br]
-	## 数字、全角数字与常用文字的 Nd 码段; 引擎无 Unicode 数据库, 其余 Nd 码段按 [br]
-	## 非数字处理 (与 \N{名称} 表的既定平台限制同类)
-	static func _is_py_digit(code: int) -> bool:
-		if code >= 0x30 and code <= 0x39:
-			return true
-		if code == 0xb2 or code == 0xb3 or code == 0xb9:
-			return true
-		if (code >= 0x2070 and code <= 0x2079) or (code >= 0x2080 and code <= 0x2089):
-			return true
-		if code >= 0xff10 and code <= 0xff19:
-			return true
-		if (code >= 0x660 and code <= 0x669) or (code >= 0x6f0 and code <= 0x6f9):
-			return true
-		if (code >= 0x966 and code <= 0x96f) or (code >= 0x9e6 and code <= 0x9ef):
-			return true
-		if (code >= 0xe50 and code <= 0xe59) or (code >= 0xed0 and code <= 0xed9):
-			return true
-		if (code >= 0x17e0 and code <= 0x17e9) or (code >= 0x1810 and code <= 0x1819):
-			return true
+	## 码位区间表二分查找 (区间升序排列, 闭区间) [br]
+	## 用于 Nd / digit 附加 / No+Nl / Cf 的码位判定 (I2-74 扩展)
+	static func _cp_in_ranges(code: int, ranges: Array) -> bool:
+		var lo := 0
+		var hi := ranges.size() - 1
+		while lo <= hi:
+			var mid := (lo + hi) >> 1
+			var r: Array = ranges[mid]
+			if code < r[0]:
+				hi = mid - 1
+			elif code > r[1]:
+				lo = mid + 1
+			else:
+				return true
 		return false
+
+	## Nd 十进制数字全码段 (isdecimal 全集, 680 码位 / 64 区间) [br]
+	## Unicode 通用类别 Nd 是封闭稳定属性, 内置区间表实现全对齐 (I2-74)
+	static var _ND_RANGES: Array = [ [0x30, 0x39], [0x660, 0x669], [0x6f0, 0x6f9], [0x7c0, 0x7c9], [0x966, 0x96f], [0x9e6, 0x9ef], [0xa66, 0xa6f], [0xae6, 0xaef], [0xb66, 0xb6f], [0xbe6, 0xbef], [0xc66, 0xc6f], [0xce6, 0xcef], [0xd66, 0xd6f], [0xde6, 0xdef], [0xe50, 0xe59], [0xed0, 0xed9], [0xf20, 0xf29], [0x1040, 0x1049], [0x1090, 0x1099], [0x17e0, 0x17e9], [0x1810, 0x1819], [0x1946, 0x194f], [0x19d0, 0x19d9], [0x1a80, 0x1a89], [0x1a90, 0x1a99], [0x1b50, 0x1b59], [0x1bb0, 0x1bb9], [0x1c40, 0x1c49], [0x1c50, 0x1c59], [0xa620, 0xa629], [0xa8d0, 0xa8d9], [0xa900, 0xa909], [0xa9d0, 0xa9d9], [0xa9f0, 0xa9f9], [0xaa50, 0xaa59], [0xabf0, 0xabf9], [0xff10, 0xff19], [0x104a0, 0x104a9], [0x10d30, 0x10d39], [0x11066, 0x1106f], [0x110f0, 0x110f9], [0x11136, 0x1113f], [0x111d0, 0x111d9], [0x112f0, 0x112f9], [0x11450, 0x11459], [0x114d0, 0x114d9], [0x11650, 0x11659], [0x116c0, 0x116c9], [0x11730, 0x11739], [0x118e0, 0x118e9], [0x11950, 0x11959], [0x11c50, 0x11c59], [0x11d50, 0x11d59], [0x11da0, 0x11da9], [0x11f50, 0x11f59], [0x16a60, 0x16a69], [0x16ac0, 0x16ac9], [0x16b50, 0x16b59], [0x1d7ce, 0x1d7ff], [0x1e140, 0x1e149], [0x1e2f0, 0x1e2f9], [0x1e4f0, 0x1e4f9], [0x1e950, 0x1e959], [0x1fbf0, 0x1fbf9] ]
+
+	## isdigit 在 Nd 之外的 digit-type 码位 (上标/下标/圈数字等, 128 码位 / 20 区间)
+	static var _DIGIT_EXTRA_RANGES: Array = [ [0xb2, 0xb3], [0xb9, 0xb9], [0x1369, 0x1371], [0x19da, 0x19da], [0x2070, 0x2070], [0x2074, 0x2079], [0x2080, 0x2089], [0x2460, 0x2468], [0x2474, 0x247c], [0x2488, 0x2490], [0x24ea, 0x24ea], [0x24f5, 0x24fd], [0x24ff, 0x24ff], [0x2776, 0x277e], [0x2780, 0x2788], [0x278a, 0x2792], [0x10a40, 0x10a43], [0x10e60, 0x10e68], [0x11052, 0x1105a], [0x1f100, 0x1f10a] ]
+
+	## No+Nl 数字 / 字母数字码位 (isnumeric 在 Nd 之外, 1151 码位 / 81 区间)
+	static var _NO_NL_RANGES: Array = [ [0xb2, 0xb3], [0xb9, 0xb9], [0xbc, 0xbe], [0x9f4, 0x9f9], [0xb72, 0xb77], [0xbf0, 0xbf2], [0xc78, 0xc7e], [0xd58, 0xd5e], [0xd70, 0xd78], [0xf2a, 0xf33], [0x1369, 0x137c], [0x16ee, 0x16f0], [0x17f0, 0x17f9], [0x19da, 0x19da], [0x2070, 0x2070], [0x2074, 0x2079], [0x2080, 0x2089], [0x2150, 0x2182], [0x2185, 0x2189], [0x2460, 0x249b], [0x24ea, 0x24ff], [0x2776, 0x2793], [0x2cfd, 0x2cfd], [0x3007, 0x3007], [0x3021, 0x3029], [0x3038, 0x303a], [0x3192, 0x3195], [0x3220, 0x3229], [0x3248, 0x324f], [0x3251, 0x325f], [0x3280, 0x3289], [0x32b1, 0x32bf], [0xa6e6, 0xa6ef], [0xa830, 0xa835], [0x10107, 0x10133], [0x10140, 0x10178], [0x1018a, 0x1018b], [0x102e1, 0x102fb], [0x10320, 0x10323], [0x10341, 0x10341], [0x1034a, 0x1034a], [0x103d1, 0x103d5], [0x10858, 0x1085f], [0x10879, 0x1087f], [0x108a7, 0x108af], [0x108fb, 0x108ff], [0x10916, 0x1091b], [0x109bc, 0x109bd], [0x109c0, 0x109cf], [0x109d2, 0x109ff], [0x10a40, 0x10a48], [0x10a7d, 0x10a7e], [0x10a9d, 0x10a9f], [0x10aeb, 0x10aef], [0x10b58, 0x10b5f], [0x10b78, 0x10b7f], [0x10ba9, 0x10baf], [0x10cfa, 0x10cff], [0x10e60, 0x10e7e], [0x10f1d, 0x10f26], [0x10f51, 0x10f54], [0x10fc5, 0x10fcb], [0x11052, 0x11065], [0x111e1, 0x111f4], [0x1173a, 0x1173b], [0x118ea, 0x118f2], [0x11c5a, 0x11c6c], [0x11fc0, 0x11fd4], [0x12400, 0x1246e], [0x16b5b, 0x16b61], [0x16e80, 0x16e96], [0x1d2c0, 0x1d2d3], [0x1d2e0, 0x1d2f3], [0x1d360, 0x1d378], [0x1e8c7, 0x1e8cf], [0x1ec71, 0x1ecab], [0x1ecad, 0x1ecaf], [0x1ecb1, 0x1ecb4], [0x1ed01, 0x1ed2d], [0x1ed2f, 0x1ed3d], [0x1f100, 0x1f10c] ]
+
+	## isnumeric: Nd + No + Nl 全集 (CPython 同)
+	static var _CJK_NUMERIC_RANGES: Array = [ [0x3405, 0x3405], [0x3483, 0x3483], [0x382a, 0x382a], [0x3b4d, 0x3b4d], [0x4e00, 0x4e00], [0x4e03, 0x4e03], [0x4e07, 0x4e07], [0x4e09, 0x4e09], [0x4e5d, 0x4e5d], [0x4e8c, 0x4e8c], [0x4e94, 0x4e94], [0x4e96, 0x4e96], [0x4ebf, 0x4ec0], [0x4edf, 0x4edf], [0x4ee8, 0x4ee8], [0x4f0d, 0x4f0d], [0x4f70, 0x4f70], [0x5104, 0x5104], [0x5146, 0x5146], [0x5169, 0x5169], [0x516b, 0x516b], [0x516d, 0x516d], [0x5341, 0x5341], [0x5343, 0x5345], [0x534c, 0x534c], [0x53c1, 0x53c4], [0x56db, 0x56db], [0x58f1, 0x58f1], [0x58f9, 0x58f9], [0x5e7a, 0x5e7a], [0x5efe, 0x5eff], [0x5f0c, 0x5f0e], [0x5f10, 0x5f10], [0x62fe, 0x62fe], [0x634c, 0x634c], [0x67d2, 0x67d2], [0x6f06, 0x6f06], [0x7396, 0x7396], [0x767e, 0x767e], [0x8086, 0x8086], [0x842c, 0x842c], [0x8cae, 0x8cae], [0x8cb3, 0x8cb3], [0x8d30, 0x8d30], [0x9621, 0x9621], [0x9646, 0x9646], [0x964c, 0x964c], [0x9678, 0x9678], [0x96f6, 0x96f6], [0xf96b, 0xf96b], [0xf973, 0xf973], [0xf978, 0xf978], [0xf9b2, 0xf9b2], [0xf9d1, 0xf9d1], [0xf9d3, 0xf9d3], [0xf9fd, 0xf9fd], [0x20001, 0x20001], [0x20064, 0x20064], [0x200e2, 0x200e2], [0x20121, 0x20121], [0x2092a, 0x2092a], [0x20983, 0x20983], [0x2098c, 0x2098c], [0x2099c, 0x2099c], [0x20aea, 0x20aea], [0x20afd, 0x20afd], [0x20b19, 0x20b19], [0x22390, 0x22390], [0x22998, 0x22998], [0x23b1b, 0x23b1b], [0x2626d, 0x2626d], [0x2f890, 0x2f890] ]
+
+	## isdecimal: Nd 十进制数字 (CPython 同)
+	static func _is_py_decimal(code: int) -> bool:
+		return _cp_in_ranges(code, _ND_RANGES)
+
+	## isdigit: Nd 全集 + digit-type 附加 (上标/下标/圈数字等, CPython 同)
+	static func _is_py_digit(code: int) -> bool:
+		if _cp_in_ranges(code, _ND_RANGES):
+			return true
+		return _cp_in_ranges(code, _DIGIT_EXTRA_RANGES)
+
+	## isnumeric: Nd + No + Nl 全集 + 带 Numeric_Type 的 CJK 数字表意字 (Lo, CPython 同)
+	static func _is_py_numeric(code: int) -> bool:
+		if _cp_in_ranges(code, _ND_RANGES):
+			return true
+		if _cp_in_ranges(code, _NO_NL_RANGES):
+			return true
+		return _cp_in_ranges(code, _CJK_NUMERIC_RANGES)
+
 	
 	func builtin_isalpha(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
@@ -8195,9 +8220,12 @@ class DSLString extends DSLObject:
 			return true
 		return code == 0x2028 or code == 0x2029
 
+	## Cf 格式符全码段 (isprintable 排除, 170 码位 / 21 区间, I2-74)
+	static var _CF_RANGES: Array = [ [0xad, 0xad], [0x600, 0x605], [0x61c, 0x61c], [0x6dd, 0x6dd], [0x70f, 0x70f], [0x890, 0x891], [0x8e2, 0x8e2], [0x180e, 0x180e], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x206f], [0xfeff, 0xfeff], [0xfff9, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd], [0x13430, 0x1343f], [0x1bca0, 0x1bca3], [0x1d173, 0x1d17a], [0xe0001, 0xe0001], [0xe0020, 0xe007f] ]
+
 	## CPython str.isprintable 的可打印判定: Cc/Cf/Cs/Co/Cn 与分隔符 (Zs 除空格/Zl/Zp) 不可打印 [br]
-	## 覆盖 C0/C1 控制、常用 Cf 格式符与全部 Zs/Zl/Zp 码点; 无 Unicode 数据库, [br]
-	## 未分配码点 (Cn) 的判定按可打印处理, 属引擎平台限制 (与 \N{名称} 表的既定限制同类)
+	## 覆盖 C0/C1 控制、Cf 格式符全码段、全部 Zs/Zl/Zp 码点与代理/私用区; [br]
+	## 未分配码点 (Cn) 的判定按可打印处理, 属引擎无 Unicode 数据库的平台限制 (I2-74)
 	static func _is_py_printable(code: int) -> bool:
 		if code < 0x20 or (code >= 0x7f and code <= 0x9f):
 			return false
@@ -8205,9 +8233,7 @@ class DSLString extends DSLObject:
 			return true
 		if _is_py_space(code):
 			return false
-		if code == 0xad or code == 0xfeff:
-			return false
-		if (code >= 0x200b and code <= 0x200f) or (code >= 0x202a and code <= 0x202e) or (code >= 0x2060 and code <= 0x2064) or (code >= 0x206a and code <= 0x206f):
+		if _cp_in_ranges(code, _CF_RANGES):
 			return false
 		if code >= 0xd800 and code <= 0xdfff:
 			return false
@@ -8615,7 +8641,6 @@ class DSLString extends DSLObject:
 			"__getitem__": DSLWrappedDescriptor.new("__getitem__", Callable(self, "magic_getitem")),
 			"__str__": DSLWrappedDescriptor.new("__str__", Callable(self, "magic_str")),
 			"__repr__": DSLWrappedDescriptor.new("__repr__", Callable(self, "magic_repr")),
-			"__bool__": DSLWrappedDescriptor.new("__bool__", Callable(self, "magic_bool")),
 		}
 	
 	## 确保 str 方法描述符已初始化
@@ -9325,11 +9350,10 @@ class DSLList extends DSLObject:
 			"__eq__": DSLWrappedDescriptor.new("__eq__", Callable(self, "magic_eq")),
 			"__ne__": DSLWrappedDescriptor.new("__ne__", Callable(self, "magic_ne")),
 			"__contains__": DSLWrappedDescriptor.new("__contains__", Callable(self, "magic_contains")),
-			"__getitem__": DSLWrappedDescriptor.new("__getitem__", Callable(self, "magic_getitem")),
+			"__getitem__": DSLMethodDescriptor.new("__getitem__", Callable(self, "magic_getitem")),
 			"__setitem__": DSLWrappedDescriptor.new("__setitem__", Callable(self, "magic_setitem")),
 			"__str__": DSLWrappedDescriptor.new("__str__", Callable(self, "magic_str")),
 			"__repr__": DSLWrappedDescriptor.new("__repr__", Callable(self, "magic_repr")),
-			"__bool__": DSLWrappedDescriptor.new("__bool__", Callable(self, "magic_bool")),
 		}
 		
 	## 确保 list 方法描述符已初始化
@@ -9676,7 +9700,6 @@ class DSLTuple extends DSLObject:
 			"__repr__": DSLWrappedDescriptor.new("__repr__", Callable(self, "magic_repr")),
 			"__add__": DSLWrappedDescriptor.new("__add__", Callable(self, "magic_add")),
 			"__mul__": DSLWrappedDescriptor.new("__mul__", Callable(self, "magic_mul")),
-			"__bool__": DSLWrappedDescriptor.new("__bool__", Callable(self, "magic_bool")),
 		}
 	
 	## 确保 tuple 方法描述符已初始化 [br]
@@ -10133,12 +10156,11 @@ class DSLDict extends DSLObject:
 		_dict_magic_descriptors = {
 			"__eq__": DSLWrappedDescriptor.new("__eq__", Callable(self, "magic_eq")),
 			"__ne__": DSLWrappedDescriptor.new("__ne__", Callable(self, "magic_ne")),
-			"__contains__": DSLWrappedDescriptor.new("__contains__", Callable(self, "magic_contains")),
-			"__getitem__": DSLWrappedDescriptor.new("__getitem__", Callable(self, "magic_getitem")),
+			"__contains__": DSLMethodDescriptor.new("__contains__", Callable(self, "magic_contains")),
+			"__getitem__": DSLMethodDescriptor.new("__getitem__", Callable(self, "magic_getitem")),
 			"__setitem__": DSLWrappedDescriptor.new("__setitem__", Callable(self, "magic_setitem")),
 			"__str__": DSLWrappedDescriptor.new("__str__", Callable(self, "magic_str")),
 			"__repr__": DSLWrappedDescriptor.new("__repr__", Callable(self, "magic_repr")),
-			"__bool__": DSLWrappedDescriptor.new("__bool__", Callable(self, "magic_bool")),
 		}
 	
 	## 确保 dict 方法描述符已初始化 [br]
@@ -10628,8 +10650,9 @@ class DSLBytes extends DSLObject:
 	## 成员判定: 支持单个字节 (int) 与子串 (bytes)
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var target = DSLObject._unwrap_dsl(args[1])
+		var self_data: Array[int] = (args[0] as DSLBytes).data
 		if target is DSLInteger:
-			for b in data:
+			for b in self_data:
 				if b == target.value:
 					return DSLBool.new(true)
 				return DSLBool.new(false)
@@ -10637,10 +10660,10 @@ class DSLBytes extends DSLObject:
 			var sub = target.data
 			if sub.is_empty():
 				return DSLBool.new(true)
-			for i in range(data.size() - sub.size() + 1):
+			for i in range(self_data.size() - sub.size() + 1):
 				var ok = true
 				for j in range(sub.size()):
-					if data[i + j] != sub[j]:
+					if self_data[i + j] != sub[j]:
 						ok = false
 						break
 				if ok:
@@ -10952,6 +10975,25 @@ class DSLBytes extends DSLObject:
 				return DSLString.new(char(raw_c.data[0]))
 			last_error = "TypeError: %c requires an integer in range(256) or a single byte"
 			return null
+		# 数值转换: 实参必须是数字, 字节类 / 字符串按 CPython 报 TypeError (不再静默按 0)
+		var raw_n = DSLObject._unwrap_dsl(val)
+		var is_int_n = raw_n is DSLInteger or raw_n is DSLBool
+		var is_float_n = raw_n is DSLFloat
+		if conv in "diu":
+			# %d/%i/%u: 实数即可 (int/bool/float), 文案中 %i 显示为 %d (CPython 同)
+			if not (is_int_n or is_float_n):
+				last_error = "TypeError: %%%s format: a real number is required, not %s" % [("d" if conv == "i" else conv), raw_n._type_name()]
+				return null
+		elif conv in "xXo":
+			# %x/%X/%o: 仅整数 (bool 可, float 不可)
+			if not is_int_n:
+				last_error = "TypeError: %%%s format: an integer is required, not %s" % [conv, raw_n._type_name()]
+				return null
+		elif conv in "fFeEgG":
+			# %f/%e/%g 族: 实数
+			if not (is_int_n or is_float_n):
+				last_error = "TypeError: float argument required, not %s" % raw_n._type_name()
+				return null
 		# 数值 / 浮点转换原样交给 str 机制 (类型校验文案与 CPython 同族)
 		return val
 
@@ -10980,7 +11022,7 @@ class DSLBytes extends DSLObject:
 					return DSLString.new(s2)
 				last_error = "TypeError: __bytes__ returned non-bytes (type %s)" % r._type_name()
 				return null
-		last_error = "TypeError: %b requires a bytes-like object, or an object that implements __bytes__, not '%s'" % raw._type_name()
+		last_error = "TypeError: %%b requires a bytes-like object, or an object that implements __bytes__, not '%s'" % raw._type_name()
 		return null
 
 	## ASCII 转义形态 (CPython bytes %a / %r): repr 后将非 ASCII 字符转义
@@ -14831,7 +14873,9 @@ class DSLMethodDescriptor extends DSLObject:
 	var name: String
 	## 回调 Callable
 	var callback: Callable
-	
+	## 归属类名 (I2-72: repr 的 of '<owner>' objects; 空时经回调绑定对象推导)
+	var owner_name: String = ""
+
 	## 构造方法描述符 [br]
 	## [param p_name] 方法名称 [br]
 	## [param p_cb] 回调 Callable
@@ -14839,12 +14883,30 @@ class DSLMethodDescriptor extends DSLObject:
 		super._init()
 		name = p_name
 		callback = p_cb
-	
+
 	func _type_name() -> String:
 		return "method_descriptor"
-	
+
+	## 归属类名: 显式 owner_name 优先, 否则取回调绑定对象的类型名 (I2-72)
+	func _owner_type_name() -> String:
+		if owner_name != "":
+			return owner_name
+		var obj = callback.get_object()
+		if obj is DSLObject:
+			var tn = (obj as DSLObject)._type_name()
+			if tn != "" and tn != "object":
+				return tn
+		return "?"
+
 	func _dsl_str() -> String:
-		return "<method '%s' of '%s' objects>" % [name, "??"]
+		return "<method '%s' of '%s' objects>" % [name, _owner_type_name()]
+
+	## repr 与 str 同为描述符形态 (I2-72)
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
+
+	func magic_str(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
+		return DSLString.new(_dsl_str())
 	
 	## 直接调用 (通过 Callable 执行) [br]
 	## [param kwargs] 关键字参数 [br]
@@ -14906,6 +14968,8 @@ class DSLWrappedDescriptor extends DSLObject:
 	var name: String
 	## 回调 Callable
 	var callback: Callable
+	## 归属类名 (I2-72: repr 的 of '<owner>' objects; 空时经回调绑定对象推导)
+	var owner_name: String = ""
 	
 	## 构造魔法方法描述符 [br]
 	## [param p_name] 方法名称 [br]
@@ -14918,8 +14982,26 @@ class DSLWrappedDescriptor extends DSLObject:
 	func _type_name() -> String:
 		return "wrapper_descriptor"
 	
+	## 归属类名: 显式 owner_name 优先, 否则取回调绑定对象的类型名 (I2-72)
+	func _owner_type_name() -> String:
+		if owner_name != "":
+			return owner_name
+		var obj = callback.get_object()
+		if obj is DSLObject:
+			var tn = (obj as DSLObject)._type_name()
+			if tn != "" and tn != "object":
+				return tn
+		return "?"
+	
 	func _dsl_str() -> String:
-		return "<slot wrapper '%s' of '%s' objects>" % [name, "??"]
+		return "<slot wrapper '%s' of '%s' objects>" % [name, _owner_type_name()]
+
+	## repr 与 str 同为描述符形态 (I2-72)
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
+
+	func magic_str(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
+		return DSLString.new(_dsl_str())
 	
 	## 直接调用 (通过 Callable 执行) [br]
 	## [param kwargs] 关键字参数 [br]
@@ -15544,6 +15626,10 @@ class DSLModule extends DSLObject:
 	var members: Dictionary[String, DSLObject] = {}
 	## 模块体执行中标记: 循环导入的部分初始化模块属性访问按 CPython 文案报错
 	var initializing: bool = false
+	## 是否内置模块 (I2-68: repr 为 <module 'x' (built-in)>)
+	var is_builtin: bool = false
+	## 用户模块源文件路径 (脚本可见形态, I2-68: repr 为 <module 'x' from 'path'>)
+	var source_path: String = ""
 
 	## 构造模块 [br]
 	## [param p_name] 模块名
@@ -15555,7 +15641,18 @@ class DSLModule extends DSLObject:
 		return "module"
 
 	func _dsl_str() -> String:
+		if is_builtin:
+			return "<module '%s' (built-in)>" % mod_name
+		if source_path != "":
+			return "<module '%s' from '%s'>" % [mod_name, source_path]
 		return "<module '%s'>" % mod_name
+
+	## repr 与 str 同为模块 repr 形态 (I2-68)
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
+
+	func magic_str(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
+		return DSLString.new(_dsl_str())
 
 	## 属性访问: 优先查成员表, 未找到时回退到基类实现
 	func _dsl_getattribute(name: String) -> DSLObject:
@@ -19396,31 +19493,49 @@ class Parser:
 			var mod_tok = consume(TokenType.IDENTIFIER, "Expected module name")
 			if mod_tok == null:
 				return null
+			# 点分模块名 (import a.b): PyGDS 无包支持, 解析为单名, 运行期按 CPython 报 ModuleNotFoundError
+			var full_name = mod_tok.lexeme
+			while match_types([TokenType.DOT]):
+				var sub_tok = consume(TokenType.IDENTIFIER, "Expected module name after '.'")
+				if sub_tok == null:
+					return null
+				full_name += "." + sub_tok.lexeme
 			var alias = ""
 			if match_types([TokenType.AS]):
 				var alias_tok = consume(TokenType.IDENTIFIER, "Expected alias after 'as'")
 				if alias_tok == null:
 					return null
 				alias = alias_tok.lexeme
-			names.append({"name": mod_tok.lexeme, "alias": alias})
+			names.append({"name": full_name, "alias": alias})
 			if not match_types([TokenType.COMMA]):
 				break
 		skip_newlines()
 		return ImportStmt.new(names)
 
 	## 解析 from-import 语句: from math import sqrt / from math import sqrt as s, pi / from math import * [br]
+	## 相对导入 (from . import x / from .mod import x) 解析期接受, 运行期报 ImportError (I2-71) [br]
 	## [returns] FromImportStmt 节点, 出错时返回 null
 	func from_statement():
-		var mod_tok = consume(TokenType.IDENTIFIER, "Expected module name")
-		if mod_tok == null:
-			return null
-		var module = mod_tok.lexeme
-		# 支持点分模块名 from pkg.mod import name (但本解释器模块为扁平注册表)
+		# 相对导入: 前导点 (from . / from .. / from .mod ...), PyGDS 无父包上下文
+		var rel_depth = 0
 		while match_types([TokenType.DOT]):
-			var sub_tok = consume(TokenType.IDENTIFIER, "Expected module name after '.'")
-			if sub_tok == null:
+			rel_depth += 1
+		var module = ""
+		if rel_depth > 0:
+			# 相对导入: 点后可选模块名 (from . import x 无模块名)
+			if check(TokenType.IDENTIFIER):
+				module = consume(TokenType.IDENTIFIER, "Expected module name").lexeme
+		else:
+			var mod_tok = consume(TokenType.IDENTIFIER, "Expected module name")
+			if mod_tok == null:
 				return null
-			module += "." + sub_tok.lexeme
+			module = mod_tok.lexeme
+			# 支持点分模块名 from pkg.mod import name (但本解释器模块为扁平注册表)
+			while match_types([TokenType.DOT]):
+				var sub_tok = consume(TokenType.IDENTIFIER, "Expected module name after '.'")
+				if sub_tok == null:
+					return null
+				module += "." + sub_tok.lexeme
 		if not match_types([TokenType.IMPORT]):
 			report.error("Expected 'import' in from statement")
 			return null
@@ -19435,7 +19550,7 @@ class Parser:
 				report.error("SyntaxError: future feature * is not defined")
 				return null
 			skip_newlines()
-			return FromImportStmt.new(module, [], true)
+			return FromImportStmt.new(module, [], true, rel_depth > 0)
 		var names: Array = []
 		# 可选括号 from math import (sqrt, pi)
 		var has_paren = match_types([TokenType.LPAREN])
@@ -19470,7 +19585,7 @@ class Parser:
 						return null
 					report.error("SyntaxError: future feature %s is not defined" % feat)
 					return null
-		return FromImportStmt.new(module, names, false)
+		return FromImportStmt.new(module, names, false, rel_depth > 0)
 		
 	## 解析 if/elif/else 条件语句 [br]
 	## 支持 elif 链和可选的 else 分支 [br]
@@ -23263,6 +23378,10 @@ class Interpreter:
 				if _suspended:
 					return null
 				if result != null:
+					# I2-73: 描述符把 magic 方法的 null 结果包成 DSLNone 会掩盖 last_error
+					# (如 bytearray % 的格式化错误); 接收者 last_error 或通道已置时按错误传播
+					if obj.last_error != "" or report.has_error:
+						return null
 					return result
 			var class_method = obj.klass._lookup_method(method_name)
 			if class_method != null:
@@ -23274,6 +23393,8 @@ class Interpreter:
 				if _suspended:
 					return null
 				if result != null:
+					if obj.last_error != "" or report.has_error:
+						return null
 					return result
 		return fallback.call()
 	
@@ -23306,13 +23427,17 @@ class Interpreter:
 		if obj_new is DSLBuiltinFunction:
 			methods["__new__"] = obj_new
 		
-		var init_desc = DSLMethodDescriptor.new("__init__", Callable(self, "_exception_init"))
+		var init_desc = DSLWrappedDescriptor.new("__init__", Callable(self, "_exception_init"))
+		# I2-72: 异常描述符归属类名 (CPython: __init__ 按类型名, __str__/__repr__ 归 BaseException)
+		init_desc.owner_name = type_name
 		methods["__init__"] = init_desc
 		
 		var str_desc = DSLWrappedDescriptor.new("__str__", Callable(self, "_exception_str"))
+		str_desc.owner_name = "BaseException"
 		methods["__str__"] = str_desc
 		
 		var repr_desc = DSLWrappedDescriptor.new("__repr__", Callable(self, "_exception_repr"))
+		repr_desc.owner_name = "BaseException"
 		methods["__repr__"] = repr_desc
 		
 		var class_obj = DSLClass.new(type_name, base_class, methods, self)
@@ -23904,6 +24029,20 @@ class Interpreter:
 			return r != null and not (r is DSLNone) and r._dsl_bool()
 		return false
 
+	## I2-63: 异常组 filter 类型校验 (CPython: 须为异常类 / 类元组 / 可调用, 否则 TypeError) [br]
+	## [param filter] 原始 filter 实参 [br]
+	## [returns] 解包后的合法 filter; 非法时报 TypeError 并返回 null
+	func _validate_group_filter(filter) -> DSLObject:
+		var f = DSLObject._unwrap_dsl(filter)
+		if f is DSLClass:
+			return f
+		if f is DSLTuple:
+			return f
+		if f != null and f._dsl_is_callable():
+			return f
+		raise_exception("TypeError", "expected a function, exception type or tuple of exception types")
+		return null
+
 	## 构造异常组实例 (成员已校验, 经注册类走完整初始化) [br]
 	## [param is_base] 是否为 BaseExceptionGroup 形态 [br]
 	## [param msg] 组消息 [br]
@@ -23932,6 +24071,9 @@ class Interpreter:
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] 子组或 None
 	func _group_subgroup(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var filter_obj = _validate_group_filter(exc_args[1])
+		if report.has_error:
+			return null
 		var group = exc_args[0]
 		var is_base := true
 		if group.klass != null and (group.klass as DSLClass).name == "ExceptionGroup":
@@ -23941,8 +24083,10 @@ class Interpreter:
 			msg = (group.fields["message"] as DSLString).value
 		var matched: Array[DSLObject] = []
 		for m in _group_members(group):
-			if _group_filter_match(m, exc_args[1]):
+			if _group_filter_match(m, filter_obj):
 				matched.append(m)
+			if report.has_error:
+				return null
 		if matched.is_empty():
 			return get_none()
 		return _build_group(is_base, msg, matched)
@@ -23961,11 +24105,16 @@ class Interpreter:
 			msg = (group.fields["message"] as DSLString).value
 		var matched: Array[DSLObject] = []
 		var rest: Array[DSLObject] = []
+		var filter_obj = _validate_group_filter(exc_args[1])
+		if report.has_error:
+			return null
 		for m in _group_members(group):
-			if _group_filter_match(m, exc_args[1]):
+			if _group_filter_match(m, filter_obj):
 				matched.append(m)
 			else:
 				rest.append(m)
+			if report.has_error:
+				return null
 		var match_part: DSLObject = get_none()
 		if not matched.is_empty():
 			match_part = _build_group(is_base, msg, matched)
@@ -24071,11 +24220,15 @@ class Interpreter:
 		# Create object class (user class base, still uses api_object_new + _object_init)
 		var obj_methods = {}
 		obj_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_object_new"))
-		var obj_init_desc = DSLMethodDescriptor.new("__init__", Callable(self, "_object_init"))
+		var obj_init_desc = DSLWrappedDescriptor.new("__init__", Callable(self, "_object_init"))
+		# I2-72: object 类描述符归属类名 (回调绑定解释器, 显式标注); __init__ 等为 slot wrapper 形态
+		obj_init_desc.owner_name = "object"
 		obj_methods["__init__"] = obj_init_desc
-		var obj_setattr_desc = DSLMethodDescriptor.new("__setattr__", Callable(self, "_object_setattr"))
+		var obj_setattr_desc = DSLWrappedDescriptor.new("__setattr__", Callable(self, "_object_setattr"))
+		obj_setattr_desc.owner_name = "object"
 		obj_methods["__setattr__"] = obj_setattr_desc
-		var obj_delattr_desc = DSLMethodDescriptor.new("__delattr__", Callable(self, "_object_delattr"))
+		var obj_delattr_desc = DSLWrappedDescriptor.new("__delattr__", Callable(self, "_object_delattr"))
+		obj_delattr_desc.owner_name = "object"
 		obj_methods["__delattr__"] = obj_delattr_desc
 		# object.__init_subclass__ 默认空操作 (CPython 隐式 classmethod): 使 super().__init_subclass__()
 		# 链式调用可达, 类创建钩子查找总有终点; PyGDS 类头不支持关键字实参, 无 kwargs 拒收路径
@@ -24368,6 +24521,7 @@ class Interpreter:
 		_define_exception("AssertionError")
 		_define_exception("EOFError")
 		_define_exception("ImportError")
+		_define_exception("ModuleNotFoundError", "ImportError")
 		_define_exception("StatisticsError", "ValueError")
 		_define_exception("OverflowError", "ArithmeticError")
 		_define_exception("FloatingPointError", "ArithmeticError")
@@ -24467,6 +24621,9 @@ class Interpreter:
 		modules["sys"] = _create_sys_module()
 		modules["time"] = _create_time_module()
 		modules["contextlib"] = _create_contextlib_module()
+		# I2-68: 登记时全部为内置模块 (用户模块经 _load_user_module 延迟加入, 默认非内置)
+		for mname in modules:
+			(modules[mname] as DSLModule).is_builtin = true
 
 	## 创建空 ExitStack (P6): 类体内的自引用构造 (DSLExitStack 在自身方法中
 	## DSLExitStack.new()) 会使引擎退出检查滞留整个全局类脚本资源图并告警,
@@ -24736,6 +24893,8 @@ class Interpreter:
 		if _sandbox_root != "" and path.begins_with(_sandbox_root + "/"):
 			file_label = _sandbox_letter + ":/" + path.substr(_sandbox_root.length() + 1)
 		mod_env.define("__file__", DSLString.new(file_label))
+		# I2-68: 用户模块 repr 带源文件路径 (脚本可见形态)
+		mod.source_path = file_label
 		# 解释器状态保存/恢复 (模块体整块执行, 仿生成器 _step 的调用方保存)
 		var caller_env = environment
 		var caller_exec = _exec_stack
@@ -28666,20 +28825,29 @@ class Interpreter:
 
 		if stmt is ImportStmt:
 			for entry in stmt.names:
-				var mod = _get_module(entry.name)
+				var entry_name = entry.name
+				if entry_name.contains("."):
+					# I2-71: 点分 import 无包支持, 按 CPython 逐级定位失败点报 ModuleNotFoundError
+					_raise_dotted_import_error(entry_name)
+					return ExecResult.RAISE
+				var mod = _get_module(entry_name)
 				if mod == null:
 					# 内置模块表未命中时按 sys.path 解析用户模块文件
-					mod = _load_user_module(entry.name)
+					mod = _load_user_module(entry_name)
 				if mod == null:
 					if report.has_error:
 						return ExecResult.RAISE
-					raise_exception("ImportError", "No module named '%s'" % entry.name)
+					raise_exception("ImportError", "No module named '%s'" % entry_name)
 					return ExecResult.RAISE
 				var bind_name = entry.alias if entry.alias != "" else entry.name
 				environment.define(bind_name, mod)
 			return ExecResult.NORMAL
 			
 		if stmt is FromImportStmt:
+			# I2-71: 相对导入无父包上下文 (CPython 同文案)
+			if stmt.relative:
+				raise_exception("ImportError", "attempted relative import with no known parent package")
+				return ExecResult.RAISE
 			# __future__ 是编译器指令 (CPython), 合法性与位置已在解析期校验
 			if stmt.module == "__future__":
 				for fe in stmt.names:
@@ -28696,6 +28864,10 @@ class Interpreter:
 				mod = _load_user_module(stmt.module)
 			if mod == null:
 				if report.has_error:
+					return ExecResult.RAISE
+				if stmt.module.contains("."):
+					# I2-71: 点分 from-import 同样按 CPython 报 ModuleNotFoundError
+					_raise_dotted_import_error(stmt.module)
 					return ExecResult.RAISE
 				raise_exception("ImportError", "No module named '%s'" % stmt.module)
 				return ExecResult.RAISE
@@ -28714,6 +28886,22 @@ class Interpreter:
 			return ExecResult.NORMAL
 
 		return ExecResult.NORMAL
+
+	## I2-71: 点分模块名按 CPython 逐级定位失败点报 ModuleNotFoundError [br]
+	## 首段不存在报 No module named '<首段>'; 首段是模块而整名不存在的报 [br]
+	## No module named '<整名>'; '<首段>' is not a package (PyGDS 无包, 命中即此文案)
+	func _raise_dotted_import_error(name: String) -> void:
+		var first = name.split(".")[0]
+		var base = _get_module(first)
+		if base == null:
+			base = _load_user_module(first)
+			if report.has_error:
+				# 首段用户模块自身的解析/执行错误优先 (不覆盖为 ModuleNotFoundError)
+				return
+		if base == null:
+			raise_exception("ModuleNotFoundError", "No module named '%s'" % first)
+		else:
+			raise_exception("ModuleNotFoundError", "No module named '%s'; '%s' is not a package" % [name, first])
 
 	## 执行 with 语句 [br]
 	## 语义等价于逐管理器调用 __enter__ 的 try/finally 脱糖: 进入阶段按序调用 [br]
@@ -32350,6 +32538,22 @@ order (MRO) for bases %s" % ", ".join(names))
 	## 根据 [param cls_name] 匹配目标类型 (str/list/tuple/dict/int) [br]
 	## [param class_obj] 目标 DSLClass [br]
 	## [param cls_name] 类型
+	## I2-73: 类级魔法方法描述符——经 args[0] 分发到实际实例的 magic_<名> 方法, [br]
+	## 使 self 与 last_error 落在实例上 (proto 绑定描述符会让 self/last_error 落在 [br]
+	## 共享 proto 上, 造成错值与错误漏检); owner_name 显式标注供 repr 用 [br]
+	## [param name] 描述符名 (dunder) [br]
+	## [param mname] 实例方法名 (magic_<名>) [br]
+	## [param owner] 归属类名
+	func _make_class_magic_desc(name: String, mname: String, owner: String) -> DSLWrappedDescriptor:
+		var d = DSLWrappedDescriptor.new(name, func(args, kwargs, _mn=mname):
+			var recv = args[0] if args.size() > 0 else null
+			if recv is DSLObject:
+				return (recv as DSLObject).callv(_mn, [args, kwargs])
+			return DSLNone.new()
+		)
+		d.owner_name = owner
+		return d
+
 	func _inject_builtin_methods(class_obj: DSLClass, cls_name: String):
 		match cls_name:
 			"complex":
@@ -32518,11 +32722,28 @@ order (MRO) for bases %s" % ", ".join(names))
 			"bool":
 				var proto = DSLBool.new(false)
 				_builtin_protos["bool"] = proto
-				class_obj.methods["__eq__"] = DSLWrappedDescriptor.new("__eq__", Callable(proto, "magic_eq"))
-				class_obj.methods["__ne__"] = DSLWrappedDescriptor.new("__ne__", Callable(proto, "magic_ne"))
-				class_obj.methods["__str__"] = DSLWrappedDescriptor.new("__str__", Callable(proto, "magic_str"))
-				class_obj.methods["__repr__"] = DSLWrappedDescriptor.new("__repr__", Callable(proto, "magic_repr"))
-				class_obj.methods["__bool__"] = DSLWrappedDescriptor.new("__bool__", Callable(proto, "magic_bool"))
+				# I2-73: 归属类名按 CPython 定义类型 (bool 继承 int 的 slot, __str__ 来自 object,
+				# __and__/__or__/__xor__/__invert__/__repr__ 由 bool 自身定义)
+				class_obj.methods["__eq__"] = _make_class_magic_desc("__eq__", "magic_eq", "int")
+				class_obj.methods["__ne__"] = _make_class_magic_desc("__ne__", "magic_ne", "int")
+				class_obj.methods["__str__"] = _make_class_magic_desc("__str__", "magic_str", "object")
+				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "bool")
+				class_obj.methods["__bool__"] = _make_class_magic_desc("__bool__", "magic_bool", "int")
+				class_obj.methods["__add__"] = _make_class_magic_desc("__add__", "magic_add", "int")
+				class_obj.methods["__sub__"] = _make_class_magic_desc("__sub__", "magic_sub", "int")
+				class_obj.methods["__mul__"] = _make_class_magic_desc("__mul__", "magic_mul", "int")
+				class_obj.methods["__truediv__"] = _make_class_magic_desc("__truediv__", "magic_div", "int")
+				class_obj.methods["__floordiv__"] = _make_class_magic_desc("__floordiv__", "magic_floordiv", "int")
+				class_obj.methods["__mod__"] = _make_class_magic_desc("__mod__", "magic_mod", "int")
+				class_obj.methods["__pow__"] = _make_class_magic_desc("__pow__", "magic_pow", "int")
+				class_obj.methods["__and__"] = _make_class_magic_desc("__and__", "magic_and", "bool")
+				class_obj.methods["__or__"] = _make_class_magic_desc("__or__", "magic_or", "bool")
+				class_obj.methods["__xor__"] = _make_class_magic_desc("__xor__", "magic_xor", "bool")
+				class_obj.methods["__lshift__"] = _make_class_magic_desc("__lshift__", "magic_lshift", "int")
+				class_obj.methods["__rshift__"] = _make_class_magic_desc("__rshift__", "magic_rshift", "int")
+				class_obj.methods["__neg__"] = _make_class_magic_desc("__neg__", "magic_neg", "int")
+				class_obj.methods["__pos__"] = _make_class_magic_desc("__pos__", "magic_pos", "int")
+				class_obj.methods["__invert__"] = _make_class_magic_desc("__invert__", "magic_invert", "bool")
 			"bytes":
 				var bytes_proto = DSLBytes.new()
 				_builtin_protos["bytes"] = bytes_proto
@@ -32545,8 +32766,18 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["center"] = DSLMethodDescriptor.new("center", Callable(bytes_proto, "builtin_center"))
 				class_obj.methods["ljust"] = DSLMethodDescriptor.new("ljust", Callable(bytes_proto, "builtin_ljust"))
 				class_obj.methods["rjust"] = DSLMethodDescriptor.new("rjust", Callable(bytes_proto, "builtin_rjust"))
-				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(bytes_proto, "magic_len"))
-				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(bytes_proto, "magic_iter"))
+				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "bytes")
+				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "bytes")
+				# I2-73: bytes 的拼接/重复/取模/包含/比较/repr (proto 具体实现, 按 args[0] 运算)
+				class_obj.methods["__add__"] = _make_class_magic_desc("__add__", "magic_add", "bytes")
+				class_obj.methods["__mul__"] = _make_class_magic_desc("__mul__", "magic_mul", "bytes")
+				class_obj.methods["__mod__"] = _make_class_magic_desc("__mod__", "magic_mod", "bytes")
+				class_obj.methods["__contains__"] = _make_class_magic_desc("__contains__", "magic_contains", "bytes")
+				class_obj.methods["__lt__"] = _make_class_magic_desc("__lt__", "magic_lt", "bytes")
+				class_obj.methods["__le__"] = _make_class_magic_desc("__le__", "magic_le", "bytes")
+				class_obj.methods["__gt__"] = _make_class_magic_desc("__gt__", "magic_gt", "bytes")
+				class_obj.methods["__ge__"] = _make_class_magic_desc("__ge__", "magic_ge", "bytes")
+				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "bytes")
 			"bytearray":
 				var ba_proto = DSLByteArray.new()
 				_builtin_protos["bytearray"] = ba_proto
@@ -32578,11 +32809,21 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["reverse"] = DSLMethodDescriptor.new("reverse", Callable(ba_proto, "builtin_reverse"))
 				class_obj.methods["clear"] = DSLMethodDescriptor.new("clear", Callable(ba_proto, "builtin_clear_ba"))
 				class_obj.methods["copy"] = DSLMethodDescriptor.new("copy", Callable(ba_proto, "builtin_copy_ba"))
-				class_obj.methods["__eq__"] = DSLWrappedDescriptor.new("__eq__", Callable(ba_proto, "magic_eq"))
-				class_obj.methods["__ne__"] = DSLWrappedDescriptor.new("__ne__", Callable(ba_proto, "magic_ne"))
-				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(ba_proto, "magic_len"))
-				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(ba_proto, "magic_iter"))
+				class_obj.methods["__eq__"] = _make_class_magic_desc("__eq__", "magic_eq", "bytearray")
+				class_obj.methods["__ne__"] = _make_class_magic_desc("__ne__", "magic_ne", "bytearray")
+				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "bytearray")
+				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "bytearray")
 				class_obj.methods["__setitem__"] = DSLWrappedDescriptor.new("__setitem__", Callable(ba_proto, "_dsl_setitem"))
+				# I2-73: bytearray 的拼接/重复/取模/包含/比较/repr (继承 DSLBytes 的具体实现, 按 args[0] 运算)
+				class_obj.methods["__add__"] = _make_class_magic_desc("__add__", "magic_add", "bytearray")
+				class_obj.methods["__mul__"] = _make_class_magic_desc("__mul__", "magic_mul", "bytearray")
+				class_obj.methods["__mod__"] = _make_class_magic_desc("__mod__", "magic_mod", "bytearray")
+				class_obj.methods["__contains__"] = _make_class_magic_desc("__contains__", "magic_contains", "bytearray")
+				class_obj.methods["__lt__"] = _make_class_magic_desc("__lt__", "magic_lt", "bytearray")
+				class_obj.methods["__le__"] = _make_class_magic_desc("__le__", "magic_le", "bytearray")
+				class_obj.methods["__gt__"] = _make_class_magic_desc("__gt__", "magic_gt", "bytearray")
+				class_obj.methods["__ge__"] = _make_class_magic_desc("__ge__", "magic_ge", "bytearray")
+				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "bytearray")
 			"deque":
 				var dq_proto = DSLDeque.new()
 				_builtin_protos["deque"] = dq_proto
@@ -32626,19 +32867,23 @@ order (MRO) for bases %s" % ", ".join(names))
 			"set":
 				var proto = DSLSet.new()
 				_builtin_protos["set"] = proto
-				class_obj.methods["__or__"] = DSLWrappedDescriptor.new("__or__", Callable(proto, "magic_or"))
-				class_obj.methods["__and__"] = DSLWrappedDescriptor.new("__and__", Callable(proto, "magic_and"))
-				class_obj.methods["__sub__"] = DSLWrappedDescriptor.new("__sub__", Callable(proto, "magic_sub"))
-				class_obj.methods["__xor__"] = DSLWrappedDescriptor.new("__xor__", Callable(proto, "magic_xor"))
-				class_obj.methods["__eq__"] = DSLWrappedDescriptor.new("__eq__", Callable(proto, "magic_eq"))
-				class_obj.methods["__ne__"] = DSLWrappedDescriptor.new("__ne__", Callable(proto, "magic_ne"))
-				class_obj.methods["__lt__"] = DSLWrappedDescriptor.new("__lt__", Callable(proto, "magic_lt"))
-				class_obj.methods["__gt__"] = DSLWrappedDescriptor.new("__gt__", Callable(proto, "magic_gt"))
-				class_obj.methods["__le__"] = DSLWrappedDescriptor.new("__le__", Callable(proto, "magic_le"))
-				class_obj.methods["__ge__"] = DSLWrappedDescriptor.new("__ge__", Callable(proto, "magic_ge"))
-				class_obj.methods["__contains__"] = DSLWrappedDescriptor.new("__contains__", Callable(proto, "magic_contains"))
-				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
-				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
+				class_obj.methods["__or__"] = _make_class_magic_desc("__or__", "magic_or", "set")
+				class_obj.methods["__and__"] = _make_class_magic_desc("__and__", "magic_and", "set")
+				class_obj.methods["__sub__"] = _make_class_magic_desc("__sub__", "magic_sub", "set")
+				class_obj.methods["__xor__"] = _make_class_magic_desc("__xor__", "magic_xor", "set")
+				class_obj.methods["__eq__"] = _make_class_magic_desc("__eq__", "magic_eq", "set")
+				class_obj.methods["__ne__"] = _make_class_magic_desc("__ne__", "magic_ne", "set")
+				class_obj.methods["__lt__"] = _make_class_magic_desc("__lt__", "magic_lt", "set")
+				class_obj.methods["__gt__"] = _make_class_magic_desc("__gt__", "magic_gt", "set")
+				class_obj.methods["__le__"] = _make_class_magic_desc("__le__", "magic_le", "set")
+				class_obj.methods["__ge__"] = _make_class_magic_desc("__ge__", "magic_ge", "set")
+				class_obj.methods["__contains__"] = _make_class_magic_desc("__contains__", "magic_contains", "set")
+				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "set")
+				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "set")
+				# I2-73: set.__repr__ (CPython 暴露; __contains__ 为 method 形态, 见下方挂载)
+				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "set")
+				# I2-73b: CPython 的 set.__contains__ 是 method_descriptor
+				class_obj.methods["__contains__"] = DSLMethodDescriptor.new("__contains__", Callable(proto, "magic_contains"))
 				class_obj.methods["add"] = DSLMethodDescriptor.new("add", Callable(proto, "builtin_add"))
 				class_obj.methods["remove"] = DSLMethodDescriptor.new("remove", Callable(proto, "builtin_remove"))
 				class_obj.methods["discard"] = DSLMethodDescriptor.new("discard", Callable(proto, "builtin_discard"))
@@ -32659,19 +32904,22 @@ order (MRO) for bases %s" % ", ".join(names))
 			"frozenset":
 				var proto = DSLFrozenSet.new()
 				_builtin_protos["frozenset"] = proto
-				class_obj.methods["__or__"] = DSLWrappedDescriptor.new("__or__", Callable(proto, "magic_or"))
-				class_obj.methods["__and__"] = DSLWrappedDescriptor.new("__and__", Callable(proto, "magic_and"))
-				class_obj.methods["__sub__"] = DSLWrappedDescriptor.new("__sub__", Callable(proto, "magic_sub"))
-				class_obj.methods["__xor__"] = DSLWrappedDescriptor.new("__xor__", Callable(proto, "magic_xor"))
-				class_obj.methods["__eq__"] = DSLWrappedDescriptor.new("__eq__", Callable(proto, "magic_eq"))
-				class_obj.methods["__ne__"] = DSLWrappedDescriptor.new("__ne__", Callable(proto, "magic_ne"))
-				class_obj.methods["__lt__"] = DSLWrappedDescriptor.new("__lt__", Callable(proto, "magic_lt"))
-				class_obj.methods["__gt__"] = DSLWrappedDescriptor.new("__gt__", Callable(proto, "magic_gt"))
-				class_obj.methods["__le__"] = DSLWrappedDescriptor.new("__le__", Callable(proto, "magic_le"))
-				class_obj.methods["__ge__"] = DSLWrappedDescriptor.new("__ge__", Callable(proto, "magic_ge"))
-				class_obj.methods["__contains__"] = DSLWrappedDescriptor.new("__contains__", Callable(proto, "magic_contains"))
-				class_obj.methods["__len__"] = DSLWrappedDescriptor.new("__len__", Callable(proto, "magic_len"))
-				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
+				class_obj.methods["__or__"] = _make_class_magic_desc("__or__", "magic_or", "frozenset")
+				class_obj.methods["__and__"] = _make_class_magic_desc("__and__", "magic_and", "frozenset")
+				class_obj.methods["__sub__"] = _make_class_magic_desc("__sub__", "magic_sub", "frozenset")
+				class_obj.methods["__xor__"] = _make_class_magic_desc("__xor__", "magic_xor", "frozenset")
+				class_obj.methods["__eq__"] = _make_class_magic_desc("__eq__", "magic_eq", "frozenset")
+				class_obj.methods["__ne__"] = _make_class_magic_desc("__ne__", "magic_ne", "frozenset")
+				class_obj.methods["__lt__"] = _make_class_magic_desc("__lt__", "magic_lt", "frozenset")
+				class_obj.methods["__gt__"] = _make_class_magic_desc("__gt__", "magic_gt", "frozenset")
+				class_obj.methods["__le__"] = _make_class_magic_desc("__le__", "magic_le", "frozenset")
+				class_obj.methods["__ge__"] = _make_class_magic_desc("__ge__", "magic_ge", "frozenset")
+				class_obj.methods["__contains__"] = _make_class_magic_desc("__contains__", "magic_contains", "frozenset")
+				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "frozenset")
+				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "frozenset")
+				# I2-73: frozenset.__repr__ + __contains__ 为 method 形态 (CPython)
+				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "frozenset")
+				class_obj.methods["__contains__"] = DSLMethodDescriptor.new("__contains__", Callable(proto, "magic_contains"))
 				class_obj.methods["copy"] = DSLMethodDescriptor.new("copy", Callable(proto, "builtin_copy"))
 				class_obj.methods["union"] = DSLMethodDescriptor.new("union", Callable(proto, "builtin_union"))
 				class_obj.methods["intersection"] = DSLMethodDescriptor.new("intersection", Callable(proto, "builtin_intersection"))
@@ -32680,6 +32928,36 @@ order (MRO) for bases %s" % ", ".join(names))
 				class_obj.methods["issubset"] = DSLMethodDescriptor.new("issubset", Callable(proto, "builtin_issubset"))
 				class_obj.methods["issuperset"] = DSLMethodDescriptor.new("issuperset", Callable(proto, "builtin_issuperset"))
 				class_obj.methods["isdisjoint"] = DSLMethodDescriptor.new("isdisjoint", Callable(proto, "builtin_isdisjoint"))
+		# I2-73: 把 proto 的魔法方法描述符挂到类 (CPython: str.__add__ 等 slot wrapper 类级可访问)
+		# 经反射读取各类型持有的描述符表 (int/float/complex/str/list/tuple/dict/memoryview);
+		# 排除 __str__ (遮蔽派生类如 namedtuple 的 __repr__ 回退, 使其 str() 误走基类
+		# _dsl_str 形态) 与 __hash__/__call__ (派生实例语义不明确); 其余按 args[0] 运算安全
+		var _proto = _builtin_protos.get(cls_name)
+		if _proto != null:
+			var _field_map := {
+				"int": "_int_magic_descriptors",
+				"float": "_float_magic_descriptors",
+				"complex": "_complex_magic_descriptors",
+				"str": "_str_magic_descriptors",
+				"list": "_lst_magic_descriptors",
+				"tuple": "_tup_magic_descriptors",
+				"dict": "_dict_magic_descriptors",
+				"memoryview": "_mv_magic_descriptors",
+			}
+			var _fname = _field_map.get(cls_name, "")
+			if _fname != "" and _proto.has_method("_init_magic_descriptors"):
+				_proto.call("_init_magic_descriptors")
+				var _mdict: Dictionary = _proto.get(_fname)
+				for _dn in _mdict:
+					if class_obj.methods.has(_dn):
+						continue
+					if _dn in ["__str__", "__hash__", "__call__"]:
+						continue
+					class_obj.methods[_dn] = _mdict[_dn]
+		# I2-73c: str.__str__ 安全挂载 (str 的 str() 为值语义, 子类与自定义 __repr__ 下也正确);
+		# 其余类型 (int/float/容器) 的 __str__ 因派生类 __repr__ 回退语义保持不挂载
+		if cls_name == "str":
+			class_obj.methods["__str__"] = _make_class_magic_desc("__str__", "magic_str", "str")
 
 	## 根据目标列表和已收集的元素执行解包赋值 [br]
 	## 支持星号 (*) 解包目标, 将 items 中对应位置的元素赋给 targets [br]

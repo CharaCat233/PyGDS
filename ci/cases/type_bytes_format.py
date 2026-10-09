@@ -24,3 +24,35 @@ try:
     b"%d" % "x"
 except TypeError as e:
     print("TE:", e)
+
+# 数值转换实参校验: 字节类/字符串/浮点按 CPython 报 TypeError, 不再静默按 0 (I2-63 连带)
+try:
+    b"%d" % b"5"
+except TypeError as e:
+    print("TE-d-bytes:", e)
+try:
+    b"%d" % bytearray(b"5")
+except TypeError as e:
+    print("TE-d-ba:", e)
+try:
+    b"%x" % 1.5
+except TypeError as e:
+    print("TE-x-float:", e)
+try:
+    b"%f" % b"5"
+except TypeError as e:
+    print("TE-f-bytes:", e)
+try:
+    b"%s" % 5
+except TypeError as e:
+    print("TE-s-int:", e)
+try:
+    b"%s" % "x"
+except TypeError as e:
+    print("TE-s-str:", e)
+try:
+    b"%c" % 300
+except OverflowError as e:
+    print("TE-c-overflow:", e)
+# 合法数字形态不受影响
+print(b"%d" % True, b"%d" % 1.5, b"%x" % 255, b"%f" % 5)

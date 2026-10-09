@@ -14,6 +14,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
 
+### exception_bool_rare
+
+- Responsibility: `__bool__` non-bool error propagation in rare paths (exception-group filter validation / lazy predicates / operator / any / all)
+- Comparison: `same_output`
+- Source: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
+
 ### exception_except_bad_type
 
 - Responsibility: except clause with a non-BaseException-subclass type raises TypeError
@@ -22,9 +28,15 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 
 ### exception_str_uninit
 
-- Responsibility: Custom exception without super().__init__ formats str(e) from args
+- Responsibility: Custom exception without `super().__init__` formats `str(e)` from `args`
 - Comparison: `same_output`
 - Source: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
+
+### module_repr
+
+- Responsibility: Module repr form `(built-in <module 'x' (built-in)>)`
+- Comparison: `same_output`
+- Source: [ci/cases/module_repr.py](../../ci/cases/module_repr.py)
 
 ### syntax_annotation
 
@@ -337,6 +349,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Responsibility: Import aliases, star imports and `ImportError`
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_import.py](../../ci/cases/syntax_import.py)
+
+### syntax_import_dotted
+
+- Responsibility: Error categories for dotted imports and relative imports (runtime ModuleNotFoundError / ImportError)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_import_dotted.py](../../ci/cases/syntax_import_dotted.py)
 
 ### syntax_import_future
 
@@ -1126,7 +1144,7 @@ Construction, operator semantics (e.g. floor-division rounding on negatives) and
 
 ### type_bytes_format
 
-- Responsibility: `bytes` `%` formatting placeholders and alignment/padding
+- Responsibility: bytes % formatting placeholders, alignment/padding and numeric-conversion argument validation
 - Comparison: `same_output`
 - Source: [ci/cases/type_bytes_format.py](../../ci/cases/type_bytes_format.py)
 
@@ -1154,9 +1172,21 @@ bytearray is unhashable (dict keys raise `unhashable type: 'bytearray'`); `bytes
 
 ### type_ctor_three_args
 
-- Responsibility: type() 3-arg error messages aligned to type.__new__()
+- Responsibility: type() 3-arg error messages aligned to `type.__new__()`
 - Comparison: `same_output`
 - Source: [ci/cases/type_ctor_three_args.py](../../ci/cases/type_ctor_three_args.py)
+
+### type_descriptor_repr
+
+- Responsibility: method_descriptor / wrapper_descriptor repr owning type name
+- Comparison: `same_output`
+- Source: [ci/cases/type_descriptor_repr.py](../../ci/cases/type_descriptor_repr.py)
+
+### type_magic_class_access
+
+- Responsibility: Magic method descriptors accessible and callable on builtin type classes (incl. bool/bytes/bytearray/set/frozenset and method-descriptor forms)
+- Comparison: `same_output`
+- Source: [ci/cases/type_magic_class_access.py](../../ci/cases/type_magic_class_access.py)
 
 ### type_matmul
 
@@ -1393,6 +1423,12 @@ range arguments keep arbitrary precision instead of converging to the index widt
 - Responsibility: `slice` object construction, attributes, indexing
 - Comparison: `same_output`
 - Source: [ci/cases/type_slice.py](../../ci/cases/type_slice.py)
+
+### type_str_classification
+
+- Responsibility: str character classification across full Unicode code-point ranges (isdecimal/isdigit/isnumeric/isprintable/isspace)
+- Comparison: `same_output`
+- Source: [ci/cases/type_str_classification.py](../../ci/cases/type_str_classification.py)
 
 ### type_str_decode
 
