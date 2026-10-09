@@ -1384,6 +1384,14 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 
 说明: `range(10**30)` 在 CPython 中惰性构造成功, PyGDS 的 range 参数按索引位收敛为 int64 报 `OverflowError`, 属已文档化限制 (usage.md 与已知问题清单同步)。
 
+### type_int_format_big
+
+- 职责: 大数 (> int64) 在 f-string / format / str.format 数值分支的格式化 (x/X/o/b/c/d/f/e/g/%, 异常类比对)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_format_big.py](../../ci/cases/type_int_format_big.py)
+
+`x`/`X`/`o`/`b` (含 `#` 备用形式与 `_` 分组)、`c`、`f`/`e`/`g`/`%` 分支对大数此前误取快路径 `value` (恒 0) 静默输出 `"0"` 或 `chr(0)`, 改为输出正确进制/定点或按 CPython 报错 (`c` 与超出 double 范围报 `OverflowError`, 类名比对规避 C long 平台边界); 连带修复 `_fixed_format_parts` 对超出 int64 的定点化补零 (此前 `f"{1e30:f}"` 越界) 与 `format()` 内建吞 `last_error` 的错误传播
+
 ### type_list
 
 - 职责: `list` 构造、增删改查方法与 `+`/`*` 运算

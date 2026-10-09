@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.4] - 2026-10-09
+
+### 修复
+
+- **f-string 与 format 的数值分支大数静默错值**：`x` / `X` / `o` / `b`（含 `#` 备用形式与 `_` 分组）、`c`、`f` / `e` / `g` / `%` 分支对大数（超过 int64）此前误取快路径 `value`（大数形态恒为 0），`f"{大数:x}"` 等静默输出 `"0"`、`format(大数, 'c')` 输出 `chr(0)`——改为按 CPython 输出正确进制 / 定点表示，`c` 与超出 double 范围的 `f` / `e` / `g` / `%` 报 `OverflowError`（异常类一致，文案随宿主 C long 边界差异）
+- **大 double 的定点格式化补零（连带）**：`_fixed_format_parts` 对整数位超过数字数组长度（如 `f"{1e30:f}"`）此前越界致引擎 `SCRIPT ERROR`，改为在截断位后补零，`f"{1e30:f}"` 与 CPython 一致输出 `1000000000000000019884624838656.000000`
+- **`format()` 内建吞 `last_error`（连带）**：`format(1, ',s')` 等规格错误此前经 `_format_spec_base` 写 `last_error` 后被 `builtin_format_value` 静默吞掉（返回空串），改为调用后检查并抛异常（与 `str.format` 路径一致）
+
+### 测试
+
+- 新增 1 例：`type_int_format_big`（大数在 f-string / format / str.format 的 x/X/o/b/c/d/f/e/g/% 分支，`same_output`，异常类比对规避 C long 平台边界）；behavioral.md 中英同步
+
+### 文档
+
+- behavioral.md 中英补 `type_int_format_big` 条目
+
 ## [0.8.3] - 2026-10-09
 
 ### 变更

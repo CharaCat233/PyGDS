@@ -1384,6 +1384,14 @@ Float literals and `float()` strings go through a self-produced correctly-rounde
 
 Note: `range(10**30)` constructs lazily in CPython, while PyGDS converges range arguments to int64 raising `OverflowError` — a documented limitation (see usage.md and the known-issues list).
 
+### type_int_format_big
+
+- Responsibility: formatting big ints (> int64) in the numeric branches of f-string / `format` / `str.format` (x/X/o/b/c/d/f/e/g/%, exception classes compared)
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_format_big.py](../../ci/cases/type_int_format_big.py)
+
+The `x`/`X`/`o`/`b` (incl. `#` alternate form and `_` grouping), `c`, and `f`/`e`/`g`/`%` branches previously read the fast-path `value` (always 0 for big ints) and silently printed `"0"` or `chr(0)`; they now produce the correct base/fixed output or raise as in CPython (`c` and beyond-double-range raise `OverflowError`; class-name comparison sidesteps the C-long platform boundary). Also fixes `_fixed_format_parts` zero-padding for fixed-point formatting beyond int64 (previously `f"{1e30:f}"` went out of bounds) and `format()` swallowing `last_error` instead of propagating it.
+
 ### type_list
 
 - Responsibility: `list` construction, CRUD methods and `+`/`*` operations

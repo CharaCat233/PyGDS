@@ -3715,8 +3715,14 @@ class DSLObject:
 		var kept: Array = []
 		var round_up = false
 		if cut > 0:
-			for i in range(cut):
+			var upto = cut
+			if upto > dg.size():
+				upto = dg.size()
+			for i in range(upto):
 				kept.append(dg[i])
+			# 整数位不足 cut 位 (小数位补零): 如 1e30 定点到 .6f 需在整数位后补 p 个零
+			for i in range(cut - upto):
+				kept.append(0)
 		var d0 = 0
 		var rest_nonzero = false
 		if cut >= 0 and cut < dg.size():
@@ -7294,6 +7300,9 @@ class DSLString extends DSLObject:
 				return ""
 			return value._dsl_str()
 		if type_c == "c":
+			if is_int and (value as DSLInteger).is_big():
+				last_error = "OverflowError: %c arg not in range(0x110000)"
+				return ""
 			var code = value.value if is_int else int(value._dsl_str())
 			return char(code)
 		if type_c in ["x", "X", "o", "b"]:
@@ -7301,14 +7310,23 @@ class DSLString extends DSLObject:
 			if group_sep == ",":
 				last_error = "ValueError: Cannot specify ',' with '%s'." % type_c
 				return ""
-			var n = value.value if is_int else int(_num(value))
-			var neg = n < 0
+			var neg = false
 			var body = ""
-			match type_c:
-				"x": body = _int_to_base_str(abs(n), 16)
-				"X": body = _int_to_base_str(abs(n), 16).to_upper()
-				"o": body = _int_to_base_str(abs(n), 8)
-				"b": body = _int_to_base_str(abs(n), 2)
+			if is_int and (value as DSLInteger).is_big():
+				neg = (value as DSLInteger).big_neg
+				match type_c:
+					"x": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 16)
+					"X": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 16).to_upper()
+					"o": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 8)
+					"b": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 2)
+			else:
+				var n = value.value if is_int else int(_num(value))
+				neg = n < 0
+				match type_c:
+					"x": body = _int_to_base_str(abs(n), 16)
+					"X": body = _int_to_base_str(abs(n), 16).to_upper()
+					"o": body = _int_to_base_str(abs(n), 8)
+					"b": body = _int_to_base_str(abs(n), 2)
 			if group_sep == "_":
 				body = _add_grouped(body, "_", 4)
 			return ("-" if neg else "") + body
@@ -7320,22 +7338,30 @@ class DSLString extends DSLObject:
 			var body = str(n)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		if type_c in ["f", "F"]:
-			var num = float(value.value) if is_int else value.value
+			var num = _fmt_float_of(value)
+			if last_error != "":
+				return ""
 			var p = precision if precision >= 0 else 6
 			var body = _fixed_float_str(num, p)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		if type_c in ["e", "E", "g", "G", "%"]:
 			# e/g 的指数形式整数部分恒为 1 位, 分组不影响输出, % 的整数部分按 3 位分组
 			if type_c == "%":
-				var num = float(value.value) if is_int else value.value
+				var num = _fmt_float_of(value)
+				if last_error != "":
+					return ""
 				var p = precision if precision >= 0 else 6
 				var body = _fixed_float_str(num * 100.0, p)
 				return _add_grouped(body, group_sep, 3) if group_sep != "" else body + "%"
 			if type_c in ["e", "E"]:
-				var num = float(value.value) if is_int else value.value
+				var num = _fmt_float_of(value)
+				if last_error != "":
+					return ""
 				var p = precision if precision >= 0 else 6
 				return _sci_float_str(num, p, type_c == "E")
-			var num = float(value.value) if is_int else value.value
+			var num = _fmt_float_of(value)
+			if last_error != "":
+				return ""
 			return _general_float_str(num, precision if precision >= 0 else 6, type_c == "G")
 		# 默认: 数值按 str, 浮点若有精度则定点
 		if is_int and group_sep != "":
@@ -31147,6 +31173,17 @@ class Interpreter:
 			return str(value.value)
 		return value._dsl_str()
 
+	## 数值格式化的浮点取值 (f-string 路径): 大数经 53 位半到偶舍入转 double, [br]
+	## 超出 double 范围时抛 OverflowError (CPython 同文案) 并返回 0.0
+	func _fmt_float_of_val(value: DSLObject) -> float:
+		if value is DSLInteger and (value as DSLInteger).is_big():
+			var conv = DSLBigInt.mag_to_float((value as DSLInteger).big_neg, (value as DSLInteger).big_limbs)
+			if not conv[0]:
+				raise_exception("OverflowError", "int too large to convert to float")
+				return 0.0
+			return conv[1]
+		return float(value.value)
+
 	## 按类型字符格式化值
 	func _format_with_type(value: DSLObject, type_c: String, precision: int, group_sep: String) -> String:
 		# bool 是 int 子类: 按 0/1 参与格式化
@@ -31161,6 +31198,9 @@ class Interpreter:
 			var st = value.magic_str([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			return st.value if st is DSLString else value._dsl_str()
 		if type_c == "c":
+			if is_int and (value as DSLInteger).is_big():
+				raise_exception("OverflowError", "%c arg not in range(0x110000)")
+				return ""
 			var code = value.value if is_int else int(value._dsl_str())
 			return char(code)
 		if type_c in ["x", "X", "o", "b"]:
@@ -31168,14 +31208,23 @@ class Interpreter:
 			if group_sep == ",":
 				raise_exception("ValueError", "Cannot specify ',' with '%s'." % type_c)
 				return ""
-			var n = value.value if is_int else int(value._dsl_str())
-			var neg = n < 0
+			var neg = false
 			var body = ""
-			match type_c:
-				"x": body = _to_base(abs(n), 16)
-				"X": body = _to_base(abs(n), 16).to_upper()
-				"o": body = _to_base(abs(n), 8)
-				"b": body = _to_base(abs(n), 2)
+			if is_int and (value as DSLInteger).is_big():
+				neg = (value as DSLInteger).big_neg
+				match type_c:
+					"x": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 16)
+					"X": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 16).to_upper()
+					"o": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 8)
+					"b": body = DSLBigInt.mag_to_base((value as DSLInteger).big_limbs, 2)
+			else:
+				var n = value.value if is_int else int(value._dsl_str())
+				neg = n < 0
+				match type_c:
+					"x": body = _to_base(abs(n), 16)
+					"X": body = _to_base(abs(n), 16).to_upper()
+					"o": body = _to_base(abs(n), 8)
+					"b": body = _to_base(abs(n), 2)
 			if group_sep == "_":
 				body = _add_grouped(body, "_", 4)
 			return ("-" if neg else "") + body
@@ -31187,19 +31236,27 @@ class Interpreter:
 			var body = str(n)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		if type_c == "e" or type_c == "E":
-			var num = float(value.value) if is_int else value.value
+			var num = _fmt_float_of_val(value)
+			if report.has_error:
+				return ""
 			var p = precision if precision >= 0 else 6
 			return _format_scientific(num, p, type_c == "E")
 		if type_c == "g" or type_c == "G":
-			var num = float(value.value) if is_int else value.value
+			var num = _fmt_float_of_val(value)
+			if report.has_error:
+				return ""
 			return _format_general(num, precision, type_c == "G")
 		if type_c == "%":
-			var num = float(value.value) if is_int else value.value
+			var num = _fmt_float_of_val(value)
+			if report.has_error:
+				return ""
 			var p = precision if precision >= 0 else 6
 			var body = _format_fixed(num * 100.0, p)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body + "%"
 		if type_c in ["f", "F"]:
-			var num = float(value.value) if is_int else value.value
+			var num = _fmt_float_of_val(value)
+			if report.has_error:
+				return ""
 			var p = precision if precision >= 0 else 6
 			var body = _format_fixed(num, p)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
@@ -36313,7 +36370,16 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception("TypeError", "format() argument 2 must be str, not %s" % args[1]._type_name())
 			return null
 		var str_proto = _builtin_protos["str"] if _builtin_protos.has("str") else DSLString.new("")
-		return DSLString.new(str_proto._format_spec_value(args[0], spec))
+		# str_proto 为共享原型: 上次格式化可能残留 proto 侧错误, 先清除避免误判 (str.format 同款)
+		str_proto.last_error = ""
+		str_proto.last_error_args.clear()
+		var formatted = str_proto._format_spec_value(args[0], spec)
+		if str_proto.last_error != "":
+			raise_exception_from_last_error(str_proto.last_error, str_proto.last_error_args)
+			str_proto.last_error = ""
+			str_proto.last_error_args.clear()
+			return null
+		return DSLString.new(formatted)
 
 	func builtin_dir(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var names: Array[String] = []
