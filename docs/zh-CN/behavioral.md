@@ -1484,6 +1484,14 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 - 比对: `same_output`
 - 源文件: [ci/cases/type_str_format_thousands.py](../../ci/cases/type_str_format_thousands.py)
 
+### type_str_format_validation
+
+- 职责: format/f-string 类型×说明符校验与数值边界 (inf/nan/-0.0/bool 数值化), str.rsplit/title/istitle 数字分隔语义
+- 比对: `same_output`
+- 源文件: [ci/cases/type_str_format_validation.py](../../ci/cases/type_str_format_validation.py)
+
+`format(int,'s')` / `format(float,'d'/'x'/'o'/'b'/'c')` / `format(str,数值)` 按 CPython 报 `ValueError: Unknown format code`, 容器任何非空说明符 (含仅宽度) 报 `TypeError: unsupported format string passed to X.__format__`; `inf`/`nan` 在 `f`/`e`/`g`/`%` 输出 `inf`/`nan` (E/F/G 大写、% 带后缀), `-0.0` 在 `e`/`g` 保持负号; `bool` 按数值参与符号/备用形式/对齐/零填充; `str.rsplit` 默认按空白分割且保持从左到右顺序 (maxsplit 前缀原样保留), `title`/`istitle` 以数字/标点分隔词 (`'a1b'.title()` == `'A1B'`)
+
 ### type_str_identity
 
 - 职责: 字符串驻留与 `is` 身份关系
@@ -1541,6 +1549,22 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 ## 标准库模块（module_*）
 
 PyGDS 内置的九个标准库模块（math/random/statistics/functools/itertools/collections/string/operator/time）。单一函数行为多到值得独立时拆出子文件（如 `module_math_sqrt`）。
+
+### module_base64
+
+- 职责: base64 模块 Base16/Base64 编解码 (标准/urlsafe/altchars/行包裹, 填充校验)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_base64.py](../../ci/cases/module_base64.py)
+
+`b64encode`/`b64decode`/`standard_*`/`urlsafe_*`/`b16*`/`encodebytes`/`decodebytes` 输入输出均为 bytes; 填充校验对齐 CPython (数据长度 mod 4 == 1 报 `Invalid... 1 more than a multiple of 4`, 总长非 4 倍数或 `=` 后带数据报 `Incorrect padding`; 错误类型为 `ValueError`, CPython 为 `binascii.Error` 子类差异文档化)
+
+### module_bisect_heapq
+
+- 职责: bisect 模块二分查找与插入, heapq 模块堆操作
+- 比对: `same_output`
+- 源文件: [ci/cases/module_bisect_heapq.py](../../ci/cases/module_bisect_heapq.py)
+
+`bisect_left`/`bisect_right`/`insort_*` (含 lo/hi 边界) 与 `heappush`/`heappop`/`heapify`/`heapreplace`/`heappushpop` 按 CPython 语义; 比较不可用报 `TypeError: '<' not supported between instances of ...`
 
 ### module_collections_deque
 
@@ -1663,6 +1687,14 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: `Counter`/`tee`/嵌套类/`%s` 回归
 - 比对: `same_output`
 - 源文件: [ci/cases/module_itertools_tee.py](../../ci/cases/module_itertools_tee.py)
+
+### module_json
+
+- 职责: json 模块序列化与反序列化 (dumps/loads, 缩进/排序/分隔符/ensure_ascii/大整数, JSONDecodeError)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_json.py](../../ci/cases/module_json.py)
+
+`dumps` 支持 `indent`/`sort_keys`/`separators`/`ensure_ascii` (float 经最短往返 repr, 大整数任意精度, 非字符串键按字面量转义, 不可序列化类型报 `TypeError`); `loads` 完整解析 (字符串转义/数字前导零校验/嵌套), 非法 JSON 报 `JSONDecodeError` (ValueError 子类); bool 字典键因 DSLDict 折叠 bool/int 键而序列化为 `"1"` 而非 `"true"` (文档化边缘)
 
 ### module_math
 

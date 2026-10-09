@@ -1484,6 +1484,14 @@ range arguments keep arbitrary precision instead of converging to the index widt
 - Comparison: `same_output`
 - Source: [ci/cases/type_str_format_thousands.py](../../ci/cases/type_str_format_thousands.py)
 
+### type_str_format_validation
+
+- Responsibility: format/f-string type-vs-spec validation and numeric edge cases (inf/nan / -0.0 / bool as numeric), `str.rsplit`/`title`/`istitle` digit-separator semantics
+- Comparison: `same_output`
+- Source: [ci/cases/type_str_format_validation.py](../../ci/cases/type_str_format_validation.py)
+
+`format(int, 's')` / `format(float, 'd'/'x'/'o'/'b'/'c')` / `format(str, numeric)` raise CPython's `ValueError: Unknown format code`; containers reject any non-empty spec (including width-only) with `TypeError: unsupported format string passed to X.__format__`; `inf`/`nan` format as `inf`/`nan` under `f`/`e`/`g`/`%` (uppercase for E/F/G, `%` suffix), `-0.0` keeps its sign under `e`/`g`; `bool` participates as a number in sign/alternate-form/alignment/zero-padding; `str.rsplit` splits on whitespace by default keeping left-to-right order (the maxsplit prefix is preserved verbatim), and `title`/`istitle` treat digits/punctuation as word separators (`'a1b'.title()` == `'A1B'`)
+
 ### type_str_identity
 
 - Responsibility: String interning and `is` identity
@@ -1541,6 +1549,22 @@ range arguments keep arbitrary precision instead of converging to the index widt
 ## Standard Library Modules (`module_*`)
 
 The nine built-in modules (math/random/statistics/functools/itertools/collections/string/operator/time). A single function with enough behavior of its own is split into a sub-file (e.g. `module_math_sqrt`).
+
+### module_base64
+
+- Responsibility: `base64` Base16/Base64 encoding/decoding (standard/urlsafe/altchars/line-wrapped, padding validation)
+- Comparison: `same_output`
+- Source: [ci/cases/module_base64.py](../../ci/cases/module_base64.py)
+
+`b64encode`/`b64decode`/`standard_*`/`urlsafe_*`/`b16*`/`encodebytes`/`decodebytes` take and return bytes; padding validation follows CPython (data length mod 4 == 1 raises `Invalid... 1 more than a multiple of 4`, non-multiple-of-4 total or data after `=` raises `Incorrect padding`; the error type is `ValueError`, with the `binascii.Error` subclass difference documented)
+
+### module_bisect_heapq
+
+- Responsibility: `bisect` binary search and insertion, `heapq` heap operations
+- Comparison: `same_output`
+- Source: [ci/cases/module_bisect_heapq.py](../../ci/cases/module_bisect_heapq.py)
+
+`bisect_left`/`bisect_right`/`insort_*` (incl. lo/hi bounds) and `heappush`/`heappop`/`heapify`/`heapreplace`/`heappushpop` follow CPython semantics; incomparable items raise `TypeError: '<' not supported between instances of ...`
 
 ### module_collections_deque
 
@@ -1663,6 +1687,14 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Responsibility: `Counter`/`tee`/nested class/`%s` regression sweep
 - Comparison: `same_output`
 - Source: [ci/cases/module_itertools_tee.py](../../ci/cases/module_itertools_tee.py)
+
+### module_json
+
+- Responsibility: `json` serialization and deserialization (dumps/loads, indent/sort/separators/ensure_ascii/big ints, JSONDecodeError)
+- Comparison: `same_output`
+- Source: [ci/cases/module_json.py](../../ci/cases/module_json.py)
+
+`dumps` supports `indent`/`sort_keys`/`separators`/`ensure_ascii` (floats via shortest-roundtrip repr, arbitrary-precision big ints, non-string keys escaped by their literal, unserializable types raise `TypeError`); `loads` fully parses (string escapes/leading-zero validation/nesting), invalid JSON raises `JSONDecodeError` (a ValueError subclass); bool dict keys serialize as `"1"` instead of `"true"` because DSLDict collapses bool/int keys (documented edge)
 
 ### module_math
 

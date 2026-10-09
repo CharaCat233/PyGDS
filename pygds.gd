@@ -7005,7 +7005,8 @@ class DSLString extends DSLObject:
 	## 科学计数法格式化
 	func _sci_float_str(v: float, p: int, upper: bool) -> String:
 		if v == 0.0:
-			return "0." + "0".repeat(p) + ("E" if upper else "e") + "+00"
+			var zero_sign = "-" if (1.0 / v < 0.0) else ""
+			return zero_sign + "0." + "0".repeat(p) + ("E" if upper else "e") + "+00"
 		var e = _decimal_exp(v)
 		var m = v / pow(10.0, e)
 		if abs(m) >= 10.0:
@@ -7031,7 +7032,7 @@ class DSLString extends DSLObject:
 	## 通用格式 g/G
 	func _general_float_str(v: float, p: int, upper: bool) -> String:
 		if v == 0.0:
-			return "0"
+			return "-0" if (1.0 / v < 0.0) else "0"
 		var e = _decimal_exp(v)
 		if e < -4 or e >= p:
 			var mp = p - 1
@@ -7118,11 +7119,15 @@ class DSLString extends DSLObject:
 		return out
 
 	func _format_spec_value(value: DSLObject, spec: String, pre: String = "") -> String:
-		var is_numeric = (value is DSLInteger) or (value is DSLFloat)
+		var is_numeric = (value is DSLInteger) or (value is DSLFloat) or (value is DSLBool)
 		if spec == "":
 			if pre != "":
 				return pre
 			return value._dsl_str()
+		# 容器等非基本类型: 任何非空格式说明符报 TypeError (含仅宽度/对齐, CPython 同)
+		if not (value is DSLInteger or value is DSLFloat or value is DSLBool or value is DSLString):
+			last_error = "TypeError: unsupported format string passed to %s.__format__" % value._type_name()
+			return ""
 		var i = 0
 		var fill = " "
 		var align = ""
@@ -7289,11 +7294,41 @@ class DSLString extends DSLObject:
 		return ("-" if neg else "") + out
 
 	func _format_spec_base(value: DSLObject, type_c: String, precision: int, group_sep: String) -> String:
+		var is_bool = value is DSLBool
 		# bool 是 int 子类: 按 0/1 参与格式化
 		if value is DSLBool:
 			value = DSLInteger.pooled(1 if value.value else 0)
 		var is_int = value is DSLInteger
 		var is_float = value is DSLFloat
+		# 类型×说明符兼容性校验 (CPython): int/bool 仅拒 's', float 拒 b/c/d/o/x/X/s,
+		# str 拒非 ''/s; 容器等其他类型的非空说明符维持既有行为 (CPython 报 TypeError 未覆盖)
+		if type_c != "":
+			if is_float:
+				if type_c in ["b", "c", "d", "o", "x", "X", "s"]:
+					last_error = "ValueError: Unknown format code '%s' for object of type 'float'" % type_c
+					return ""
+			elif is_int:
+				if type_c == "s":
+					last_error = "ValueError: Unknown format code 's' for object of type '%s'" % ("bool" if is_bool else "int")
+					return ""
+			elif value is DSLString:
+				if type_c != "s":
+					last_error = "ValueError: Unknown format code '%s' for object of type 'str'" % type_c
+					return ""
+			else:
+				# 容器等其他类型: 任何非空说明符报 TypeError (CPython: unsupported format string passed to X.__format__)
+				last_error = "TypeError: unsupported format string passed to %s.__format__" % value._type_name()
+				return ""
+		# inf/nan 短路: CPython 输出 'inf'/'nan' (符号含, % 说明符带 % 后缀), 不进定点/科学格式化
+		# (否则 _decimal_digits_of 对 inf 的 while v>=2.0 死循环)
+		if is_float and (is_nan(value.value) or is_inf(value.value)):
+			var fv = value.value
+			var inf_body = "nan" if is_nan(fv) else ("-inf" if fv < 0.0 else "inf")
+			if type_c == "%":
+				inf_body += "%"
+			if type_c in ["E", "F", "G"]:
+				inf_body = inf_body.to_upper()
+			return inf_body
 		if type_c == "s":
 			if group_sep != "":
 				last_error = "ValueError: Cannot specify '%s' with 's'." % group_sep
@@ -7710,12 +7745,13 @@ class DSLString extends DSLObject:
 	
 	## Python 空白字符判定 (空格 / 制表 / 换行 / 回车 / 换页 / 垂直制表)
 	func _is_py_ws(ch: String) -> bool:
-		return ch == " " or ch == "	" or ch == "
-" or ch == "
-" or ch == "
-" or ch == "
-"
-
+		# 空白分割集 (CPython str.split/rsplit 默认分隔 = isspace 全集): 含  与扩展空白
+		var cp = ch.unicode_at(0)
+		if cp == 0x20 or (cp >= 0x09 and cp <= 0x0d) or (cp >= 0x1c and cp <= 0x1f):
+			return true
+		if cp == 0x85 or cp == 0xa0 or cp == 0x1680 or cp == 0x202f or cp == 0x205f or cp == 0x3000:
+			return true
+		return false
 	func builtin_split(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
@@ -8130,7 +8166,8 @@ class DSLString extends DSLObject:
 		var iw = false
 		for i in range(raw.length()):
 			var ch = raw[i]
-			if ch.is_valid_int() or (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z'):
+			# 仅大小写字母为词内字符 (CPython: 数字/标点/空白分隔词, 'a1b'.title() == 'A1B')
+			if (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z'):
 				if not iw:
 					r += ch.to_upper()
 					iw = true
@@ -8211,16 +8248,16 @@ class DSLString extends DSLObject:
 
 	## Nd 十进制数字全码段 (isdecimal 全集, 680 码位 / 64 区间) [br]
 	## Unicode 通用类别 Nd 是封闭稳定属性, 内置区间表实现全对齐 (I2-74)
-	static var _ND_RANGES: Array = [ [0x30, 0x39], [0x660, 0x669], [0x6f0, 0x6f9], [0x7c0, 0x7c9], [0x966, 0x96f], [0x9e6, 0x9ef], [0xa66, 0xa6f], [0xae6, 0xaef], [0xb66, 0xb6f], [0xbe6, 0xbef], [0xc66, 0xc6f], [0xce6, 0xcef], [0xd66, 0xd6f], [0xde6, 0xdef], [0xe50, 0xe59], [0xed0, 0xed9], [0xf20, 0xf29], [0x1040, 0x1049], [0x1090, 0x1099], [0x17e0, 0x17e9], [0x1810, 0x1819], [0x1946, 0x194f], [0x19d0, 0x19d9], [0x1a80, 0x1a89], [0x1a90, 0x1a99], [0x1b50, 0x1b59], [0x1bb0, 0x1bb9], [0x1c40, 0x1c49], [0x1c50, 0x1c59], [0xa620, 0xa629], [0xa8d0, 0xa8d9], [0xa900, 0xa909], [0xa9d0, 0xa9d9], [0xa9f0, 0xa9f9], [0xaa50, 0xaa59], [0xabf0, 0xabf9], [0xff10, 0xff19], [0x104a0, 0x104a9], [0x10d30, 0x10d39], [0x11066, 0x1106f], [0x110f0, 0x110f9], [0x11136, 0x1113f], [0x111d0, 0x111d9], [0x112f0, 0x112f9], [0x11450, 0x11459], [0x114d0, 0x114d9], [0x11650, 0x11659], [0x116c0, 0x116c9], [0x11730, 0x11739], [0x118e0, 0x118e9], [0x11950, 0x11959], [0x11c50, 0x11c59], [0x11d50, 0x11d59], [0x11da0, 0x11da9], [0x11f50, 0x11f59], [0x16a60, 0x16a69], [0x16ac0, 0x16ac9], [0x16b50, 0x16b59], [0x1d7ce, 0x1d7ff], [0x1e140, 0x1e149], [0x1e2f0, 0x1e2f9], [0x1e4f0, 0x1e4f9], [0x1e950, 0x1e959], [0x1fbf0, 0x1fbf9] ]
+	static var _ND_RANGES: Array = [[0x30, 0x39], [0x660, 0x669], [0x6f0, 0x6f9], [0x7c0, 0x7c9], [0x966, 0x96f], [0x9e6, 0x9ef], [0xa66, 0xa6f], [0xae6, 0xaef], [0xb66, 0xb6f], [0xbe6, 0xbef], [0xc66, 0xc6f], [0xce6, 0xcef], [0xd66, 0xd6f], [0xde6, 0xdef], [0xe50, 0xe59], [0xed0, 0xed9], [0xf20, 0xf29], [0x1040, 0x1049], [0x1090, 0x1099], [0x17e0, 0x17e9], [0x1810, 0x1819], [0x1946, 0x194f], [0x19d0, 0x19d9], [0x1a80, 0x1a89], [0x1a90, 0x1a99], [0x1b50, 0x1b59], [0x1bb0, 0x1bb9], [0x1c40, 0x1c49], [0x1c50, 0x1c59], [0xa620, 0xa629], [0xa8d0, 0xa8d9], [0xa900, 0xa909], [0xa9d0, 0xa9d9], [0xa9f0, 0xa9f9], [0xaa50, 0xaa59], [0xabf0, 0xabf9], [0xff10, 0xff19], [0x104a0, 0x104a9], [0x10d30, 0x10d39], [0x11066, 0x1106f], [0x110f0, 0x110f9], [0x11136, 0x1113f], [0x111d0, 0x111d9], [0x112f0, 0x112f9], [0x11450, 0x11459], [0x114d0, 0x114d9], [0x11650, 0x11659], [0x116c0, 0x116c9], [0x11730, 0x11739], [0x118e0, 0x118e9], [0x11950, 0x11959], [0x11c50, 0x11c59], [0x11d50, 0x11d59], [0x11da0, 0x11da9], [0x11f50, 0x11f59], [0x16a60, 0x16a69], [0x16ac0, 0x16ac9], [0x16b50, 0x16b59], [0x1d7ce, 0x1d7ff], [0x1e140, 0x1e149], [0x1e2f0, 0x1e2f9], [0x1e4f0, 0x1e4f9], [0x1e950, 0x1e959], [0x1fbf0, 0x1fbf9]]
 
 	## isdigit 在 Nd 之外的 digit-type 码位 (上标/下标/圈数字等, 128 码位 / 20 区间)
-	static var _DIGIT_EXTRA_RANGES: Array = [ [0xb2, 0xb3], [0xb9, 0xb9], [0x1369, 0x1371], [0x19da, 0x19da], [0x2070, 0x2070], [0x2074, 0x2079], [0x2080, 0x2089], [0x2460, 0x2468], [0x2474, 0x247c], [0x2488, 0x2490], [0x24ea, 0x24ea], [0x24f5, 0x24fd], [0x24ff, 0x24ff], [0x2776, 0x277e], [0x2780, 0x2788], [0x278a, 0x2792], [0x10a40, 0x10a43], [0x10e60, 0x10e68], [0x11052, 0x1105a], [0x1f100, 0x1f10a] ]
+	static var _DIGIT_EXTRA_RANGES: Array = [[0xb2, 0xb3], [0xb9, 0xb9], [0x1369, 0x1371], [0x19da, 0x19da], [0x2070, 0x2070], [0x2074, 0x2079], [0x2080, 0x2089], [0x2460, 0x2468], [0x2474, 0x247c], [0x2488, 0x2490], [0x24ea, 0x24ea], [0x24f5, 0x24fd], [0x24ff, 0x24ff], [0x2776, 0x277e], [0x2780, 0x2788], [0x278a, 0x2792], [0x10a40, 0x10a43], [0x10e60, 0x10e68], [0x11052, 0x1105a], [0x1f100, 0x1f10a]]
 
 	## No+Nl 数字 / 字母数字码位 (isnumeric 在 Nd 之外, 1151 码位 / 81 区间)
-	static var _NO_NL_RANGES: Array = [ [0xb2, 0xb3], [0xb9, 0xb9], [0xbc, 0xbe], [0x9f4, 0x9f9], [0xb72, 0xb77], [0xbf0, 0xbf2], [0xc78, 0xc7e], [0xd58, 0xd5e], [0xd70, 0xd78], [0xf2a, 0xf33], [0x1369, 0x137c], [0x16ee, 0x16f0], [0x17f0, 0x17f9], [0x19da, 0x19da], [0x2070, 0x2070], [0x2074, 0x2079], [0x2080, 0x2089], [0x2150, 0x2182], [0x2185, 0x2189], [0x2460, 0x249b], [0x24ea, 0x24ff], [0x2776, 0x2793], [0x2cfd, 0x2cfd], [0x3007, 0x3007], [0x3021, 0x3029], [0x3038, 0x303a], [0x3192, 0x3195], [0x3220, 0x3229], [0x3248, 0x324f], [0x3251, 0x325f], [0x3280, 0x3289], [0x32b1, 0x32bf], [0xa6e6, 0xa6ef], [0xa830, 0xa835], [0x10107, 0x10133], [0x10140, 0x10178], [0x1018a, 0x1018b], [0x102e1, 0x102fb], [0x10320, 0x10323], [0x10341, 0x10341], [0x1034a, 0x1034a], [0x103d1, 0x103d5], [0x10858, 0x1085f], [0x10879, 0x1087f], [0x108a7, 0x108af], [0x108fb, 0x108ff], [0x10916, 0x1091b], [0x109bc, 0x109bd], [0x109c0, 0x109cf], [0x109d2, 0x109ff], [0x10a40, 0x10a48], [0x10a7d, 0x10a7e], [0x10a9d, 0x10a9f], [0x10aeb, 0x10aef], [0x10b58, 0x10b5f], [0x10b78, 0x10b7f], [0x10ba9, 0x10baf], [0x10cfa, 0x10cff], [0x10e60, 0x10e7e], [0x10f1d, 0x10f26], [0x10f51, 0x10f54], [0x10fc5, 0x10fcb], [0x11052, 0x11065], [0x111e1, 0x111f4], [0x1173a, 0x1173b], [0x118ea, 0x118f2], [0x11c5a, 0x11c6c], [0x11fc0, 0x11fd4], [0x12400, 0x1246e], [0x16b5b, 0x16b61], [0x16e80, 0x16e96], [0x1d2c0, 0x1d2d3], [0x1d2e0, 0x1d2f3], [0x1d360, 0x1d378], [0x1e8c7, 0x1e8cf], [0x1ec71, 0x1ecab], [0x1ecad, 0x1ecaf], [0x1ecb1, 0x1ecb4], [0x1ed01, 0x1ed2d], [0x1ed2f, 0x1ed3d], [0x1f100, 0x1f10c] ]
+	static var _NO_NL_RANGES: Array = [[0xb2, 0xb3], [0xb9, 0xb9], [0xbc, 0xbe], [0x9f4, 0x9f9], [0xb72, 0xb77], [0xbf0, 0xbf2], [0xc78, 0xc7e], [0xd58, 0xd5e], [0xd70, 0xd78], [0xf2a, 0xf33], [0x1369, 0x137c], [0x16ee, 0x16f0], [0x17f0, 0x17f9], [0x19da, 0x19da], [0x2070, 0x2070], [0x2074, 0x2079], [0x2080, 0x2089], [0x2150, 0x2182], [0x2185, 0x2189], [0x2460, 0x249b], [0x24ea, 0x24ff], [0x2776, 0x2793], [0x2cfd, 0x2cfd], [0x3007, 0x3007], [0x3021, 0x3029], [0x3038, 0x303a], [0x3192, 0x3195], [0x3220, 0x3229], [0x3248, 0x324f], [0x3251, 0x325f], [0x3280, 0x3289], [0x32b1, 0x32bf], [0xa6e6, 0xa6ef], [0xa830, 0xa835], [0x10107, 0x10133], [0x10140, 0x10178], [0x1018a, 0x1018b], [0x102e1, 0x102fb], [0x10320, 0x10323], [0x10341, 0x10341], [0x1034a, 0x1034a], [0x103d1, 0x103d5], [0x10858, 0x1085f], [0x10879, 0x1087f], [0x108a7, 0x108af], [0x108fb, 0x108ff], [0x10916, 0x1091b], [0x109bc, 0x109bd], [0x109c0, 0x109cf], [0x109d2, 0x109ff], [0x10a40, 0x10a48], [0x10a7d, 0x10a7e], [0x10a9d, 0x10a9f], [0x10aeb, 0x10aef], [0x10b58, 0x10b5f], [0x10b78, 0x10b7f], [0x10ba9, 0x10baf], [0x10cfa, 0x10cff], [0x10e60, 0x10e7e], [0x10f1d, 0x10f26], [0x10f51, 0x10f54], [0x10fc5, 0x10fcb], [0x11052, 0x11065], [0x111e1, 0x111f4], [0x1173a, 0x1173b], [0x118ea, 0x118f2], [0x11c5a, 0x11c6c], [0x11fc0, 0x11fd4], [0x12400, 0x1246e], [0x16b5b, 0x16b61], [0x16e80, 0x16e96], [0x1d2c0, 0x1d2d3], [0x1d2e0, 0x1d2f3], [0x1d360, 0x1d378], [0x1e8c7, 0x1e8cf], [0x1ec71, 0x1ecab], [0x1ecad, 0x1ecaf], [0x1ecb1, 0x1ecb4], [0x1ed01, 0x1ed2d], [0x1ed2f, 0x1ed3d], [0x1f100, 0x1f10c]]
 
 	## isnumeric: Nd + No + Nl 全集 (CPython 同)
-	static var _CJK_NUMERIC_RANGES: Array = [ [0x3405, 0x3405], [0x3483, 0x3483], [0x382a, 0x382a], [0x3b4d, 0x3b4d], [0x4e00, 0x4e00], [0x4e03, 0x4e03], [0x4e07, 0x4e07], [0x4e09, 0x4e09], [0x4e5d, 0x4e5d], [0x4e8c, 0x4e8c], [0x4e94, 0x4e94], [0x4e96, 0x4e96], [0x4ebf, 0x4ec0], [0x4edf, 0x4edf], [0x4ee8, 0x4ee8], [0x4f0d, 0x4f0d], [0x4f70, 0x4f70], [0x5104, 0x5104], [0x5146, 0x5146], [0x5169, 0x5169], [0x516b, 0x516b], [0x516d, 0x516d], [0x5341, 0x5341], [0x5343, 0x5345], [0x534c, 0x534c], [0x53c1, 0x53c4], [0x56db, 0x56db], [0x58f1, 0x58f1], [0x58f9, 0x58f9], [0x5e7a, 0x5e7a], [0x5efe, 0x5eff], [0x5f0c, 0x5f0e], [0x5f10, 0x5f10], [0x62fe, 0x62fe], [0x634c, 0x634c], [0x67d2, 0x67d2], [0x6f06, 0x6f06], [0x7396, 0x7396], [0x767e, 0x767e], [0x8086, 0x8086], [0x842c, 0x842c], [0x8cae, 0x8cae], [0x8cb3, 0x8cb3], [0x8d30, 0x8d30], [0x9621, 0x9621], [0x9646, 0x9646], [0x964c, 0x964c], [0x9678, 0x9678], [0x96f6, 0x96f6], [0xf96b, 0xf96b], [0xf973, 0xf973], [0xf978, 0xf978], [0xf9b2, 0xf9b2], [0xf9d1, 0xf9d1], [0xf9d3, 0xf9d3], [0xf9fd, 0xf9fd], [0x20001, 0x20001], [0x20064, 0x20064], [0x200e2, 0x200e2], [0x20121, 0x20121], [0x2092a, 0x2092a], [0x20983, 0x20983], [0x2098c, 0x2098c], [0x2099c, 0x2099c], [0x20aea, 0x20aea], [0x20afd, 0x20afd], [0x20b19, 0x20b19], [0x22390, 0x22390], [0x22998, 0x22998], [0x23b1b, 0x23b1b], [0x2626d, 0x2626d], [0x2f890, 0x2f890] ]
+	static var _CJK_NUMERIC_RANGES: Array = [[0x3405, 0x3405], [0x3483, 0x3483], [0x382a, 0x382a], [0x3b4d, 0x3b4d], [0x4e00, 0x4e00], [0x4e03, 0x4e03], [0x4e07, 0x4e07], [0x4e09, 0x4e09], [0x4e5d, 0x4e5d], [0x4e8c, 0x4e8c], [0x4e94, 0x4e94], [0x4e96, 0x4e96], [0x4ebf, 0x4ec0], [0x4edf, 0x4edf], [0x4ee8, 0x4ee8], [0x4f0d, 0x4f0d], [0x4f70, 0x4f70], [0x5104, 0x5104], [0x5146, 0x5146], [0x5169, 0x5169], [0x516b, 0x516b], [0x516d, 0x516d], [0x5341, 0x5341], [0x5343, 0x5345], [0x534c, 0x534c], [0x53c1, 0x53c4], [0x56db, 0x56db], [0x58f1, 0x58f1], [0x58f9, 0x58f9], [0x5e7a, 0x5e7a], [0x5efe, 0x5eff], [0x5f0c, 0x5f0e], [0x5f10, 0x5f10], [0x62fe, 0x62fe], [0x634c, 0x634c], [0x67d2, 0x67d2], [0x6f06, 0x6f06], [0x7396, 0x7396], [0x767e, 0x767e], [0x8086, 0x8086], [0x842c, 0x842c], [0x8cae, 0x8cae], [0x8cb3, 0x8cb3], [0x8d30, 0x8d30], [0x9621, 0x9621], [0x9646, 0x9646], [0x964c, 0x964c], [0x9678, 0x9678], [0x96f6, 0x96f6], [0xf96b, 0xf96b], [0xf973, 0xf973], [0xf978, 0xf978], [0xf9b2, 0xf9b2], [0xf9d1, 0xf9d1], [0xf9d3, 0xf9d3], [0xf9fd, 0xf9fd], [0x20001, 0x20001], [0x20064, 0x20064], [0x200e2, 0x200e2], [0x20121, 0x20121], [0x2092a, 0x2092a], [0x20983, 0x20983], [0x2098c, 0x2098c], [0x2099c, 0x2099c], [0x20aea, 0x20aea], [0x20afd, 0x20afd], [0x20b19, 0x20b19], [0x22390, 0x22390], [0x22998, 0x22998], [0x23b1b, 0x23b1b], [0x2626d, 0x2626d], [0x2f890, 0x2f890]]
 
 	## isdecimal: Nd 十进制数字 (CPython 同)
 	static func _is_py_decimal(code: int) -> bool:
@@ -8280,7 +8317,7 @@ class DSLString extends DSLObject:
 		return code == 0x2028 or code == 0x2029
 
 	## Cf 格式符全码段 (isprintable 排除, 170 码位 / 21 区间, I2-74)
-	static var _CF_RANGES: Array = [ [0xad, 0xad], [0x600, 0x605], [0x61c, 0x61c], [0x6dd, 0x6dd], [0x70f, 0x70f], [0x890, 0x891], [0x8e2, 0x8e2], [0x180e, 0x180e], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x206f], [0xfeff, 0xfeff], [0xfff9, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd], [0x13430, 0x1343f], [0x1bca0, 0x1bca3], [0x1d173, 0x1d17a], [0xe0001, 0xe0001], [0xe0020, 0xe007f] ]
+	static var _CF_RANGES: Array = [[0xad, 0xad], [0x600, 0x605], [0x61c, 0x61c], [0x6dd, 0x6dd], [0x70f, 0x70f], [0x890, 0x891], [0x8e2, 0x8e2], [0x180e, 0x180e], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x206f], [0xfeff, 0xfeff], [0xfff9, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd], [0x13430, 0x1343f], [0x1bca0, 0x1bca3], [0x1d173, 0x1d17a], [0xe0001, 0xe0001], [0xe0020, 0xe007f]]
 
 	## CPython str.isprintable 的可打印判定: Cc/Cf/Cs/Co/Cn 与分隔符 (Zs 除空格/Zl/Zp) 不可打印 [br]
 	## 覆盖 C0/C1 控制、Cf 格式符全码段、全部 Zs/Zl/Zp 码点与代理/私用区; [br]
@@ -8328,7 +8365,8 @@ class DSLString extends DSLObject:
 		var iw = false
 		for i in range(raw.length()):
 			var ch = raw[i]
-			if ch.is_valid_int() or (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z'):
+			# 仅大小写字母为词内字符 (CPython: 数字/标点/空白分隔词); ha 仅由大小写字母置位
+			if (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z'):
 				ha = true
 				if not iw:
 					if ch >= 'a' and ch <= 'z':
@@ -8537,22 +8575,33 @@ class DSLString extends DSLObject:
 			maxsplit = args[2].value
 		var result = DSLList.new()
 		if use_default:
-			var words = s.strip_edges().split(" ", false)
-			var wf = []
-			for w in words:
-				if w != "":
-					wf.append(w)
-			if maxsplit >= 0 and wf.size() > maxsplit + 1:
-				var rm = ""
-				for i in range(maxsplit, wf.size()):
-					if i > maxsplit:
-						rm += " "
-					rm += wf[i]
-				wf = wf.slice(0, maxsplit)
-				wf.append(rm)
-			wf.reverse()
-			for w in wf:
-				result.items.append(DSLString.cached(w))
+			# 默认按空白分割 (与 split 同规则, 跳过空项); 结果保持从左到右顺序 (CPython rsplit 同)
+			var words: Array = []  # [start, end) 位置对
+			var pos = 0
+			while pos < s.length():
+				while pos < s.length() and _is_py_ws(s[pos]):
+					pos += 1
+				if pos >= s.length():
+					break
+				var wstart = pos
+				while pos < s.length() and not _is_py_ws(s[pos]):
+					pos += 1
+				words.append([wstart, pos])
+			if maxsplit < 0 or words.size() <= maxsplit + 1:
+				for w in words:
+					result.items.append(DSLString.cached(s.substr(w[0], w[1] - w[0])))
+			else:
+				# maxsplit: 前 (size-maxsplit) 词所在前缀原样保留 (剥离尾部空白), 其后各词独立
+				var split_idx = words.size() - maxsplit
+				if split_idx >= words.size():
+					result.items.append(DSLString.cached(s.strip_edges()))
+				else:
+					var left = s.substr(0, words[split_idx][0])
+					while left.length() > 0 and _is_py_ws(left[left.length() - 1]):
+						left = left.substr(0, left.length() - 1)
+					result.items.append(DSLString.cached(left))
+					for k in range(split_idx, words.size()):
+						result.items.append(DSLString.cached(s.substr(words[k][0], words[k][1] - words[k][0])))
 		else:
 			var parts = []
 			var remaining = s
@@ -24547,6 +24596,7 @@ class Interpreter:
 		_define_exception("Exception", "BaseException")
 		_define_exception("TypeError")
 		_define_exception("ValueError")
+		_define_exception("JSONDecodeError", "ValueError")
 		_define_exception("RuntimeError")
 		_define_exception("NameError")
 		_define_exception("AttributeError")
@@ -24683,6 +24733,11 @@ class Interpreter:
 		modules["sys"] = _create_sys_module()
 		modules["time"] = _create_time_module()
 		modules["contextlib"] = _create_contextlib_module()
+		modules["bisect"] = _create_bisect_module()
+		modules["heapq"] = _create_heapq_module()
+		modules["base64"] = _create_base64_module()
+		modules["json"] = _create_json_module()
+
 		# I2-68: 登记时全部为内置模块 (用户模块经 _load_user_module 延迟加入, 默认非内置)
 		for mname in modules:
 			(modules[mname] as DSLModule).is_builtin = true
@@ -24707,6 +24762,928 @@ class Interpreter:
 		mod.members["ExitStack"] = _make_builtin("ExitStack", Callable(self, "_ctxlib_exitstack"))
 		mod.members["nullcontext"] = _make_builtin("nullcontext", Callable(self, "_ctxlib_nullcontext"))
 		return mod
+
+	## 创建 bisect 模块: 有序列表二分查找与插入 (CPython 对齐)
+	func _create_bisect_module() -> DSLModule:
+		var mod = DSLModule.new("bisect")
+		mod.members["bisect_left"] = _make_builtin("bisect_left", Callable(self, "_bisect_left"))
+		mod.members["bisect_right"] = _make_builtin("bisect_right", Callable(self, "_bisect_right"))
+		mod.members["bisect"] = _make_builtin("bisect", Callable(self, "_bisect_right"))
+		mod.members["insort_left"] = _make_builtin("insort_left", Callable(self, "_insort_left"))
+		mod.members["insort_right"] = _make_builtin("insort_right", Callable(self, "_insort_right"))
+		mod.members["insort"] = _make_builtin("insort", Callable(self, "_insort_right"))
+		return mod
+
+	## a < b 比较 (经 __lt__ 与反射); 不可比较时抛 TypeError (CPython '<' not supported)
+	func _dsl_lt_checked(a: DSLObject, b: DSLObject) -> bool:
+		var cmp = _sort_compare(a, b, "__lt__", "__gt__", "magic_lt")
+		if cmp is DSLBool:
+			return cmp.value
+		if not report.has_error:
+			raise_exception("TypeError", "'<' not supported between instances of '%s' and '%s'" % [a._type_name(), b._type_name()])
+		return false
+
+	## bisect 二分核心: 返回插入位置 (left=true 左边界 a[mid]<x, false 右边界 x<a[mid]) [br]
+	## [param lst] 有序列表 [br]
+	## [param x] 待插入值 [br]
+	## [param lo] 下界 [br]
+	## [param hi] 上界 (超出列表长度按 CPython 钳制) [br]
+	## [param left] 取左边界 (bisect_left) 或右边界 (bisect_right)
+	func _bisect_impl(lst: DSLList, x: DSLObject, lo: int, hi: int, left: bool) -> int:
+		var items = lst.items
+		if hi > items.size():
+			hi = items.size()
+		while lo < hi:
+			var mid = (lo + hi) >> 1
+			var lt: bool = _dsl_lt_checked(items[mid], x) if left else _dsl_lt_checked(x, items[mid])
+			if _suspended or report.has_error:
+				return lo
+			if left:
+				# bisect_left: a[mid] < x -> 右移, 否则左界收缩
+				if lt:
+					lo = mid + 1
+				else:
+					hi = mid
+			else:
+				# bisect_right: x < a[mid] -> 左移, 否则右界推进
+				if lt:
+					hi = mid
+				else:
+					lo = mid + 1
+		return lo
+
+	## 解析 bisect 的 lo/hi 实参: DSLInteger/None/缺省 (lo 默认 0, hi 默认列表长度)
+	func _bisect_bound(lst: DSLList, args: Array[DSLObject], idx: int, default: int) -> int:
+		if args.size() > idx and args[idx] is DSLInteger:
+			return (args[idx] as DSLInteger).value
+		if args.size() > idx and args[idx] is DSLBool:
+			return 1 if (args[idx] as DSLBool).value else 0
+		return default
+
+	func _bisect_left(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or args.size() > 4:
+			raise_exception("TypeError", "bisect_left() takes 2 to 4 positional arguments but %d were given" % (args.size() - 1))
+			return null
+		var lst = DSLObject._unwrap_dsl(args[0])
+		if not (lst is DSLList):
+			raise_exception("TypeError", "the first argument must be a list")
+			return null
+		var lo = _bisect_bound(lst, args, 2, 0)
+		if lo < 0:
+			raise_exception("ValueError", "lo must be non-negative")
+			return null
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
+		return DSLInteger.pooled(_bisect_impl(lst, args[1], lo, hi, true))
+
+	func _bisect_right(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or args.size() > 4:
+			raise_exception("TypeError", "bisect_right() takes 2 to 4 positional arguments but %d were given" % (args.size() - 1))
+			return null
+		var lst = DSLObject._unwrap_dsl(args[0])
+		if not (lst is DSLList):
+			raise_exception("TypeError", "the first argument must be a list")
+			return null
+		var lo = _bisect_bound(lst, args, 2, 0)
+		if lo < 0:
+			raise_exception("ValueError", "lo must be non-negative")
+			return null
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
+		return DSLInteger.pooled(_bisect_impl(lst, args[1], lo, hi, false))
+
+	func _insort_left(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or args.size() > 4:
+			raise_exception("TypeError", "insort_left() takes 2 to 4 positional arguments but %d were given" % (args.size() - 1))
+			return null
+		var lst = DSLObject._unwrap_dsl(args[0])
+		if not (lst is DSLList):
+			raise_exception("TypeError", "the first argument must be a list")
+			return null
+		var lo = _bisect_bound(lst, args, 2, 0)
+		if lo < 0:
+			raise_exception("ValueError", "lo must be non-negative")
+			return null
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
+		var idx = _bisect_impl(lst, args[1], lo, hi, true)
+		if _suspended or report.has_error:
+			return DSLNone.new()
+		(lst as DSLList).items.insert(idx, args[1])
+		return DSLNone.new()
+
+	func _insort_right(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or args.size() > 4:
+			raise_exception("TypeError", "insort_right() takes 2 to 4 positional arguments but %d were given" % (args.size() - 1))
+			return null
+		var lst = DSLObject._unwrap_dsl(args[0])
+		if not (lst is DSLList):
+			raise_exception("TypeError", "the first argument must be a list")
+			return null
+		var lo = _bisect_bound(lst, args, 2, 0)
+		if lo < 0:
+			raise_exception("ValueError", "lo must be non-negative")
+			return null
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
+		var idx = _bisect_impl(lst, args[1], lo, hi, false)
+		if _suspended or report.has_error:
+			return DSLNone.new()
+		(lst as DSLList).items.insert(idx, args[1])
+		return DSLNone.new()
+
+	## 创建 heapq 模块: 堆队列算法 (CPython 对齐, 小顶堆)
+	func _create_heapq_module() -> DSLModule:
+		var mod = DSLModule.new("heapq")
+		mod.members["heappush"] = _make_builtin("heappush", Callable(self, "_heap_heappush"))
+		mod.members["heappop"] = _make_builtin("heappop", Callable(self, "_heap_heappop"))
+		mod.members["heapify"] = _make_builtin("heapify", Callable(self, "_heap_heapify"))
+		mod.members["heapreplace"] = _make_builtin("heapreplace", Callable(self, "_heap_heapreplace"))
+		mod.members["heappushpop"] = _make_builtin("heappushpop", Callable(self, "_heap_heappushpop"))
+		return mod
+
+	## 堆上浮 (heapq._siftup 同型): 新元素从 pos 向上, 直至父不大于它
+	func _heap_siftup(h: Array, pos: int) -> void:
+		var item = h[pos]
+		while pos > 0:
+			var parent = (pos - 1) >> 1
+			var parent_item = h[parent]
+			if _dsl_lt_checked(parent_item, item):
+				break
+			h[pos] = parent_item
+			pos = parent
+		h[pos] = item
+
+	## 堆下沉 (heapq._siftdown 同型): 从 pos 向下到 endpos, 取较小子节点上移
+	func _heap_siftdown(h: Array, pos: int, endpos: int) -> void:
+		var item = h[pos]
+		var startpos = pos
+		while true:
+			var childpos = pos * 2 + 1
+			if childpos >= endpos:
+				break
+			var rightpos = childpos + 1
+			if rightpos < endpos and not _dsl_lt_checked(h[childpos], h[rightpos]):
+				childpos = rightpos
+			if not _dsl_lt_checked(h[childpos], item):
+				break
+			h[pos] = h[childpos]
+			pos = childpos
+		h[pos] = item
+		_heap_siftup(h, pos)
+
+	func _heap_items(args: Array[DSLObject]) -> Array:
+		var lst = DSLObject._unwrap_dsl(args[0])
+		if not (lst is DSLList):
+			raise_exception("TypeError", "heap argument must be a list")
+			return []
+		return (lst as DSLList).items
+
+	func _heap_heappush(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "heappush() takes exactly 2 arguments (%d given)" % args.size())
+			return null
+		var h = _heap_items(args)
+		if report.has_error:
+			return null
+		h.append(args[1])
+		_heap_siftup(h, h.size() - 1)
+		return DSLNone.new()
+
+	func _heap_heappop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "heappop() takes exactly 1 argument (%d given)" % args.size())
+			return null
+		var h = _heap_items(args)
+		if report.has_error:
+			return null
+		if h.is_empty():
+			raise_exception("IndexError", "index out of range")
+			return null
+		var lastelt = h.pop_back()
+		if h.is_empty():
+			return lastelt
+		var returnitem = h[0]
+		h[0] = lastelt
+		_heap_siftdown(h, 0, h.size())
+		return returnitem
+
+	func _heap_heapify(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "heapify() takes exactly 1 argument (%d given)" % args.size())
+			return null
+		var h = _heap_items(args)
+		if report.has_error:
+			return null
+		var n = h.size()
+		for i in range((n >> 1) - 1, -1, -1):
+			_heap_siftdown(h, i, n)
+		return DSLNone.new()
+
+	func _heap_heapreplace(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "heapreplace() takes exactly 2 arguments (%d given)" % args.size())
+			return null
+		var h = _heap_items(args)
+		if report.has_error:
+			return null
+		var returnitem = h[0]
+		h[0] = args[1]
+		_heap_siftdown(h, 0, h.size())
+		return returnitem
+
+	func _heap_heappushpop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "heappushpop() takes exactly 2 arguments (%d given)" % args.size())
+			return null
+		var h = _heap_items(args)
+		if report.has_error:
+			return null
+		if h.is_empty():
+			return args[1]
+		if _dsl_lt_checked(h[0], args[1]):
+			var ret = h[0]
+			h[0] = args[1]
+			_heap_siftdown(h, 0, h.size())
+			return ret
+		return args[1]
+
+	## base64 模块: Base16/Base64 编解码 (CPython 对齐, 仅 bytes 输入输出)
+	func _create_base64_module() -> DSLModule:
+		var mod = DSLModule.new("base64")
+		mod.members["b64encode"] = _make_builtin("b64encode", Callable(self, "_b64_b64encode"))
+		mod.members["b64decode"] = _make_builtin("b64decode", Callable(self, "_b64_b64decode"))
+		mod.members["standard_b64encode"] = _make_builtin("standard_b64encode", Callable(self, "_b64_b64encode"))
+		mod.members["standard_b64decode"] = _make_builtin("standard_b64decode", Callable(self, "_b64_b64decode"))
+		mod.members["urlsafe_b64encode"] = _make_builtin("urlsafe_b64encode", Callable(self, "_b64_urlsafe_encode"))
+		mod.members["urlsafe_b64decode"] = _make_builtin("urlsafe_b64decode", Callable(self, "_b64_urlsafe_decode"))
+		mod.members["b16encode"] = _make_builtin("b16encode", Callable(self, "_b64_b16encode"))
+		mod.members["b16decode"] = _make_builtin("b16decode", Callable(self, "_b64_b16decode"))
+		mod.members["encodebytes"] = _make_builtin("encodebytes", Callable(self, "_b64_encodebytes"))
+		mod.members["decodebytes"] = _make_builtin("decodebytes", Callable(self, "_b64_decodebytes"))
+		return mod
+
+	const B64_STD_TABLE := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+	## 取 bytes 实参 (仅 bytes-like, str 拒收 — CPython base64 需 bytes)
+	func _b64_bytes_arg(args: Array[DSLObject], idx: int) -> DSLBytes:
+		if args.size() <= idx:
+			raise_exception("TypeError", "argument should be a bytes-like object")
+			return null
+		var raw = DSLObject._unwrap_dsl(args[idx])
+		if raw is DSLBytes:
+			return raw
+		if raw is DSLString:
+			raise_exception("TypeError", "a bytes-like object is required, not 'str'")
+			return null
+		raise_exception("TypeError", "a bytes-like object is required, not '%s'" % raw._type_name())
+		return null
+
+	## 3 字节 -> 4 base64 字符 (表为 64 字符串; padding 用 '=')
+	func _b64_triplet(data: Array, i: int, table: String) -> String:
+		var b0 = data[i] & 0xFF
+		var b1 = data[i + 1] & 0xFF if i + 1 < data.size() else 0
+		var b2 = data[i + 2] & 0xFF if i + 2 < data.size() else 0
+		var out = ""
+		out += table[b0 >> 2]
+		out += table[((b0 & 0x03) << 4) | (b1 >> 4)]
+		out += table[((b1 & 0x0F) << 2) | (b2 >> 6)] if i + 1 < data.size() else "="
+		out += table[b2 & 0x3F] if i + 2 < data.size() else "="
+		return out
+
+	func _b64_b64encode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var raw = _b64_bytes_arg(args, 0)
+		if raw == null:
+			return null
+		var table = B64_STD_TABLE
+		var altchars = args[1] if args.size() > 1 else null
+		if altchars != null and not (altchars is DSLNone):
+			var alt = DSLObject._unwrap_dsl(altchars)
+			if not (alt is DSLBytes) or alt.data.size() != 2:
+				raise_exception("TypeError", "altchars must be a bytes-like object of length 2")
+				return null
+			table = table.substr(0, 62) + char(alt.data[0]) + char(alt.data[1])
+		var out = ""
+		var i = 0
+		while i < raw.data.size():
+			out += _b64_triplet(raw.data, i, table)
+			i += 3
+		var res: Array[int] = []
+		for b in out.to_utf8_buffer():
+			res.append(b)
+		return DSLBytes.new(res)
+
+	## base64 解码: 遇 '=' 截断, validate=false 时跳过非法字符 (CPython 语义)
+	func _b64_decode_str(s: String, table: String, validate: bool) -> Array:
+		# 直接解码为字节数组 (不经 String/char 往返); 按 CPython 校验填充规则
+		var out = ""
+		var i = 0
+		var seen_pad = false
+		var pad_count = 0
+		while i < s.length():
+			var ch = s[i]
+			if DSLString._is_py_space(ch.unicode_at(0)):
+				i += 1
+				continue
+			if ch == "=":
+				seen_pad = true
+				pad_count += 1
+				i += 1
+				continue
+			if seen_pad:
+				# '=' 之后出现数据字符: CPython 报 Incorrect padding
+				raise_exception("ValueError", "Incorrect padding")
+				return []
+			var vi = table.find(ch)
+			if vi == -1:
+				if validate:
+					raise_exception("ValueError", "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4")
+					return []
+				i += 1
+				continue
+			out += ch
+			i += 1
+		var data_len = out.length()
+		if data_len % 4 == 1:
+			raise_exception("ValueError", "Invalid base64-encoded string: number of data characters (%d) cannot be 1 more than a multiple of 4" % data_len)
+			return []
+		if (data_len + pad_count) % 4 != 0:
+			raise_exception("ValueError", "Incorrect padding")
+			return []
+		# 补齐后按 4 组解码
+		var vals: Array[int] = []
+		for k2 in range(out.length()):
+			vals.append(table.find(out[k2]))
+		var dec: Array[int] = []
+		var k = 0
+		while k < vals.size():
+			var a = vals[k]
+			var b = vals[k + 1] if k + 1 < vals.size() else -1
+			var c = vals[k + 2] if k + 2 < vals.size() else -1
+			var d = vals[k + 3] if k + 3 < vals.size() else -1
+			if a == -1 or b == -1:
+				break
+			dec.append((a << 2) | (b >> 4))
+			if c != -1:
+				dec.append(((b & 0x0F) << 4) | (c >> 2))
+			if d != -1:
+				dec.append(((c & 0x03) << 6) | d)
+			k += 4
+		return dec
+
+	func _b64_b64decode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var raw = _b64_bytes_arg(args, 0)
+		if raw == null:
+			return null
+		var table = B64_STD_TABLE
+		var altchars = args[1] if args.size() > 1 else null
+		if altchars != null and not (altchars is DSLNone):
+			var alt = DSLObject._unwrap_dsl(altchars)
+			if not (alt is DSLBytes) or alt.data.size() != 2:
+				raise_exception("TypeError", "altchars must be a bytes-like object of length 2")
+				return null
+			table = table.substr(0, 62) + char(alt.data[0]) + char(alt.data[1])
+		var validate = false
+		if args.size() > 2 and args[2] is DSLBool:
+			validate = args[2].value
+		var s = ""
+		for b in raw.data:
+			s += char(b)
+		s = s.replace("\n", "").replace("\r", "")
+		var dec = _b64_decode_str(s, table, validate)
+		if report.has_error:
+			return null
+		return DSLBytes.new(dec)
+
+	func _b64_urlsafe_encode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var alt = DSLBytes.new([45, 95])  # b'-_'
+		return _b64_b64encode([args[0], alt], {})
+
+	func _b64_urlsafe_decode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var alt = DSLBytes.new([45, 95])
+		return _b64_b64decode([args[0], alt], {})
+
+	func _b64_b16encode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var raw = _b64_bytes_arg(args, 0)
+		if raw == null:
+			return null
+		var out = ""
+		for b in raw.data:
+			out += "%02X" % (b & 0xFF)
+		var res: Array[int] = []
+		for c in out.to_utf8_buffer():
+			res.append(c)
+		return DSLBytes.new(res)
+
+	func _b64_b16decode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var raw = _b64_bytes_arg(args, 0)
+		if raw == null:
+			return null
+		var s = ""
+		for b in raw.data:
+			s += char(b)
+		s = s.replace("\n", "").replace("\r", "")
+		if s.length() % 2 != 0:
+			raise_exception("ValueError", "Odd-length string")
+			return null
+		var res: Array[int] = []
+		var i = 0
+		while i < s.length():
+			var hi = s[i].to_lower().unicode_at(0)
+			var lo = s[i + 1].to_lower().unicode_at(0)
+			var hv = hi - 48 if hi >= 48 and hi <= 57 else hi - 87
+			var lv = lo - 48 if lo >= 48 and lo <= 57 else lo - 87
+			if hv < 0 or hv > 15 or lv < 0 or lv > 15:
+				raise_exception("ValueError", "Non-hexadecimal digit found")
+				return null
+			res.append((hv << 4) | lv)
+			i += 2
+		return DSLBytes.new(res)
+
+	func _b64_encodebytes(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var raw = _b64_bytes_arg(args, 0)
+		if raw == null:
+			return null
+		var table = B64_STD_TABLE
+		var out = ""
+		var i = 0
+		while i < raw.data.size():
+			out += _b64_triplet(raw.data, i, table)
+			i += 3
+			if i % 57 == 0:
+				out += "\n"
+		out += "\n"
+		var res: Array[int] = []
+		for b in out.to_utf8_buffer():
+			res.append(b)
+		return DSLBytes.new(res)
+
+	func _b64_decodebytes(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var raw = _b64_bytes_arg(args, 0)
+		if raw == null:
+			return null
+		var s = ""
+		for b in raw.data:
+			s += char(b)
+		s = s.replace("\n", "").replace("\r", "").replace(" ", "")
+		var dec = _b64_decode_str(s, B64_STD_TABLE, false)
+		if report.has_error:
+			return null
+		return DSLBytes.new(dec)
+
+	## json 模块: 序列化与反序列化 (CPython 对齐子集)
+	func _create_json_module() -> DSLModule:
+		var mod = DSLModule.new("json")
+		mod.members["dumps"] = _make_builtin("dumps", Callable(self, "_json_dumps"))
+		mod.members["loads"] = _make_builtin("loads", Callable(self, "_json_loads"))
+		mod.members["dump"] = _make_builtin("dump", Callable(self, "_json_dump"))
+		mod.members["load"] = _make_builtin("load", Callable(self, "_json_load"))
+		var jde = globals.get_val_safe("JSONDecodeError")
+		mod.members["JSONDecodeError"] = jde if jde != null else DSLNone.new()
+		return mod
+
+	## JSON 字符串转义 (ensure_ascii=true 时非 ASCII 转 \uXXXX)
+	func _json_escape(s: String, ensure_ascii: bool) -> String:
+		var out = "\""
+		var i = 0
+		while i < s.length():
+			var ch = s[i]
+			var cp = s.unicode_at(i)
+			if ch == "\"":
+				out += "\\\""
+			elif ch == "\\":
+				out += "\\\\"
+			elif ch == "\n":
+				out += "\\n"
+			elif ch == "\r":
+				out += "\\r"
+			elif ch == "\t":
+				out += "\\t"
+			elif ch == "\b":
+				out += "\\b"
+			elif ch == "\f":
+				out += "\\f"
+			elif cp < 0x20:
+				out += "\\u%04x" % cp
+			elif cp < 0x80:
+				out += ch
+			elif ensure_ascii:
+				out += "\\u%04x" % cp
+			else:
+				# 非 ASCII 且 ensure_ascii=false: 按码位输出 UTF-8 (代理对按两码位输出)
+				if cp >= 0x10000:
+					var v = cp - 0x10000
+					out += char(0xD800 + (v >> 10)) + char(0xDC00 + (v & 0x3FF))
+				else:
+					out += ch
+			i += 1
+		return out + "\""
+
+	## DSLDict 规范化键 -> DSLObject 键 (逆向 _key_to_variant: "s:"/None/"n"/int/"i:大数"/float)
+	func _json_key_from_variant(v: Variant) -> DSLObject:
+		if v is String:
+			if v.begins_with("s:"):
+				return DSLString.new(v.substr(2))
+			if v == "n":
+				return DSLNone.new()
+			if v.begins_with("i:"):
+				var body = v.substr(2)
+				var pr = DSLBigInt.from_digits(body.replace("-", ""), 10, body.begins_with("-"))
+				return DSLInteger.from_big(pr[0], pr[1])
+			return DSLString.new(v)
+		if typeof(v) == TYPE_BOOL:
+			return _wrap(v)
+		if typeof(v) == TYPE_INT:
+			return DSLInteger.pooled(v)
+		if typeof(v) == TYPE_FLOAT:
+			return DSLFloat.new(v)
+		return DSLNone.new()
+
+	## JSON 序列化核心: obj -> JSON 文本 [br]
+	## [param indent] None=单行; int=每层缩进空格数 [br]
+	## [param sort_keys] 字典键排序 [br]
+	## [param ensure_ascii] 非 ASCII 转义 [br]
+	## [param sep] 分隔符对 (item_sep, kv_sep) [br]
+	## [param level] 当前缩进层级 (递归)
+	func _json_encode(obj: DSLObject, indent: int, sort_keys: bool, ensure_ascii: bool, sep: Array, level: int) -> String:
+		var raw = obj._wrapped if obj._wrapped != null else obj
+		if raw is DSLNone:
+			return "null"
+		if raw is DSLBool:
+			return "true" if raw.value else "false"
+		if raw is DSLInteger:
+			if raw.is_big():
+				return DSLBigInt.to_dec(raw.big_neg, raw.big_limbs)
+			return str(raw.value)
+		if raw is DSLFloat:
+			var fv = raw.value
+			if is_nan(fv):
+				return "NaN"
+			if is_inf(fv):
+				return "Infinity" if fv > 0 else "-Infinity"
+			return DSLObject._py_float_repr(fv)
+		if raw is DSLString:
+			return _json_escape(raw.value, ensure_ascii)
+		if raw is DSLList or raw is DSLTuple or raw is DSLRange:
+			var items = raw.items if raw is DSLList or raw is DSLTuple else null
+			var is_rng = raw is DSLRange
+			var inner = _json_indent(indent, level + 1)
+			var parts: Array[String] = []
+			if is_rng:
+				var it = (raw as DSLRange)._dsl_iter()
+				while it.has_next():
+					parts.append(_json_encode(it.next(), indent, sort_keys, ensure_ascii, sep, level + 1))
+			else:
+				for e in items:
+					parts.append(_json_encode(e, indent, sort_keys, ensure_ascii, sep, level + 1))
+			return _json_array(parts, indent, level, sep)
+		if raw is DSLDict:
+			var keys = raw.dict.keys()
+			var key_objs: Array = []
+			for k in keys:
+				key_objs.append(_json_key_from_variant(k))
+			if sort_keys:
+				key_objs.sort_custom(func(a, b):
+					var ka = a._dsl_str()
+					var kb = b._dsl_str()
+					return ka < kb)
+			var parts: Array[String] = []
+			for k in key_objs:
+				# JSON 对象键必须为字符串: 非字符串键 (int/float/bool/None) 按其字面量转义为字符串 (CPython 同)
+				var ks: String
+				if k is DSLString:
+					ks = _json_encode(k, indent, sort_keys, ensure_ascii, sep, level + 1)
+				else:
+					ks = _json_escape(_json_encode(k, indent, sort_keys, ensure_ascii, sep, level + 1), ensure_ascii)
+				var vs = _json_encode(raw.dict[raw._key_to_variant(k)], indent, sort_keys, ensure_ascii, sep, level + 1)
+				parts.append(ks + sep[1] + vs)
+			return _json_object(parts, indent, level, sep)
+		raise_exception("TypeError", "Object of type %s is not JSON serializable" % raw._type_name())
+		return ""
+
+	func _json_indent(indent: int, level: int) -> String:
+		if indent < 0:
+			return ""
+		var s = "\n"
+		for i in range(level * indent):
+			s += " "
+		return s
+
+	func _json_array(parts: Array, indent: int, level: int, sep: Array) -> String:
+		if parts.is_empty():
+			return "[]"
+		var inner = _json_indent(indent, level + 1)
+		if indent < 0:
+			return "[" + sep[0].join(parts) + "]"
+		var s = "["
+		for i in range(parts.size()):
+			s += inner + parts[i]
+			if i < parts.size() - 1:
+				s += ","
+		s += _json_indent(indent, level) + "]"
+		return s
+
+	func _json_object(parts: Array, indent: int, level: int, sep: Array) -> String:
+		if parts.is_empty():
+			return "{}"
+		var inner = _json_indent(indent, level + 1)
+		if indent < 0:
+			return "{" + sep[0].join(parts) + "}"
+		var s = "{"
+		for i in range(parts.size()):
+			s += inner + parts[i]
+			if i < parts.size() - 1:
+				s += ","
+		s += _json_indent(indent, level) + "}"
+		return s
+
+	func _json_dumps(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.is_empty() or args.size() > 1:
+			raise_exception("TypeError", "dumps() takes 1 positional argument")
+			return null
+		var indent = -1
+		var sort_keys = false
+		var ensure_ascii = true
+		var sep: Array = [", ", ": "]
+		if _kwargs.has("indent"):
+			var iv = DSLObject._unwrap_dsl(_kwargs["indent"])
+			if iv is DSLInteger:
+				indent = iv.value
+			elif iv is DSLBool:
+				indent = 1 if iv.value else -1
+		if _kwargs.has("sort_keys") and _kwargs["sort_keys"] is DSLBool:
+			sort_keys = _kwargs["sort_keys"].value
+		if _kwargs.has("ensure_ascii") and _kwargs["ensure_ascii"] is DSLBool:
+			ensure_ascii = _kwargs["ensure_ascii"].value
+		if _kwargs.has("separators"):
+			var sv = _kwargs["separators"]
+			if not (sv is DSLTuple) or sv.items.size() != 2:
+				raise_exception("TypeError", "separators must be an iterable of length 2")
+				return null
+			sep = [sv.items[0]._dsl_str(), sv.items[1]._dsl_str()]
+		return DSLString.new(_json_encode(args[0], indent, sort_keys, ensure_ascii, sep, 0))
+
+	## JSON 解析器: 文本 -> DSL 值 (错误抛 JSONDecodeError)
+	var _json_pos: int = 0
+	var _json_text: String = ""
+
+	func _json_peek() -> String:
+		return _json_text[_json_pos] if _json_pos < _json_text.length() else ""
+
+	func _json_skip_ws() -> void:
+		while _json_pos < _json_text.length():
+			var c = _json_text[_json_pos]
+			if c == " " or c == "\t" or c == "\n" or c == "\r":
+				_json_pos += 1
+			else:
+				break
+
+	func _json_fail(msg: String) -> void:
+		raise_exception_typed("JSONDecodeError", [DSLString.new(msg + ": line 1 column %d (char %d)" % [_json_pos + 1, _json_pos])])
+
+	## 解析一个 JSON 值 [br]
+	## [returns] DSLObject (DSLNone/DSLBool/DSLInteger/DSLFloat/DSLString/DSLList/DSLDict)
+	func _json_parse_value() -> DSLObject:
+		_json_skip_ws()
+		var c = _json_peek()
+		if c == "":
+			_json_fail("Expecting value")
+			return null
+		if c == "{":
+			return _json_parse_object()
+		if c == "[":
+			return _json_parse_array()
+		if c == "\"":
+			return DSLString.new(_json_parse_string())
+		if c == "t":
+			if _json_text.substr(_json_pos, 4) == "true":
+				_json_pos += 4
+				return _wrap(true)
+			_json_fail("Expecting value")
+			return null
+		if c == "f":
+			if _json_text.substr(_json_pos, 5) == "false":
+				_json_pos += 5
+				return _wrap(false)
+			_json_fail("Expecting value")
+			return null
+		if c == "n":
+			if _json_text.substr(_json_pos, 4) == "null":
+				_json_pos += 4
+				return _wrap(null)
+			_json_fail("Expecting value")
+			return null
+		if c == "-" or (c >= "0" and c <= "9"):
+			return _json_parse_number()
+		_json_fail("Expecting value")
+		return null
+
+	## 解析 JSON 数字: 整数 (无 ./e) 返回 DSLInteger, 否则 DSLFloat
+	func _json_parse_number() -> DSLObject:
+		var start = _json_pos
+		if _json_peek() == "-":
+			_json_pos += 1
+		while _json_pos < _json_text.length():
+			var ch = _json_text[_json_pos]
+			if (ch >= "0" and ch <= "9") or ch == "." or ch == "e" or ch == "E" or ch == "+" or ch == "-":
+				_json_pos += 1
+			else:
+				break
+		var token = _json_text.substr(start, _json_pos - start)
+		# JSON 数字不允许前导零 (CPython: json.loads("01") 报 JSONDecodeError)
+		var tbody = token.substr(1) if token.begins_with("-") else token
+		if tbody.length() > 1 and tbody[0] == "0" and tbody[1] != "." and tbody[1] != "e" and tbody[1] != "E":
+			_json_fail("Expecting value")
+			return null
+		var is_float = token.contains(".") or token.contains("e") or token.contains("E")
+		if is_float:
+			var parsed = DSLObject._float_parse(token)
+			if parsed[0]:
+				return DSLFloat.new(parsed[1])
+			_json_fail("Out of range float values are not JSON compliant")
+			return null
+		var iv = token.to_int()
+		if token != str(iv) and token != "-" + str(abs(iv)):
+			# 超出 int64 的大整数: 用任意精度
+			var pr = DSLBigInt.from_digits(token.replace("-", ""), 10, token.begins_with("-"))
+			return DSLInteger.from_big(pr[0], pr[1])
+		return DSLInteger.pooled(iv)
+
+	## 解析 JSON 字符串 (含转义), 返回内容 (不含引号)
+	func _json_parse_string() -> String:
+		_json_pos += 1  # 跳过开引号
+		var out = ""
+		while true:
+			if _json_pos >= _json_text.length():
+				_json_fail("Unterminated string starting at")
+				return ""
+			var ch = _json_text[_json_pos]
+			if ch == "\"":
+				_json_pos += 1
+				return out
+			if ch == "\\":
+				_json_pos += 1
+				if _json_pos >= _json_text.length():
+					_json_fail("Unterminated string starting at")
+					return ""
+				var esc = _json_text[_json_pos]
+				_json_pos += 1
+				match esc:
+					"\"": out += "\""
+					"\\": out += "\\"
+					"/": out += "/"
+					"b": out += "\b"
+					"f": out += "\f"
+					"n": out += "\n"
+					"r": out += "\r"
+					"t": out += "\t"
+					"u":
+						if _json_pos + 4 > _json_text.length():
+							_json_fail("Invalid \\uXXXX escape")
+							return ""
+						var hexs = _json_text.substr(_json_pos, 4)
+						_json_pos += 4
+						if not _is_hex(hexs):
+							_json_fail("Invalid \\uXXXX escape")
+							return ""
+						var cp = 0
+						for hx in range(4):
+							var hc = hexs[hx]
+							cp = cp * 16 + (hc.unicode_at(0) - 48 if hc >= "0" and hc <= "9" else (hc.to_lower().unicode_at(0) - 87))
+						out += char(cp)
+					_:
+						_json_fail("Invalid \\escape")
+						return ""
+			else:
+				out += ch
+				_json_pos += 1
+		return ""
+
+	func _is_hex(s: String) -> bool:
+		for ch in s:
+			if not ((ch >= "0" and ch <= "9") or (ch >= "a" and ch <= "f") or (ch >= "A" and ch <= "F")):
+				return false
+		return true
+
+	## 解析 JSON 数组
+	func _json_parse_array() -> DSLObject:
+		_json_pos += 1  # 跳过 [
+		var items: Array[DSLObject] = []
+		_json_skip_ws()
+		if _json_peek() == "]":
+			_json_pos += 1
+			return DSLList.new(items)
+		while true:
+			var v = _json_parse_value()
+			if report.has_error:
+				return null
+			items.append(v)
+			_json_skip_ws()
+			var c = _json_peek()
+			if c == ",":
+				_json_pos += 1
+				continue
+			if c == "]":
+				_json_pos += 1
+				return DSLList.new(items)
+			_json_fail("Expecting ',' delimiter")
+			return null
+		return null
+
+	## 解析 JSON 对象 (键必须是字符串)
+	func _json_parse_object() -> DSLObject:
+		_json_pos += 1  # 跳过 {
+		var d = DSLDict.new()
+		_json_skip_ws()
+		if _json_peek() == "}":
+			_json_pos += 1
+			return d
+		while true:
+			_json_skip_ws()
+			if _json_peek() != "\"":
+				_json_fail("Expecting property name enclosed in double quotes")
+				return null
+			var key = DSLString.new(_json_parse_string())
+			if report.has_error:
+				return null
+			_json_skip_ws()
+			if _json_peek() != ":":
+				_json_fail("Expecting ':' delimiter")
+				return null
+			_json_pos += 1
+			var v = _json_parse_value()
+			if report.has_error:
+				return null
+			# 键经 _key_to_variant 规范化 (str -> "s:值"), 与 DSLDict 内建约定一致
+			d.dict[d._key_to_variant(key)] = v
+			_json_skip_ws()
+			var c = _json_peek()
+			if c == ",":
+				_json_pos += 1
+				continue
+			if c == "}":
+				_json_pos += 1
+				return d
+			_json_fail("Expecting ',' delimiter")
+			return null
+		return null
+
+	func _json_loads(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.is_empty() or args.size() > 1:
+			raise_exception("TypeError", "loads() takes 1 positional argument")
+			return null
+		var raw = DSLObject._unwrap_dsl(args[0])
+		if not (raw is DSLString):
+			raise_exception("TypeError", "the JSON object must be str, bytes or bytearray, not %s" % raw._type_name())
+			return null
+		_json_text = raw.value
+		_json_pos = 0
+		var v = _json_parse_value()
+		if report.has_error:
+			return null
+		_json_skip_ws()
+		if _json_pos < _json_text.length():
+			_json_fail("Extra data")
+			return null
+		return v
+
+	## json.dump(obj, fp, ...) - 写 JSON 到文件对象
+	func _json_dump(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2:
+			raise_exception("TypeError", "dump() missing required argument: 'fp'")
+			return null
+		var fp = DSLObject._unwrap_dsl(args[1])
+		if not (fp is DSLFile):
+			raise_exception("TypeError", "dump() requires fp to be a file object")
+			return null
+		var indent = -1
+		if _kwargs.has("indent") and _kwargs["indent"] is DSLInteger:
+			indent = _kwargs["indent"].value
+		var sort_keys = _kwargs.has("sort_keys") and _kwargs["sort_keys"] is DSLBool and _kwargs["sort_keys"].value
+		var sep: Array = [", ", ": "]
+		if _kwargs.has("separators"):
+			var sv = _kwargs["separators"]
+			if not (sv is DSLTuple) or sv.items.size() != 2:
+				raise_exception("TypeError", "separators must be an iterable of length 2")
+				return null
+			sep = [sv.items[0]._dsl_str(), sv.items[1]._dsl_str()]
+		var text = _json_encode(args[0], indent, sort_keys, true, sep, 0)
+		if report.has_error:
+			return null
+		(fp as DSLFile).builtin_fwrite([fp, DSLString.new(text)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return DSLNone.new()
+
+	## json.load(fp) - 从文件对象读 JSON
+	func _json_load(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "load() takes exactly 1 argument")
+			return null
+		var fp = DSLObject._unwrap_dsl(args[0])
+		if not (fp is DSLFile):
+			raise_exception("TypeError", "load() requires fp to be a file object")
+			return null
+		var text = (fp as DSLFile).builtin_fread([fp] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if text == null or report.has_error:
+			return null
+		return _json_loads([text] as Array[DSLObject], {})
+
+
 
 	## @contextmanager 装饰器: 接受生成器函数, 返回可调用包装
 	func _ctxlib_contextmanager(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -30999,6 +31976,10 @@ class Interpreter:
 				return _format_default_number(value)
 			var ms = value.magic_str([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			return ms.value if ms is DSLString else value._dsl_str()
+		# 容器等非基本类型: 任何非空格式说明符报 TypeError (含仅宽度/对齐, CPython 同)
+		if not (value is DSLInteger or value is DSLFloat or value is DSLBool or value is DSLString):
+			raise_exception("TypeError", "unsupported format string passed to %s.__format__" % value._type_name())
+			return ""
 
 		# 解析格式说明符
 		var i = 0
@@ -31163,7 +32144,7 @@ class Interpreter:
 
 	## 判断对象是否为数值类型
 	func _is_numeric_value(value: DSLObject) -> bool:
-		return value is DSLInteger or value is DSLFloat
+		return value is DSLInteger or value is DSLFloat or value is DSLBool
 
 	## 数值默认格式化 (整数直接, 浮点按 str)
 	func _format_default_number(value: DSLObject) -> String:
@@ -31186,11 +32167,41 @@ class Interpreter:
 
 	## 按类型字符格式化值
 	func _format_with_type(value: DSLObject, type_c: String, precision: int, group_sep: String) -> String:
+		var is_bool = value is DSLBool
 		# bool 是 int 子类: 按 0/1 参与格式化
 		if value is DSLBool:
 			value = DSLInteger.pooled(1 if value.value else 0)
 		var is_int = value is DSLInteger
 		var is_float = value is DSLFloat
+		# 类型×说明符兼容性校验 (CPython): int/bool 仅拒 's', float 拒 b/c/d/o/x/X/s,
+		# str 拒非 ''/s; 容器等其他类型的非空说明符维持既有行为 (CPython 报 TypeError 未覆盖)
+		if type_c != "":
+			if is_float:
+				if type_c in ["b", "c", "d", "o", "x", "X", "s"]:
+					raise_exception("ValueError", "Unknown format code '%s' for object of type 'float'" % type_c)
+					return ""
+			elif is_int:
+				if type_c == "s":
+					raise_exception("ValueError", "Unknown format code 's' for object of type '%s'" % ("bool" if is_bool else "int"))
+					return ""
+			elif value is DSLString:
+				if type_c != "s":
+					raise_exception("ValueError", "Unknown format code '%s' for object of type 'str'" % type_c)
+					return ""
+			else:
+				# 容器等其他类型: 任何非空说明符报 TypeError (CPython: unsupported format string passed to X.__format__)
+				raise_exception("TypeError", "unsupported format string passed to %s.__format__" % value._type_name())
+				return ""
+		# inf/nan 短路: CPython 输出 'inf'/'nan' (符号含, % 说明符带 % 后缀), 不进定点/科学格式化
+		# (否则 _decimal_digits_of 对 inf 的 while v>=2.0 死循环)
+		if is_float and (is_nan(value.value) or is_inf(value.value)):
+			var fv = value.value
+			var inf_body = "nan" if is_nan(fv) else ("-inf" if fv < 0.0 else "inf")
+			if type_c == "%":
+				inf_body += "%"
+			if type_c in ["E", "F", "G"]:
+				inf_body = inf_body.to_upper()
+			return inf_body
 		if type_c == "s":
 			if group_sep != "":
 				raise_exception("ValueError", "Cannot specify '%s' with 's'." % group_sep)
@@ -31320,7 +32331,8 @@ class Interpreter:
 	## 科学计数法格式化
 	func _format_scientific(num: float, precision: int, upper: bool) -> String:
 		if num == 0.0:
-			return "0." + "0".repeat(precision) + ("E" if upper else "e") + "+00"
+			var zero_sign = "-" if (1.0 / num < 0.0) else ""
+			return zero_sign + "0." + "0".repeat(precision) + ("E" if upper else "e") + "+00"
 		var exp = floor(log(abs(num)) / log(10.0))
 		var mantissa = num / pow(10.0, exp)
 		if abs(mantissa) >= 10.0:
@@ -31339,7 +32351,7 @@ class Interpreter:
 	func _format_general(num: float, precision: int, upper: bool) -> String:
 		var p = precision if precision >= 0 else 6
 		if num == 0.0:
-			return "0"
+			return "-0" if (1.0 / num < 0.0) else "0"
 		var exp = floor(log(abs(num)) / log(10.0))
 		var use_sci = exp < -4 or exp >= p
 		if use_sci:
@@ -32468,8 +33480,7 @@ class Interpreter:
 			var names: Array = []
 			for b in base_objs:
 				names.append(b.name)
-			raise_exception("TypeError", "Cannot create a consistent method resolution
-order (MRO) for bases %s" % ", ".join(names))
+			raise_exception("TypeError", "Cannot create a consistent method resolution order (MRO) for bases %s" % ", ".join(names))
 			return ExecResult.RAISE
 		if _has_layout_conflict(base_objs):
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
@@ -32648,7 +33659,7 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [param mname] 实例方法名 (magic_<名>) [br]
 	## [param owner] 归属类名
 	func _make_class_magic_desc(name: String, mname: String, owner: String) -> DSLWrappedDescriptor:
-		var d = DSLWrappedDescriptor.new(name, func(args, kwargs, _mn=mname):
+		var d = DSLWrappedDescriptor.new(name, func(args, kwargs, _mn = mname):
 			var recv = args[0] if args.size() > 0 else null
 			if recv is DSLObject:
 				return (recv as DSLObject).callv(_mn, [args, kwargs])
@@ -34130,8 +35141,8 @@ order (MRO) for bases %s" % ", ".join(names))
 		var s = [false, ([0] as Array[int])]
 		while not (r[1] as Array[int]).is_empty():
 			var dm = DSLBigInt.divmod(old_r[0], old_r[1], r[0], r[1])
-			var q = [dm[0], dm[1] ]
-			var rem = [dm[2], dm[3] ]
+			var q = [dm[0], dm[1]]
+			var rem = [dm[2], dm[3]]
 			# old_r, r = r, old_r - q*r
 			var qr = DSLBigInt.mul(q[0], q[1], r[0], r[1])
 			var nr = DSLBigInt.sub(old_r[0], old_r[1], qr[0], qr[1])
@@ -36939,7 +37950,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			if not kwargs.is_empty():
 				raise_exception("TypeError", "type() takes 1 or 3 arguments")
 				return null
-			return builtin_type([args[1] ] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			return builtin_type([args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if args.size() == 4:
 			return _type_metaclass(args[1], args[2], args[3], kwargs)
 		raise_exception("TypeError", "type() takes 1 or 3 arguments")

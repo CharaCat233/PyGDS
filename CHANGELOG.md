@@ -2,6 +2,35 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.5] - 2026-10-09
+
+### 修复
+
+- **format/f-string 类型与说明符兼容性校验**：`format(int, 's')` / `format(float, 'd'/'x'/'o'/'b'/'c')` / `format(str, 数值说明符)` 此前静默接受，改为按 CPython 报 `ValueError: Unknown format code '<c>' for object of type '<t>'`；容器等非基本类型的任何非空说明符（含仅宽度/对齐）报 `TypeError: unsupported format string passed to <t>.__format__`
+- **inf/nan 浮点格式化死循环**：`format(float('inf'), 'f'/'e'/'g'/'%')` 此前经 `_decimal_digits_of` 对 inf 的 `while v>=2.0` 死循环致引擎挂起，改为短路输出 `inf`/`nan`（E/F/G 大写、`%` 带后缀，符号/宽度/对齐照常）
+- **`-0.0` 在 e/g 格式丢失负号**：`format(-0.0, 'e')` 此前输出 `0.000000e+00`，改为 `-0.000000e+00`（g/G 同），与 CPython 一致
+- **bool 在 format 中按数值参与符号/备用形式/对齐/零填充**：`format(True, '#x')` / `'+d'` / `'10'` / `'#010x'` 此前按字符串处理（`is_numeric` 不含 bool），改为按 CPython 输出 `0x1` / `+1` / 右对齐 / `0x00000001`
+- **`str.rsplit` 默认按空白分割与结果顺序**：默认分隔此前仅按空格（`\n`/`\t`/`\r` 不分），且结果被 `reverse()` 倒序；改为与 `split` 同规则的空白分割并保持从左到右顺序，maxsplit 前缀原样保留内部空白
+- **`str.title` / `istitle` 数字分隔语义**：`'a1b'.title()` 此前输出 `A1b`（数字视为词内字符），改为 `A1B`（数字/标点分隔词，CPython 同）；`'12345'.istitle()` 此前误为 `True`（数字置位 has-alpha），改为 `False`
+- **`split`/`rsplit` 空白分割缺 `\r`**：`_is_py_ws` 此前只含空格/tab/换行，`'a\rb'.split()` 不分；重写为对齐 `_is_py_space` 全空白集（含 `\r`/`\v`/`\f`/`\x1c-\x1f`/`\x85`/`\xa0` 等）
+
+### 新增
+
+- **标准库模块 `json`**：`dumps`（`indent`/`sort_keys`/`separators`/`ensure_ascii`，float 最短往返 repr、任意精度大整数、非字符串键按字面量转义、不可序列化报 `TypeError`）与 `loads`（完整解析，字符串转义/前导零校验/嵌套），`dump`/`load`（文件对象），`JSONDecodeError`（ValueError 子类）
+- **标准库模块 `base64`**：`b64encode`/`b64decode`/`standard_*`/`urlsafe_*`/`b16*`/`encodebytes`/`decodebytes`，填充校验对齐 CPython（数据长度 mod 4 == 1 报 `Invalid... 1 more than a multiple of 4`、总长非 4 倍数或 `=` 后带数据报 `Incorrect padding`）
+- **标准库模块 `bisect`**：`bisect_left`/`bisect_right`/`bisect`/`insort_*`，二分查找与插入（含 lo/hi 边界），不可比较报 CPython 同文案 `TypeError`
+- **标准库模块 `heapq`**：`heappush`/`heappop`/`heapify`/`heapreplace`/`heappushpop`，小顶堆（`_siftup`/`_siftdown` 同型）
+
+### 测试
+
+- 新增 4 例：`type_str_format_validation`（类型×说明符校验 / inf/nan / -0.0 / bool 数值化 / rsplit / title/istitle，`same_output`）、`module_json`、`module_base64`、`module_bisect_heapq`；behavioral.md 中英同步
+- 新增随机化双端覆盖生成器 `tests/gen_fmtvec.py`（format/f-string/str 方法族组合探针，生成 `ci/cases/probe_fmtvec.py` 用后即删）
+
+### 文档
+
+- 已知问题清单 P4 登记字母类分类（isalpha/isalnum 仅 ASCII）、非 ASCII 大小写映射、repr 非 ASCII 转义残余
+- tests/字节码VM计划.md 存档字节码 VM 讨论结论（维持单文件、挂起保留、建议先 profile 再快路径）
+
 ## [0.8.4] - 2026-10-09
 
 ### 修复
