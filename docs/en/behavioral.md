@@ -368,6 +368,22 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_index_neg.py](../../ci/cases/syntax_index_neg.py)
 
+### syntax_int_max_str_config_order
+
+- Responsibility: `int_max_str_digits` compilation precedes configuration (setting the limit then writing an overlong decimal literal in the same script still raises a compile-time SyntaxError)
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_int_max_str_config_order.py](../../ci/cases/syntax_int_max_str_config_order.py)
+
+A main module is fully compiled before it runs, so `sys.set_int_max_str_digits(4301)` in the same script cannot affect its own already-compiled literals — an overlong decimal literal (non-power-of-2 base) still raises the CPython `SyntaxError: Exceeds the limit (4300 digits)...` at compile time (the compile-time limit is the default 4300)
+
+### syntax_int_max_str_literal
+
+- Responsibility: Compile-time SyntaxError for overlong decimal literals (`int_max_str_digits`)
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_int_max_str_literal.py](../../ci/cases/syntax_int_max_str_literal.py)
+
+A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit - Consider hexadecimal for huge integer literals to avoid decimal conversion limits.` at compile time (power-of-2 literals are exempt at compile time, see module_sys_int_max_str)
+
 ### syntax_inline_compound
 
 - Responsibility: Semicolon attribution in inline compound statements and `else` continuation
@@ -1028,7 +1044,7 @@ A functional property assigned in a class body gets its attribute name via the c
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_hash_identity.py](../../ci/cases/builtin_hash_identity.py)
 
-The cross-process values of the identity hash depend on the host's `stable_identity_hash` switch (stable by default / CPython 3.12 randomisation), so dual-end comparison covers only the mode-independent invariants; a user class defining `__eq__` without `__hash__` is unhashable and one defining neither hashes by identity, matching CPython
+The identity hash uses CPython 3.12-style process randomisation by default (the host can set `stable_identity_hash` to `true` to switch back to the stable model), so dual-end comparison covers only the mode-independent invariants; a user class defining `__eq__` without `__hash__` is unhashable and one defining neither hashes by identity, matching CPython
 
 ### builtin_isinstance
 
@@ -1541,6 +1557,14 @@ Equality between two OrderedDicts is key-order sensitive, while comparison again
 - Source: [ci/cases/module_sys.py](../../ci/cases/module_sys.py)
 
 `version`/`version_info` are pinned to the aligned CPython 3.12 form (the platform value maps to the host OS, compared via membership); `sys.exit` raises `SystemExit` (a BaseException subclass); uncaught, PyGDS has no process-exit semantics and enters the error state
+
+### module_sys_int_max_str
+
+- Responsibility: `sys.set_int_max_str_digits` decimal conversion limit (default 4300 / setting 0 removes it / power-of-2 bases exempt / invalid-argument checks / dynamic `compile()` uses the live limit)
+- Comparison: `same_output`
+- Source: [ci/cases/module_sys_int_max_str.py](../../ci/cases/module_sys_int_max_str.py)
+
+Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned with CPython 3.11+); `str()`/`repr()`/f-string output and `int()` parsing beyond the limit raise `ValueError`; bases 2/4/8/16/32 are exempt (including `0b`/`0o`/`0x` overlong literals at compile time, while decimal `print` of them raises `ValueError`); `sys.set_int_max_str_digits(0)` removes the limit and invalid arguments (non-zero values below 640 / negatives / non-integers) raise the CPython error; dynamic `compile()` uses the live limit at compile time (setting 4302 then compiling a 4302-digit literal succeeds)
 
 ### module_random_mt
 

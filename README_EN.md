@@ -203,9 +203,7 @@ The following lists the known differences and limitations between PyGDS and CPyt
 
 | ID | Item | Details |
 | :--- | :--- | :--- |
-| D2 | `hash` values differ from CPython (stable model by default) | PyGDS uses stable hash values for `hash(None)` etc. by default (reproducible across processes), while CPython hashes are process-randomised; the equality/hash-consistency semantics match. An alignment switch exists: set `stable_identity_hash = false` before `run()` to align with CPython 3.12's process randomisation |
 | D3 | Default step limit of 50000 | Exceeding it raises `RuntimeError: maximum step count exceeded` (`yield from` deep recursion and long scripts can hit it; CPython has no limit); hosts can adjust via `_config_max_steps` — a safety-valve design |
-| D5 | CPython 3.11+'s 4300-digit int↔str conversion limit is not emulated | CPython's `int_max_str_digits` is its own DoS protection; PyGDS's arbitrary-precision integers impose no such limit (intentional model) |
 | D6 | Built-in module repr marked (built-in) | PyGDS implements `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` entirely as GDScript built-in modules, so their repr is `<module 'x' (built-in)>`; the CPython counterparts are .py files with `<module 'x' from '...py'>` (they genuinely are built-in to PyGDS, not a defect) |
 | D7 | User-module repr from 'path' uses the script-visible path | A user module's repr source path is the script-visible form: inside the sandbox it is a drive-relative path (e.g. `<module 'm' from 'MOD1:/m.py'>`) and never exposes the real `user://` path; CPython uses absolute paths (the intended correct behaviour of the sandbox design) |
 

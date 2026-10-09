@@ -365,9 +365,34 @@ int("0x1f", 0)      # 31 (自动识别十六进制前缀)
 int("-ff", 16)      # -255 (支持符号)
 ```
 
-**整数范围（P0-13 已对齐任意精度）**：PyGDS 的 `int` 与 CPython 一致为任意精度整数，永不溢出——字面量、算术运算（加 / 减 / 乘 / 除 / 整除 / 取模 / 幂 / 移位 / 位运算）、`int()` 的字符串与浮点转换在超出 int64 时自动升级为大数表示，结果落回 int64 范围时缩回快路径，对用户完全透明；`hash(int)` 同步对齐 CPython 的模 `2^61 - 1` 算法（`hash(-1) == -2`）。仍保留的索引位边界（CPython `Py_ssize_t` 同构）：序列下标超出 int64 报 `IndexError: cannot fit 'int' into an index-sized integer`，序列重复计数、`str` 宽度参数、`chr()`、`bytes(n)`、`range()` 参数与巨移位（`1 << 2**70` 报 `too many digits in integer`）等位置越界报 `OverflowError`；`float(10 ** 400)` 报 `OverflowError`（CPython 同）。range 的参数同样保留任意精度（与 CPython 的惰性语义一致）：`range(10**30)` 可构造，`len` 取其大数长度、下标与成员判定按大数算术；长度超出索引位宽度时的物化（`list` / `tuple` / `sorted` / `random.sample`）与 `len()` 本身按 CPython 报 `OverflowError: Python int too large to convert to C ssize_t`
+**整数范围（已对齐任意精度）**：PyGDS 的 `int` 与 CPython 一致为任意精度整数，永不溢出。字面量、算术运算（加 / 减 / 乘 / 除 / 整除 / 取模 / 幂 / 移位 / 位运算）、`int()` 的字符串与浮点转换在超出 `int64` 时自动升级为大数表示，结果落回 `int64` 范围时缩回快路径，对用户完全透明；`hash(int)` 同步对齐 CPython 的模 `2^61 - 1` 算法（`hash(-1) == -2`）
 
-**身份哈希模式**：`hash(None)` 等基于对象身份的哈希默认使用稳定值（进程间可复现的有意设计，`hash(None)` 恒为 `0`）；需要对齐 CPython 3.12 的进程随机化语义时，宿主在 `run()` 之前设置 `dsl.stable_identity_hash = false`，此后身份哈希进程内稳定、进程间随机（等值对象哈希相等、`id()` 语义不受影响）。`hash(int)` / `hash(str)` / `hash(float)` 等按值的哈希不受该开关影响，已与 CPython 对齐。性能说明：大数运算为 GDScript 层 O(n²) 实现（学校乘法 / 长除法），万位十进制数字内流畅，更大位数会明显变慢；结果位数超过约 400 万二进制位（约 127 万十进制位）时报 `MemoryError`
+**int 与 str 十进制转换上限（CPython 3.11+ 对齐）**：十进制（非 2 的幂进制）的 `int()` 解析与 `str()` / `repr()` 输出默认受 4300 位上限约束（CPython 的 `int_max_str_digits` DoS 防护），超限报 `ValueError: Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit`；脚本可经 `sys.set_int_max_str_digits(n)` 调整（`0` 解除上限，非零值须 ≥ 640，`sys.get_int_max_str_digits()` 查询）；2 / 4 / 8 / 16 / 32 进制（2 的幂）转换不受限，超长十进制字面量在解析期按 CPython 报 `SyntaxError`。仍保留的索引位边界（CPython `Py_ssize_t` 同构）：序列下标超出 int64 报 `IndexError: cannot fit 'int' into an index-sized integer`，序列重复计数、`str` 宽度参数、`chr()`、`bytes(n)`、`range()` 参数与巨移位（`1 << 2**70` 报 `too many digits in integer`）等位置越界报 `OverflowError`；`float(10 ** 400)` 报 `OverflowError`（CPython 同）。range 的参数同样保留任意精度（与 CPython 的惰性语义一致）：`range(10**30)` 可构造，`len` 取其大数长度、下标与成员判定按大数算术；长度超出索引位宽度时的物化（`list` / `tuple` / `sorted` / `random.sample`）与 `len()` 本身按 CPython 报 `OverflowError: Python int too large to convert to C ssize_t`。相关测试详见 behavioral 文档：[syntax_int_max_str_config_order](behavioral.md#syntax_int_max_str_config_order)、[syntax_int_max_str_literal](behavioral.md#syntax_int_max_str_literal)、[module_sys_int_max_str](behavioral.md#module_sys_int_max_str)，特殊测试（先设置再编译不报错）如下：
+
+```python
+# setup.py
+
+import sys
+
+sys.set_int_max_str_digits(4302)
+```
+
+```python
+# target.py
+
+number = 111  # 实际为 4301 位, 此处省略
+```
+
+```python
+# main.py
+
+import setup
+import target
+
+print(target.number)  # 111...
+```
+
+**身份哈希模式**：`hash(None)` 等基于对象身份的哈希默认与 CPython 3.12 一致采用进程随机化——种子进程级一次性生成，按实例身份混合，进程内稳定、进程间随机（等值对象哈希相等、`id()` 语义不受影响）。需要稳定哈希值（进程间可复现，`hash(None)` 恒为 `0`）时，宿主在 `run()` 之前设置 `dsl.stable_identity_hash = true`。`hash(int)` / `hash(str)` / `hash(float)` 等按值的哈希不受该开关影响，已与 CPython 对齐。性能说明：大数运算为 GDScript 层 `O(n²)` 实现（学校乘法 / 长除法），万位十进制数字内流畅，更大位数会明显变慢；结果位数超过约 400 万二进制位（约 127 万十进制位）时报 `MemoryError`
 
 ### `...`（Ellipsis）
 

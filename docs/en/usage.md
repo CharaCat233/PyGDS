@@ -278,9 +278,34 @@ int("0x1f", 0)      # 31 (auto-detects the hex prefix)
 int("-ff", 16)      # -255 (signs are supported)
 ```
 
-**Integer range (P0-13 aligned to arbitrary precision)**: PyGDS `int` matches CPython as an arbitrary-precision integer that never overflows — literals and arithmetic (add / sub / mul / truediv / floordiv / mod / pow / shifts / bitwise ops) and `int()` conversions from strings or floats are automatically promoted beyond int64 to a big-integer representation, shrinking back to the fast path when the result fits again, fully transparent to the user; `hash(int)` also aligns with CPython's modulo `2^61 - 1` algorithm (`hash(-1) == -2`). Index positions remain bounded (CPython `Py_ssize_t` isomorphism): a sequence subscript beyond int64 raises `IndexError: cannot fit 'int' into an index-sized integer`, while sequence repetition, `str` width arguments, `chr()`, `bytes(n)`, `range()` arguments and huge shifts (`1 << 2**70` raises `too many digits in integer`) raise `OverflowError` beyond the bound; `float(10 ** 400)` raises `OverflowError` (same as CPython). range arguments likewise keep arbitrary precision (matching CPython's lazy semantics): `range(10**30)` constructs, `len` reports its big length, and subscripts plus membership run big-integer arithmetic; materialising a length beyond the index width (`list` / `tuple` / `sorted` / `random.sample`) and `len()` itself raise `OverflowError: Python int too large to convert to C ssize_t` as in CPython.
+**Integer range (P0-13 aligned to arbitrary precision)**: PyGDS `int` matches CPython as an arbitrary-precision integer that never overflows — literals and arithmetic (add / sub / mul / truediv / floordiv / mod / pow / shifts / bitwise ops) and `int()` conversions from strings or floats are automatically promoted beyond int64 to a big-integer representation, shrinking back to the fast path when the result fits again, fully transparent to the user; `hash(int)` also aligns with CPython's modulo `2^61 - 1` algorithm (`hash(-1) == -2`).
 
-**Identity hash mode**: `hash(None)` and other identity-based hashes use stable values by default (an intentional design reproducible across processes, with `hash(None)` fixed at `0`); to align with CPython 3.12's process randomisation, set `dsl.stable_identity_hash = false` before `run()`, after which identity hashes are stable within a process and random across processes (equal objects hash equally, `id()` semantics unaffected). Value-based hashes (`hash(int)` / `hash(str)` / `hash(float)`) are unaffected by the switch and already aligned with CPython. Performance note: big-integer arithmetic is an O(n²) GDScript implementation (schoolbook multiplication / long division), fluent within ten-thousand decimal digits and noticeably slower beyond; results exceeding roughly 4 million bits (about 1.27 million decimal digits) raise `MemoryError`.
+**Decimal int/str conversion limit (aligned with CPython 3.11+)**: decimal (non-power-of-2-base) `int()` parsing and `str()` / `repr()` output default to a 4300-digit cap (CPython's `int_max_str_digits` DoS protection); exceeding it raises `ValueError: Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit`. Scripts can adjust it via `sys.set_int_max_str_digits(n)` (`0` removes the cap, non-zero values must be ≥ 640; `sys.get_int_max_str_digits()` queries it); base 2 / 4 / 8 / 16 / 32 (powers of 2) conversions are exempt, and overlong decimal literals raise `SyntaxError` at parse time as in CPython. Index positions remain bounded (CPython `Py_ssize_t` isomorphism): a sequence subscript beyond int64 raises `IndexError: cannot fit 'int' into an index-sized integer`, while sequence repetition, `str` width arguments, `chr()`, `bytes(n)`, `range()` arguments and huge shifts (`1 << 2**70` raises `too many digits in integer`) raise `OverflowError` beyond the bound; `float(10 ** 400)` raises `OverflowError` (same as CPython). range arguments likewise keep arbitrary precision (matching CPython's lazy semantics): `range(10**30)` constructs, `len` reports its big length, and subscripts plus membership run big-integer arithmetic; materialising a length beyond the index width (`list` / `tuple` / `sorted` / `random.sample`) and `len()` itself raise `OverflowError: Python int too large to convert to C ssize_t` as in CPython. For detailed testing, please refer to the behavioral documentation: [syntax_int_max_str_config_order](behavioral.md#syntax_int_max_str_config_order), [syntax_int_max_str_literal](behavioral.md#syntax_int_max_str_literal), and [module_sys_int_max_str](behavioral.md#module_sys_int_max_str). Special tests (set first and compile without errors) are as follows:
+
+```python
+# setup.py
+
+import sys
+
+sys.set_int_max_str_digits(4302)
+```
+
+```python
+# target.py
+
+number = 111  # Actually 4301 digits, omitted here for brevity.
+```
+
+```python
+# main.py
+
+import setup
+import target
+
+print(target.number)  # 111...
+```
+
+**Identity hash mode**: `hash(None)` and other identity-based hashes use CPython 3.12-style process randomisation by default — the seed is generated once per process and mixed with the instance identity, so hashes are stable within a process and random across processes (equal objects hash equally, `id()` semantics unaffected). For stable values reproducible across processes (with `hash(None)` fixed at `0`), set `dsl.stable_identity_hash = true` before `run()`. Value-based hashes (`hash(int)` / `hash(str)` / `hash(float)`) are unaffected by the switch and already aligned with CPython. Performance note: big-integer arithmetic is an O(n²) GDScript implementation (schoolbook multiplication / long division), fluent within ten-thousand decimal digits and noticeably slower beyond; results exceeding roughly 4 million bits (about 1.27 million decimal digits) raise `MemoryError`.
 
 ### Dictionary Merge and Unpacking (Python 3.9+)
 

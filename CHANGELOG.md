@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [0.8.3] - 2026-10-09
+
+### 变更
+
+- **身份哈希默认对齐 CPython 进程随机化（D2）**：`stable_identity_hash` 默认由 `true`（稳定哈希）改为 `false`——`hash(None)` 与用户实例的身份哈希默认经进程随机种子混合实例身份（进程内稳定、进程间随机，对齐 CPython 3.12 的 obhash 语义）；需要进程间可复现的稳定哈希（`hash(None)` 恒为 `0`）时，宿主在 `run()` 前设 `stable_identity_hash = true`。按值的哈希（int / str / float）不受开关影响
+- **int 与 str 十进制转换上限（D5）**：实现 CPython 3.11+ 的 `int_max_str_digits`（默认 4300）——十进制（非 2 的幂进制）的 `int()` 字符串解析与 `str()` / `repr()` / f-string / `%d` / `format` 输出超限按 CPython 报 `ValueError`，超长十进制字面量在解析期报 `SyntaxError`；新增 `sys.set_int_max_str_digits(n)`（`0` 解除上限，非零值须 ≥ 640）与 `sys.get_int_max_str_digits()`；2 / 4 / 8 / 16 / 32 进制（2 的幂）转换豁免。超限判定在 O(n²) 转换前以位长估算（log10(2) 低估值）提前中止，估算未超时以转换结果的真实位数精查兜底
+
+### 修复
+
+- **f-string 与 format 的十进制分支大数位（连带）**：`f"{大数}"` / `f"{大数:d}"` / `format(大数, 'd')` 等路径对大数此前误取快路径 `value`（大数形态恒为 0）输出 `"0"`，改为经带上限的十进制转换输出真实值并受 `int_max_str_digits` 约束
+
+### 测试
+
+- 新增 3 例：`module_sys_int_max_str`（运行期转换上限 / 设 0 无上限 / 2 的幂进制豁免 / 越界参数校验 / 动态 `compile()` 实时上限 / `0b`/`0o`/`0x` 超长字面量编译期豁免，`same_output`）与 `syntax_int_max_str_literal` / `syntax_int_max_str_config_order`（超长十进制字面量编译期 `SyntaxError` 与「编译先于配置」语义，`same_error`）；behavioral.md 中英同步
+
+### 文档
+
+- README 中英「已知差异与限制」移除 D2（身份哈希默认已对齐）与 D5（转换上限已实现）两条
+- usage.md 中英「整数范围」补 int 与 str 十进制转换上限与 `sys.set_int_max_str_digits` 说明；「身份哈希模式」更新为默认进程随机化 + 可选稳定开关
+- tests/已知问题清单.md 移除 D2 / D5（去向见本版本），Design 系维持 D3 / D6 / D7
+
 ## [0.8.2] - 2026-10-08
 
 ### 修复
@@ -349,7 +370,7 @@ v0.7.0 正式版。自 v0.6.0 以来的主线：行为一致性测试体系整�
 ### 修复
 
 - **P2-50 `Stack underflow` 日志噪音**：实测定位机理——每个 DSL 递归层消耗约 6~7 条 GDScript 调用帧，越过引擎记账上限（`debug/settings/gdscript/max_call_stack`，默认 1024）后 `enter_function` 不再入栈而 `exit_function` 照常出栈，逐帧打印下溢（与回卷方式无关，迭代式回卷无效）。消除后 `--filter=syntax_flow_scan` 由 531 条降为 0，输出与判定不变
-- **P2-51 ObjectDB 实例泄漏**：归因修正——对象本就是 `RefCounted`，泄漏主体是引用环（环境 ↔ 类 ↔ 方法闭包，生成器 ↔ 迭代器）与进程级静态缓存。实现「对象登记表 + 断环回收」：解释器登记本 run 创建的全部解释器侧对象，`cleanup()` 逐对象清空引用字段打断引用环，并清空全部静态缓存；双端运行器退出泄漏 ~15 万 → **0**，挂起 demo 同样归零，`1 resources still in use` 消失
+- **P2-51 ObjectDB 实例泄漏**：归因修正——对象本就是 `RefCounted`，泄漏主体是引用环（环境、类与方法闭包，生成器与迭代器）与进程级静态缓存。实现「对象登记表 + 断环回收」：解释器登记本 run 创建的全部解释器侧对象，`cleanup()` 逐对象清空引用字段打断引用环，并清空全部静态缓存；双端运行器退出泄漏 ~15 万 → **0**，挂起 demo 同样归零，`1 resources still in use` 消失
 - **GDScript `_init` 链式调用缺口（P2-51 连带发现）**：GDScript 子类定义 `_init` 时父类 `_init` **不会**被隐式调用，27 个未显式 `super._init()` 的 DSL 类此前从未进入登记表（泄漏残余 2055 个的来源）且 `_object_id` 从未分配；补齐后全量零泄漏，`id()` 对这些类恢复唯一性
 - **文案对齐专项（P2-2 / P2-3）**：以下站点全部按 CPython 3.12 对齐（`%` 引擎与解析器各自独立副本逐一对齐）
   - 缺冒号：19 处 `Expected ':'` 统一为 CPython 小写形态 `expected ':'`

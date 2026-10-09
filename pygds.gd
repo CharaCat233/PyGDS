@@ -75,6 +75,9 @@ class Lexer:
 	var indent_stack: Array = [0]
 	## 最近一次整数字符串转换是否回绕
 	var literal_overflow := false
+	## int↔str 转换的十进制位数上限 (CPython 3.11+ 的 int_max_str_digits 默认 4300): [br]
+	## 主文件解析固定为默认值 (编译先于执行), exec/eval 与用户模块解析按宿主当前值注入
+	var int_max_str_digits: int = 4300
 	## 是否处于行首 (用于处理缩进)
 	var at_line_start: bool = true
 	## 未闭合括号深度 (圆/方/花括号), 大于 0 时换行为隐式续行
@@ -872,6 +875,11 @@ class Lexer:
 
 	## 产出整数字面量 Token: 溢出时按原进制数字串精确升级为十进制大串
 	func _add_int_token(v: int, digits: String = "", base: int = 10):
+		# 十进制超长字面量按 CPython 编译期报 SyntaxError (2 的幂进制字面量不受限), [br]
+		# 位数按去掉下划线的数字数计; 检查先于 O(n²) 的 from_digits, 超限不进入大数转换
+		if base == 10 and int_max_str_digits != 0 and digits.length() > int_max_str_digits:
+			report.error("SyntaxError: Exceeds the limit (%d digits) for integer string conversion: value has %d digits; use sys.set_int_max_str_digits() to increase the limit - Consider hexadecimal for huge integer literals to avoid decimal conversion limits." % [int_max_str_digits, digits.length()])
+			return
 		add_token(TokenType.INTEGER, v)
 		tokens[tokens.size() - 1].literal_overflow = literal_overflow
 		if literal_overflow and digits != "":
@@ -5701,13 +5709,13 @@ class DSLInteger extends DSLObject:
 	func magic_str(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLString:
 		var self_obj = args[0]
 		if self_obj.is_big():
-			return DSLString.new(DSLBigInt.to_dec(self_obj.big_neg, self_obj.big_limbs))
+			return DSLString.new(DSLInteger._dec_str_checked(self_obj))
 		return DSLString.new(str(self_obj.value))
 
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		if self_obj.is_big():
-			return DSLString.new(DSLBigInt.to_dec(self_obj.big_neg, self_obj.big_limbs))
+			return DSLString.new(DSLInteger._dec_str_checked(self_obj))
 		return DSLString.new(str(self_obj.value))
 
 	func magic_bool(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -5807,10 +5815,32 @@ class DSLInteger extends DSLObject:
 			return DSLInteger.pooled(self_obj.value & oi.value)
 		return self_obj._arithmetic_type_error("&", other)
 
+	## 带 int_max_str_digits 上限的十进制转换 (CPython 3.11+ 对齐): [br]
+	## 超限时经活动解释器抛 ValueError 并返回空串; 解释器未激活 (宿主直调) 或 [br]
+	## 上限为 0 时不限制。超限判定先以位长估算 (log10(2) 整数低估值) 在 O(n²) 的 [br]
+	## to_dec 之前提前中止, 避免对巨数浪费计算; 估算未超时以转换结果的真实位数精查
+	static func _dec_str_checked(obj: DSLInteger) -> String:
+		if not obj.is_big():
+			return str(obj.value)
+		var interp = Interpreter.active
+		if interp == null or interp._int_max_str_digits == 0:
+			return DSLBigInt.to_dec(obj.big_neg, obj.big_limbs)
+		var limit: int = interp._int_max_str_digits
+		var bits: int = DSLBigInt.mag_bitlen(obj.big_limbs)
+		# 位长 × log10(2) 的整数低估值 (301029995663981 / 1e15 < log10(2)): [br]
+		# 严格大于 limit 即真实十进制位数必然超限, 直接中止不入转换
+		if bits * 301029995663981 / 1000000000000000 > limit:
+			interp.raise_exception("ValueError", "Exceeds the limit (%d digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit" % limit)
+			return ""
+		var s: String = DSLBigInt.to_dec(obj.big_neg, obj.big_limbs)
+		# 位长估算的下边界 (log10(2) 整数低估值) 与真实位数可能差 1 位: 精查兜底
+		if s.length() - (1 if obj.big_neg else 0) > limit:
+			interp.raise_exception("ValueError", "Exceeds the limit (%d digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit" % limit)
+			return ""
+		return s
+
 	func _dsl_str() -> String:
-		if is_big():
-			return DSLBigInt.to_dec(big_neg, big_limbs)
-		return str(value)
+		return DSLInteger._dec_str_checked(self)
 
 	func _dsl_bool() -> bool:
 		return is_big() or value != 0
@@ -6866,9 +6896,9 @@ class DSLString extends DSLObject:
 				s = r.value if r is DSLString else val._dsl_str()
 			'd', 'i', 'u':
 				is_numeric = true
-				# 大数按十进制串格式化
+				# 大数按十进制串格式化 (带 int_max_str_digits 上限)
 				if val is DSLInteger and val.is_big():
-					s = DSLObject._int_dec_of(val)
+					s = DSLInteger._dec_str_checked(val)
 				else:
 					s = str(int(_num(val)))
 			'x', 'X':
@@ -7283,6 +7313,9 @@ class DSLString extends DSLObject:
 				body = _add_grouped(body, "_", 4)
 			return ("-" if neg else "") + body
 		if type_c == "d":
+			if is_int and (value as DSLInteger).is_big():
+				var body_big = DSLInteger._dec_str_checked(value)
+				return _add_grouped(body_big, group_sep, 3) if group_sep != "" else body_big
 			var n = value.value if is_int else int(_num(value))
 			var body = str(n)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
@@ -22813,9 +22846,13 @@ class Interpreter:
 	var api_funcs: Dictionary[String, Callable] = {}
 	## 最大执行步数, 防止无限循环
 	var max_steps: int = 50000
-	## 身份哈希模式: true = 稳定哈希 (进程间可复现, 有意默认), [br]
-	## false = 对齐 CPython 3.12 的进程随机化 (宿主经 stable_identity_hash 设置)
-	var _identity_stable: bool = true
+	## 身份哈希模式: true = 稳定哈希 (进程间可复现, 宿主经 stable_identity_hash 选用), [br]
+	## false = 对齐 CPython 3.12 的进程随机化 (默认)
+	var _identity_stable: bool = false
+	## int↔str 转换的十进制位数上限 (CPython 3.11+ 的 int_max_str_digits, 默认 4300): [br]
+	## 0 = 无上限; 超限的十进制 int() 解析与 str()/repr() 输出报 ValueError, [br]
+	## 2/4/8/16/32 进制 (2 的幂) 转换不受限; 脚本可经 sys.set_int_max_str_digits 调整
+	var _int_max_str_digits: int = 4300
 	## 用户函数调用深度 (递归保护计数)
 	var _call_depth: int = 0
 	## 调用深度上限: 实测宿主 GDScript 栈在约 400+ 层溢出 (不可捕获且无输出), 取安全边际
@@ -24871,6 +24908,7 @@ class Interpreter:
 		mod.initializing = true
 		modules[name] = mod
 		var lexer = Lexer.new(report, source)
+		lexer.int_max_str_digits = _int_max_str_digits
 		var toks = lexer.scan()
 		if report.has_error:
 			modules.erase(name)
@@ -31079,6 +31117,7 @@ class Interpreter:
 	## [returns] Expr 节点, 出错时返回 null
 	func _parse_sub_expr(src: String) -> Expr:
 		var lexer = Lexer.new(report, src)
+		lexer.int_max_str_digits = _int_max_str_digits
 		# 表达式模式: 字段内表达式可跨行书写 (含缩进续行与注释), 换行不产出 NEWLINE / INDENT
 		lexer.expression_mode = true
 		var toks = lexer.scan()
@@ -31103,6 +31142,8 @@ class Interpreter:
 	## 数值默认格式化 (整数直接, 浮点按 str)
 	func _format_default_number(value: DSLObject) -> String:
 		if value is DSLInteger:
+			if (value as DSLInteger).is_big():
+				return DSLInteger._dec_str_checked(value)
 			return str(value.value)
 		return value._dsl_str()
 
@@ -31139,6 +31180,9 @@ class Interpreter:
 				body = _add_grouped(body, "_", 4)
 			return ("-" if neg else "") + body
 		if type_c == "d":
+			if is_int and (value as DSLInteger).is_big():
+				var body_big = DSLInteger._dec_str_checked(value)
+				return _add_grouped(body_big, group_sep, 3) if group_sep != "" else body_big
 			var n = int(value.value) if is_float else value.value
 			var body = str(n)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
@@ -31161,6 +31205,9 @@ class Interpreter:
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		# 默认数值类型
 		if is_int:
+			if (value as DSLInteger).is_big():
+				var body_big = DSLInteger._dec_str_checked(value)
+				return _add_grouped(body_big, group_sep, 3) if group_sep != "" else body_big
 			var body = str(value.value)
 			return _add_grouped(body, group_sep, 3) if group_sep != "" else body
 		if is_float:
@@ -33324,6 +33371,7 @@ order (MRO) for bases %s" % ", ".join(names))
 	## [returns] DSLCode, 失败返回 null (异常已抛)
 	func _compile_dynamic(source: String, filename: String, mode: String) -> DSLCode:
 		var lexer = Lexer.new(report, source)
+		lexer.int_max_str_digits = _int_max_str_digits
 		var toks = lexer.scan()
 		if report.has_error:
 			var msg = report.last_error
@@ -33754,6 +33802,40 @@ order (MRO) for bases %s" % ", ".join(names))
 			raise_exception_typed("SystemExit", [] as Array[DSLObject])
 		return null
 
+	## sys.set_int_max_str_digits(n) - 设置 int↔str 转换的十进制位数上限 [br]
+	## 0 = 无上限; 非零值须 >= 640 (CPython 的 _PY_LONG_MAX_STR_DIGITS_THRESHOLD), [br]
+	## 否则报 ValueError "maxdigits must be 0 or larger than 640" (CPython 3.12 同文案) [br]
+	## 影响十进制 (非 2 的幂进制) 的 int() 解析与 str()/repr() 输出; 2/4/8/16/32 进制不受限
+	func _sys_set_int_max_str_digits(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			raise_exception("TypeError", "set_int_max_str_digits() takes at most 1 argument (%d given)" % args.size())
+			return null
+		if args.size() == 0:
+			raise_exception("TypeError", "set_int_max_str_digits() missing required argument 'maxdigits' (pos 1)")
+			return null
+		var obj = DSLObject._unwrap_dsl(args[0])
+		if obj is DSLBool:
+			obj = DSLInteger.pooled(1 if obj.value else 0)
+		if not (obj is DSLInteger):
+			raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % obj._type_name())
+			return null
+		var n = obj as DSLInteger
+		if n.is_big() or n.value > 2147483647 or n.value < -2147483648:
+			raise_exception("OverflowError", "Python int too large to convert to C int")
+			return null
+		if n.value != 0 and n.value < 640:
+			raise_exception("ValueError", "maxdigits must be 0 or larger than 640")
+			return null
+		_int_max_str_digits = n.value
+		return DSLNone.new()
+
+	## sys.get_int_max_str_digits() - 查询 int↔str 转换的十进制位数上限 (0 = 无上限)
+	func _sys_get_int_max_str_digits(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 0:
+			raise_exception("TypeError", "sys.get_int_max_str_digits() takes no arguments (%d given)" % args.size())
+			return null
+		return DSLInteger.pooled(_int_max_str_digits)
+
 	## operator.index(x) - __index__ 协议内建入口
 	func _op_index(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
@@ -33810,6 +33892,8 @@ order (MRO) for bases %s" % ", ".join(names))
 		mod.members["modules"] = DSLSysModulesView.new(mod)
 		mod.members["intern"] = _make_builtin("intern", Callable(self, "_sys_intern"))
 		mod.members["exit"] = _make_builtin("exit", Callable(self, "_sys_exit"))
+		mod.members["set_int_max_str_digits"] = _make_builtin("set_int_max_str_digits", Callable(self, "_sys_set_int_max_str_digits"))
+		mod.members["get_int_max_str_digits"] = _make_builtin("get_int_max_str_digits", Callable(self, "_sys_get_int_max_str_digits"))
 		return mod
 
 	## min(*args, key) - 返回最小值
@@ -33989,8 +34073,8 @@ order (MRO) for bases %s" % ", ".join(names))
 		var s = [false, ([0] as Array[int])]
 		while not (r[1] as Array[int]).is_empty():
 			var dm = DSLBigInt.divmod(old_r[0], old_r[1], r[0], r[1])
-			var q = [dm[0], dm[1]]
-			var rem = [dm[2], dm[3]]
+			var q = [dm[0], dm[1] ]
+			var rem = [dm[2], dm[3] ]
 			# old_r, r = r, old_r - q*r
 			var qr = DSLBigInt.mul(q[0], q[1], r[0], r[1])
 			var nr = DSLBigInt.sub(old_r[0], old_r[1], qr[0], qr[1])
@@ -34888,6 +34972,13 @@ order (MRO) for bases %s" % ", ".join(names))
 			var d = _digit_value(text[i])
 			if d < 0 or d >= base:
 				raise_exception("ValueError", "invalid literal for int() with base %d: '%s'" % [base, s])
+				return null
+		# int_max_str_digits 上限 (CPython 3.11+ 对齐): 仅限非 2 的幂进制, 位数按去下划线后的
+		# 数字数计 (含前导零, CPython 同); 非法字符先于上限报错, 检查在 O(n²) 累加前立即中止
+		if base != 2 and base != 4 and base != 8 and base != 16 and base != 32:
+			var limit: int = _int_max_str_digits
+			if limit != 0 and text.length() > limit:
+				raise_exception("ValueError", "Exceeds the limit (%d digits) for integer string conversion: value has %d digits; use sys.set_int_max_str_digits() to increase the limit" % [limit, text.length()])
 				return null
 		var pr = DSLBigInt.from_digits(text, base, neg)
 		return DSLInteger.from_big(pr[0], pr[1])
@@ -36012,7 +36103,7 @@ order (MRO) for bases %s" % ", ".join(names))
 		raise_exception("TypeError", "memoryview: a bytes-like object is required, not '%s'" % raw._type_name())
 		return null
 
-	## collections.deque([iterable[, maxlen]]) 构造 [br]
+	## collections.deque([iterable[, maxlen] ]) 构造 [br]
 	## maxlen 可为位置第二参或关键字 maxlen; None 表示无界; 位置与关键字实参合计计数
 	## deque 实参解析共用 (new 与 __init__): 返回 [maxlen, iterable], 报错时返回空数组
 	## [br] 位置与关键字实参合计计数, 上限 2 (CPython deque() takes at most 文案);
@@ -36079,7 +36170,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			self_obj._push_back(item)
 		return true
 
-	## collections.deque([iterable[, maxlen]]) 构造 [br]
+	## collections.deque([iterable[, maxlen] ]) 构造 [br]
 	## __new__ 恒纯分配 (CPython deque_new 语义), 实参解析与填充全在 __init__
 	## (api_deque_init): 本尊与无 init 覆写的子类经 magic_call 的 init 调用走它,
 	## 覆写 init 的子类经 super().__init__ 转发走它
@@ -36782,7 +36873,7 @@ order (MRO) for bases %s" % ", ".join(names))
 			if not kwargs.is_empty():
 				raise_exception("TypeError", "type() takes 1 or 3 arguments")
 				return null
-			return builtin_type([args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			return builtin_type([args[1] ] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if args.size() == 4:
 			return _type_metaclass(args[1], args[2], args[3], kwargs)
 		raise_exception("TypeError", "type() takes 1 or 3 arguments")
@@ -37072,9 +37163,9 @@ var _waiting_resume_callback: Callable = Callable()
 
 ## 最大执行步数 (传入 Interpreter, 安全阀设计 D3)
 var _config_max_steps: int = 50000
-## 身份哈希模式 (须在 run() 之前设置): true = 稳定哈希 (有意默认, 进程间可复现), [br]
-## false = 对齐 CPython 3.12 的进程随机化身份哈希
-var stable_identity_hash: bool = true
+## 身份哈希模式 (须在 run() 之前设置): true = 稳定哈希 (进程间可复现, 有意可选), [br]
+## false = 对齐 CPython 3.12 的进程随机化身份哈希 (默认)
+var stable_identity_hash: bool = false
 ## 脚本路径 (注入 __file__, 空串表示未知)
 var _script_path: String = ""
 ## 外部 API 函数注册 名称 -> Callable 的映射

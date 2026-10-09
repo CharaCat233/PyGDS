@@ -368,6 +368,22 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_index_neg.py](../../ci/cases/syntax_index_neg.py)
 
+### syntax_int_max_str_config_order
+
+- 职责: int_max_str_digits 编译先于配置 (同脚本先设上限再写超长十进制字面量仍编译期 SyntaxError)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_int_max_str_config_order.py](../../ci/cases/syntax_int_max_str_config_order.py)
+
+主模块先整篇编译再执行, 同脚本内的 `sys.set_int_max_str_digits(4301)` 无法影响自身已编译的字面量——超长十进制字面量 (非 2 的幂进制) 仍在编译期按 CPython 报 `SyntaxError: Exceeds the limit (4300 digits)...` (编译时上限为默认 4300)
+
+### syntax_int_max_str_literal
+
+- 职责: 超长十进制字面量的编译期 SyntaxError (int_max_str_digits)
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_int_max_str_literal.py](../../ci/cases/syntax_int_max_str_literal.py)
+
+超过上限 (默认 4300) 的十进制字面量在编译期报 `SyntaxError: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit - Consider hexadecimal for huge integer literals to avoid decimal conversion limits.` (2 的幂进制字面量编译期不受限, 见 module_sys_int_max_str)
+
 ### syntax_inline_compound
 
 - 职责: 行内复合语句分号归属与 `else` 接续
@@ -1028,7 +1044,7 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_hash_identity.py](../../ci/cases/builtin_hash_identity.py)
 
-身份哈希的进程间数值随宿主的 `stable_identity_hash` 开关不同 (稳定默认 / CPython 3.12 随机化), 双端比对只覆盖模式无关的不变量; 用户类定义了 `__eq__` 而未定义 `__hash__` 时不可哈希, 两者皆未定义时按身份哈希, 与 CPython 一致
+身份哈希默认与 CPython 3.12 一致采用进程随机化 (宿主可将 `stable_identity_hash` 设为 true 切回稳定模型), 双端比对只覆盖模式无关的不变量; 用户类定义了 `__eq__` 而未定义 `__hash__` 时不可哈希, 两者皆未定义时按身份哈希, 与 CPython 一致
 
 ### builtin_isinstance
 
@@ -1541,6 +1557,14 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 源文件: [ci/cases/module_sys.py](../../ci/cases/module_sys.py)
 
 `version`/`version_info` 固定为对齐目标 CPython 3.12 的形态 (platform 值随宿主 OS 映射, 比对用成员判定), `sys.exit` 抛 `SystemExit` (BaseException 子类), 未捕获时 PyGDS 无进程退出语义, 进入错误终态
+
+### module_sys_int_max_str
+
+- 职责: sys.set_int_max_str_digits 的十进制转换上限 (默认 4300 / 设 0 无上限 / 2 的幂进制豁免 / 越界参数校验 / 动态 compile 实时上限)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_sys_int_max_str.py](../../ci/cases/module_sys_int_max_str.py)
+
+`int` 与 `str` 的十进制转换默认受 4300 位上限约束 (CPython 3.11+ 对齐), 超限的 `str()`/`repr()`/f-string 与 `int()` 解析报 `ValueError`; 2/4/8/16/32 进制转换豁免 (含 `0b`/`0o`/`0x` 超长字面量的编译期豁免, 但对其十进制 `print` 报 `ValueError`); `sys.set_int_max_str_digits(0)` 解除上限, 非法参数 (小于 640 的非零值 / 负值 / 非整数) 按 CPython 报错; 动态 `compile()` 用编译时实时上限 (先设 4302 再编译 4302 位字面量成功)
 
 ### module_random_mt
 

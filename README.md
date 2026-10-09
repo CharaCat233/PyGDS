@@ -203,9 +203,7 @@ dsl.run()
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| D2 | `hash` 数值与 CPython 不同（默认稳定模型） | PyGDS 对 `hash(None)` 等默认使用稳定哈希值（进程间可复现），CPython 为进程随机化哈希；等值对象的哈希相等性等语义一致。已提供对齐开关：`run()` 前设 `stable_identity_hash = false` 即对齐 CPython 3.12 的进程随机化语义 |
 | D3 | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
-| D5 | CPython 3.11+ 的 4300 位 int 与 str 转换上限未模拟 | CPython 的 `int_max_str_digits` 是其自身 DoS 防护；PyGDS 任意精度整数不设该限（有意模型） |
 | D6 | 内置模块 repr 标 (built-in) | PyGDS 将 `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` 全部实现为 GDScript 内置模块，repr 为 `<module 'x' (built-in)>`；CPython 对应模块为 .py 文件，repr 为 `<module 'x' from '...py'>`（对 PyGDS 实为内置，非缺陷） |
 | D7 | 用户模块 repr 的 from 'path' 用脚本可见路径 | 用户模块 `repr` 的源路径取脚本可见形态：沙箱内为盘符相对路径（如 `<module 'm' from 'MOD1:/m.py'>`），不暴露 `user://` 真实路径；CPython 为绝对路径（沙箱设计的既定正确行为） |
 
