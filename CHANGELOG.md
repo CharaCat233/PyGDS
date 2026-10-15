@@ -2,6 +2,188 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [Unreleased]
+
+## [0.8.7] - 2026-10-15
+
+### 修复
+
+- **`bytes.replace` 空 old 挂死宿主进程**：`b"abc".replace(b"", b"-")` 此前主循环对空 old 不前进致无限循环（引擎进程冻结，无法用 try/except 防护），改为前置空 old 快路径按 CPython 展开语义逐位置插入（`b'-a-b-c-'`，count 限定生效）；连带 `_bytes_arg_to_data` 对非 bytes-like 实参（str/int 等）报 CPython 同文案 `TypeError: a bytes-like object is required, not '<t>'`，不再静默按空处理（bytes 的 find/count/startswith/endswith/join 同享该校验）
+- **`memoryview` 切片步长引擎级错误**：`memoryview(b"abc")[1:2:-1]` 等显式步长切片此前触发引擎 `SCRIPT ERROR` 并丢失后续全部输出，改为对齐 CPython 1-D 视图语义（负步长返回反转内容、`::2` 等非平凡步长返回等距内容、越界分量钳制）；连带 `b"abc".find(b"d", 0, 100)` 的 end 超长不再越界
+- **`dict.update(**kwargs)` 键编码错误**：`d.update(a=1)` 此前以裸字符串写键（未经 `"s:"` 前缀编码），读侧全部 `KeyError`、重复键槽位、旧值遮蔽新值；`OrderedDict` / `defaultdict` / `Counter.update(a=1)` 同路径同病——键统一改走 `_key_to_variant` 编码
+- **大整数（及整值大浮点）字典键的 repr 泄露内部编码**：`repr({10**20: 1})` 此前输出 `{'i:1000…0': 1}`，改为还原原始键对象形态（`{100000000000000000000: 1}`、`{1e+20: 1}`），`list(d)` / 迭代 / keys 同步
+- **`list +=` 非列表可迭代**：`l += (2,)` / `l += range(2)` / `l += "ab"` 此前报 `TypeError`，改为 `list.__iadd__` 的 extend 语义（原地追加任意可迭代，别名可见）
+- **`list.pop(-n)` 负索引**：`[1, 2, 3].pop(-2)` 此前对任意负索引报 `IndexError`，改为从尾部计数（CPython 语义）
+- **`tuple.index` / `tuple.count` 返回 None**：描述符注册指向不存在的方法名，两方法此前恒返回 `None`；改为正常实现，`index` 未命中报 CPython 同文案 `ValueError: tuple.index(x): x not in tuple`
+- **`__setitem__` dunder 直调静默 no-op**：`l.__setitem__(slice(1, 2), [9, 9])` 此前切片形态报 TypeError（语句形态正常）、`bytearray.__setitem__(0, 300)` 越界值静默忽略——切片赋值与 bytearray 校验统一走语句路径实现，越界/类型错误按 CPython 抛 `ValueError` / `TypeError`
+- **空串包含判定**：`"" in "abc"` 此前返回 `False`，改为 `True`（任何串包含空串，CPython 同）
+- **`sum()` 类型错误被吞**：`sum(["a"])` 此前静默返回 `None`，改为传播 `TypeError: unsupported operand type(s) for +`；字符串起始值（`sum(x, "")`）报 CPython 同文案 `TypeError: sum() can't sum strings [use ''.join(seq) instead]`
+- **负底数分数次幂返回 nan**：`(-2.0) ** 0.5` / `(-2) ** 0.5` 此前返回 `nan`，改为升格 complex（主值分支，虚部与 CPython 一致）；`math.pow(-8, 0.5)` / `math.pow(0.0, -1)` / `math.fmod(1, 0)` 的域错误改为报 `ValueError: math domain error`
+- **大数与等值浮点哈希不一致**：`hash(10**20) == hash(float(10**20))` 此前为 `False`，整值浮点（含超 2^53 / int64 者）改为经精确整数展开走同一 int 哈希（`hash(-1.0) == hash(-1)` 随之成立）
+- **`itertools.count` 浮点步长静默错值**：`count(0.5, 0.5)` 此前产出 `[0, 0, 0]`，改为浮点保型累加（`[0.5, 1.0, 1.5]`）；`islice` 负参数/浮点/超界大数此前静默接受，改为按 CPython 报 `ValueError`（start/stop/step 三形态文案区分），并补 `None` 实参支持（`islice(it, 1, None, 2)`）
+- **关键字实参 `args=...` 被吸入 `*args` 形参**：`def f(*args, **kw)` 调用 `f(args=(2, 3), extra=9)` 此前 `args` 关键字被静默绑定给 `*args` 形参、`kw` 丢键，改为 `*args` / `**kwargs` 形参不参与关键字名字匹配（落入 `**kwargs`）
+- **定义 `__eq__` 的类未自动不可哈希**：`hash(Eq())` 此前正常出哈希，改为报 `TypeError: unhashable type`（CPython 在类型创建时置 `__hash__ = None`；内建类型子类沿用内建可哈希性）；`in` 缺反射比较——`Eq() in [1]` 此前为 `False`，list/tuple 成员判定改为经反射臂补试 `item.__eq__(element)`（CPython 调用次序一致）
+- **`bisect_left(key=)` 语义错误**：key 此前被整体忽略（裸比较静默错位），改为 key 只施加于列表元素、不施加于检索值（CPython 语义），不可比较时 `TypeError` 正常传播，`key=None` 与非可调用实参按 CPython 校验
+- **str.format 字符串精度与未知转换符静默失效**：`format("hello", ".2")` 此前返回原串，改为截断 `"he"`；`"{!z}".format("x")` 此前静默按无转换处理，改为报 CPython 同文案 `ValueError: Unknown conversion specifier z`（f-string 词法层原有同族校验不变）
+- **`dict.update` 成对序列静默丢弃不合法项**：`{}.update([("a", 1), ["b", 2]])` 此前丢 list 对，改为 list/tuple 对均接受；三元素项报 `ValueError: dictionary update sequence element #N has length 3; 2 is required`，非序列元素报 CPython 同文案 `TypeError`；并补可迭代源支持（`update(zip(...))` / `update(d.items())` 等）
+- **`set.union` 多参数只合并一个**：`set.union({1}, {2}, {3})` 此前得 `{1, 2}`，改为合并全部实参；`intersection` / `difference` 同族多实参同步修正
+- **`%` 格式化的映射键路径静默返回空串**：`"%(a)s" % 5` 此前返回 `""`，改为报 `TypeError: format requires a mapping`；映射缺键透传 `KeyError` 不再截断
+- **已耗尽生成器 `throw()` 被错误转为 StopIteration**：`it.throw(ValueError)` 此前抛 `StopIteration`，改为注入的异常原样传播（CPython 语义）
+- **嵌套函数内 `global` 静默创建模块全局**：`global counter` 声明此前凭空预创建模块级名字，且声明名的读取回退闭包链命中外层同名局部（外层值被绕过、模块级被污染）——改为声明不绑定名字（CPython 语义），声明名的读取/删除直达模块全局，未赋值即读取报 `NameError`
+- **`__getattribute__` 钩子不生效**：类定义 `__getattribute__` 此前被跳过（属性访问落默认查找报 AttributeError），显式属性读取（`obj.attr` / `getattr` / `hasattr`）改为先经用户钩子；隐式协议分派不经钩子（与 CPython 类型槽语义一致）
+- **类体内推导式可访问类级名字**：`class C: a = 1; c = [a for _ in range(2)]` 此前得 `[1, 1]`，推导式作用域改为跳过类体命名空间（报 `NameError`，CPython 编译期约束）；外层函数作用域保持可见（`def f(): x = 5; class D: y = [x for _ in ...]` 正常）
+- **NaN 参与有序比较全部返回 True**：`1 < nan` / `1 <= nan` / `nan > 1` / `nan >= 1` 此前恒为 `True`（无序哨兵被当比较结果），改为全部 `False`（IEEE/CPython 语义；相等与不等判定本就正确）
+- **bool 与大整数比较/相等按 0 计算**：`True < 10**100` 此前为 `False`、`False == 10**100` 此前为 `True`（大数形态的 value 恒 0 被快路径直读），改为经大数比较分派（`True >= 10**100` 为 `False`、`10**100 > False` 为 `True`，`True == 1` 不变）
+- **bool 幂与移位的边界错值/错型**：`False ** -1` 此前静默得 `inf`，改为报 `ZeroDivisionError: 0.0 cannot be raised to a negative power`（浮点指数同）；`True ** (10**100)` 此前报 `TypeError`，改为 `1`（|底数| ≤ 1 的大数指数结果平凡）；`True << 70` 此前报 `OverflowError`，改为产出大数（`True << 63` 为 `9223372036854775808`）；`True >> 64` 此前回绕为 `1`（宿主位移 ≥ 64 位），改为恒 `0`；`True // 0.0` / `True % 0.0` 的文案改为 CPython 同款 `float floor division by zero` / `float modulo`
+- **float 取模/整除的双舍入错值**：`float(2**60) % 3.0` 此前为 `0.0`，改为 `1.0`（CPython float_mod 的精确 fmod 后按除数符号校正）；`(2**60) % 3.0` / `float(2**60) // 3.0` / `(2**60) // 3.0` 同站点同步（商侧先取 Python 语义 mod 再一次舍入，`-7.5 // 2.0` 为 `-4.0`）
+- **int/int 真除的双舍入与除零**：`(2**53+1) / 3` 此前为 `3002399751580330.5`（两侧先各自转 double），改为精确单次舍入 `3002399751580331.0`（商取 54~55 位整商加粘位余数一次舍入，CPython long_true_divide 同型，快路径值 ≤ 2^53 时维持宿主除法）；`10**100 / 0` 此前静默得 `inf`（零判断被分支跳过），改为 `ZeroDivisionError: division by zero`
+- **complex 与大整数混算/比较**：`0j == 10**100` 此前为 `True`、`10**100 * 1j` 此前为 `0j`、`10**100 + 1j` 此前为 `1j`（大数实参被当 0），实参改为经 53 位舍入转 double，越界报 `OverflowError: int too large to convert to float`（`complex(10**400)` 构造同）；`10**100 == 1e100+0j` 改为 `True`（CPython 经 double 转换比较）；`complex(1e300) / complex(1e200)` 此前为 `(nan+0j)`（平方和中间量溢出），改为 Smith 缩放除法得 `(1e+100+0j)`
+- **`float.as_integer_ratio` 大数缩放**：`(2.0**63).as_integer_ratio()` 此前回绕为 `(-9223372036854775808, 1)`，改为 `(9223372036854775808, 1)`；`(5e-324).as_integer_ratio()` 此前 `(1, 0)`，改为精确 202 位十进制比分母；`(10.0**30).as_integer_ratio()` 不再截断；`0.0` / `-0.0` 返回 `(0, 1)`（此前 `(0, 9007199254740992)`）；NaN 报 `ValueError: cannot convert NaN to integer ratio`（此前误报 OverflowError），inf 保持 `OverflowError`
+- **`int.to_bytes(signed=True)` 二补码**：`(-1).to_bytes(2, "big", signed=True)` 此前输出幅值字节 `b'\x00\x01'`，改为二补码 `b'\xff\xff'`；`(-128).to_bytes(1, "big", signed=True)` 此前误报 `OverflowError`（按幅值位长判容量），改为 `b'\x80'`（边界值 `|v| == 2**(8L-1)` 放行）；byteorder 校验前置（`(-300).to_bytes(1, "middle")` 报 `ValueError` 而非 OverflowError）；负 length 报 `ValueError: length argument must be non-negative`
+- **`int.from_bytes` 超 8 字节**：`int.from_bytes(b"\x01" + b"\x00"*8, "big")` 此前按 int64 移位回绕为 `0`，改为 `18446744073709551616`（4 字节一组打包 32 位 limbs，带符号二补码取负，任意长度精确）
+- **大整数异常文案与键渲染**：`repr(ValueError(10**100))` 与 `{}[10**100]` 的 KeyError 此前渲染恒为 `ValueError(0)` / `KeyError: 0`（大数 value 恒 0），改为完整十进制串
+- **`float.is_integer()` 对无穷**：`float("inf").is_integer()` 此前为 `True`（仅排除了 NaN），改为 `False`（±inf 与 NaN 均非整数）
+- **用户 `__len__` / `__eq__` 返回值协议校验**：`__len__` 返回 `False` 此前按默认真值处理，改为按 `0`；返回负数报 `ValueError: __len__() should return >= 0`；返回非整数报 CPython 同文案 `TypeError: '<t>' object cannot be interpreted as an integer`；`__eq__` 返回 `1` 此前落回身份比较得 `False`，改为按真值判定（`E() == E()` 为真，返回 `0` 为假）
+- **增强赋值的别名语义补齐**：`d1 |= {"b": 2}` / `s1 |= {2}` / `ba += b"b"` 此前新建对象重绑（别名不可见），改为原地 update / extend 并返回自身（list `+=` 已具原地语义）；`bytearray += "ab"` 报 CPython 同文案 `TypeError: can't concat str to bytearray`
+- **`any()` / `all()` 遍历与校验**：`all({5: 0})` 此前为 `False`（遍历了值），改为遍历键得 `True`；`any({0: "a"})` 此前 `True`，改为 `False`；`any(5)` / `all(0)` 此前静默返回 `True`，改为报 `TypeError: 'int' object is not iterable`
+- **`sum()` 忽略 `start=` 关键字**：`sum([1, 2], start=5)` 此前得 `3`，改为 `8`（与位置实参同语义）
+- **`enumerate` 大数起始编号**：`list(enumerate("ab", start=10**30))` 此前从 0 计数，改为随步进任意精度计数（CPython 3.12 同：`[(10**30, 'a'), (10**30+1, 'b')]`）；`start=True` 按 `1` 处理（bool 为 int 子类）
+- **用户类 dict/set 键的 `__eq__` 分桶**：同哈希不等对象此前静默覆盖（`d[H1] = 1; d[H2] = 2` 后 `len(d)` 为 1、`d[H2]` 得 `1`），改为「哈希 + 相等」分桶——同哈希槽位逐个 `__eq__` 甄别，不等者开新槽（`__hash__` 返回大数时不再全员同键）；set 元素同站点同步；读路径查找不落新槽（与 CPython 查找失败无副作用一致）；`d.get(缺失键) is None` / `setdefault` 的缺省值改为 `None` 单例（此前为全新实例，`is None` 恒 `False`）
+- **元组/冻结集合键编码碰撞**：`d[("a", 1)]` 与 `d[("a|1",)]` 此前编码相同静默覆盖，元素键改为长度前缀拼接（嵌套元组与含分隔符元素均无碰撞）；frozenset 键与 set 的元组/冻结集合元素同站点同步
+- **二元位运算的反射方法**：`2 & B()`（B 定义 `__rand__`）此前报 `TypeError`，改为反射生效；`^` / `<<` / `>>` 的 `__rxor__` / `__rlshift__` / `__rrshift__` 同步（`|` 原有反射不变）
+- **`in` / `not in` 的结果转换与比较链反射**：`5 not in C()`（`__contains__` 返回 `0`）此前透传 `0`（语义反转），改为 `True`（结果按真值转换，`in` 同）；比较链中 `==` / `!=` 此前不走反射，`1 == E() < 5`（E 定义 `__eq__`）改为反射生效（CPython 的 NotImplemented 语义）
+- **`iter()` 对用户迭代器零消费**：`iter(obj)` 此前对用户迭代器做快照式全量排空（副作用提前发生、`iter(it) is it` 不成立、后续 `next()` 与 CPython 不同），改为定义 `__next__` 的对象返回自身零消费
+- **`sorted` / `list.sort` 稳定性**：512 元素 2 键场景此前同键元素乱序（宿主 `sort_custom` 为不稳定 introsort），改为自实现稳定归并排序（等价元素保持原相对顺序）；`reverse=True` 按「更大者在前」比较，等价元素同样保持原序（CPython 语义，此前取反比较会颠倒等价元素）；`key=` 求值失败与比较失败的处理路径不变
+- **Counter 构造与比较的静默损坏**：`Counter({'a': -1})` 此前得 `Counter({})`（构造过滤非正计数），改为保留负/浮点/大数计数，`Counter({'a': -1}) + Counter({'a': 1})` 归零；`Counter(a=1)` 此前得 `Counter({})`（kwargs 被丢弃），改为 `Counter({'a': 1})`；`Counter({'a': 1}) == Counter({'a': 1})` 与 `== {'a': 1}` 此前恒 `False`（defaultdict(int, {1: 2}) == {1: 2} 同），改为按底层映射比较；`Counter({'a': 1.5}).most_common()` 此前 `[]`，改为 `[('a', 1.5)]`（计数对象保真、元素键还原原始对象，排序支持浮点与大数计数）；空 Counter repr 对齐 `Counter()`
+- **`defaultdict` 缺省工厂异常被 KeyError 顶替**：`defaultdict(lambda: 1/0)["x"]` 此前把工厂内的 `ZeroDivisionError` 吞掉报 `KeyError`，改为工厂调用在途异常/挂起原样传播（缺省值仍未产出时才是 KeyError）
+- **`globals()` 活视图四旁路 + 删除 no-op**：`globals().get/pop/setdefault/update` 此前读写内部快照（读陈旧值、写入丢失、删除报 KeyError），`del globals()[k]` 触发引擎级错误且静默无效——四个方法改为经环境代理直写活字典，删除改走字符串键判定
+- **`itertools.count` / `cycle` / `repeat` 可重复迭代**：`iter(c) is c` 此前恒假（每次 `_dsl_iter` 新建游标），跨语句 `next` 丢进度——无限对象缓存共享迭代器，重复迭代不再从头开始（与 groupby/map/zip 同协议）；`iter()` 对无限对象返回自身
+- **`operator.methodcaller` 尾参误传**：`methodcaller("m", 3)(C())` 此前把目标对象作为尾随实参重复传入（`pop` 场景触发引擎级错误），改为仅合并预绑定实参（目标已在属性访问时绑定）
+- **`itertools.combinations` / `repeat` / `permutations` / `product` 数值实参**：`combinations([1], -1)` 此前静默 `[]`、`repeat(1, 10**100)` 静默 `[]`、`repeat(1, True)` 触发引擎级错误——统一经整数实参校验：大数/超界报 `OverflowError`、浮点报 `TypeError`、`r` 负值报 `ValueError: r must be non-negative`、bool 按 int
+- **`itertools.count` 大数起始/步长**：`count(10**30)` 此前从 0 计数（大数 value 恒 0 被直读），改为保型对象加法任意精度累加；浮点步长保型不变
+- **`len(range(大数))` 尾差**：`len(range(10**20, 10**20+10, 3))` 此前少一个元素（长度用 `(|diff|+1)-1` 化简为 `|diff|`），改为 `ceil(|diff|/|step|) = (|diff|+|step|-1)/|step|`；`list(range(...))` 物化同步
+- **range 快路径 `len` 回绕**：`len(range(-2**62, 2**62, 2**61))` 此前为 `-3`（stop-start 回绕 int64），改为跨度超 int64 时快路径升格大数模式经精确端点计算得 `4`（`magic_len` 统一走该路径）
+- **生成器表达式最外层可迭代延迟求值**：`x = [1, 2]; g = (i for i in x); x = [9, 9]; list(g)` 此前得 `[9, 9]`，改为创建时急切求值最外层可迭代得 `[1, 2]`；可迭代自身的 `NameError` 也在创建时机报告（CPython 语义）
+- **`super()` 属性写入穿透到实例**：`super().zzz = 5` 此前静默改写实例字段，改为一律 `AttributeError: 'super' object has no attribute 'zzz'`（CPython 语义：super 对象无实例字典，即使 MRO 中命中可写数据描述符其 `__set__` 亦不触发）
+- **用户 `__next__` 抛 StopIteration 子类不终止迭代**：`list(It())`（`__next__` 内 `raise MyStop(StopIteration)`）此前异常原样传播，改为 StopIteration 子类同样视为迭代耗尽信号（统一经 `_is_stop_iteration` 判定，覆盖生成器/用户迭代器/contextlib 多处）
+- **类对象 `__name__` / `__doc__` 赋值丢失**：`C.__name__ = "D"` 此前读回 `'C'`，改为类自身 `class_attrs` 覆写优先（`__qualname__` 同）；沿 MRO 的父类覆写不串入子类
+- **deque 跨型等值/序列比较与边界**：`1.0 in deque([1])` 此前 `False`、`deque([10**20]) == deque([10**21])` 此前 `True`、`deque([True]) == deque([1])` 此前 `False`，元素相等统一经 `_dsl_eq`（含身份短路与跨型数值）；`deque([1,2,3])[10**30]` 此前返回首元素、`rotate(10**30)` 静默不轮转，改为按 CPython 报 `IndexError` / `OverflowError`；bool 下标按 int 参与
+- **list/元组序列比较吞错**：`[1] < ["a"]` 此前静默 `False`，改为报 `TypeError: '<' not supported between instances of 'int' and 'str'`（比较失败写在序列对象上并由 12 处消费方转为异常传播）；set 与非集合序比较同修（`{1} < [1]` 报 TypeError），字典键/项视图参与集合比较（`{1} <= {1: 0}.keys()` 为 `True`）
+- **`True in range(2)` 为 False**：bool 实参此前在 range 成员判定中直接判非整数，改为按 int 子类参与（`True in range(2)` 为 `True`、`False in range(0, 1)` 为 `True`）
+- **math 模块大数/类型快路径群**：`math.floor(10**30)` / `math.isqrt(10**20)` / `math.comb(10**20, 2)` 此前为 `0`（大数 value 恒 0），`math.floor(1e300)` 此前回绕 `INT64_MIN`，`math.factorial(21)` 回绕——floor/ceil/trunc 改为精确整数化（大数精确、浮点经精确展开、inf/nan 报 OverflowError/ValueError），isqrt 改牛顿迭代精确开方，factorial/comb/perm/lcm 改大数精确连乘（多参 gcd 改大数欧几里得）；`math.isqrt(4.0)` 报 `TypeError`、`math.gcd(4.0, 6)` 报 `TypeError`、`math.log(8, 0)` 报 `ValueError`、`math.log(8, 1)` 报 `ZeroDivisionError`、`math.prod(["a","b"])` 报 `TypeError`（不再静默 None）
+- **`statistics` 数值管线精确化**：`statistics.variance([10**20, 10**20+2])` 此前为 `0`（int64 回绕）、`statistics.mean([0.1]*10)` 此前 `0.09999999999999999`（double 朴素累加）——数据点改为精确有理数分解（整数精确承载、浮点按 m×2^e 分解），mean/variance/pvariance 经公分母对齐的大数整数求和与整除（CPython 的 Fraction 语义），整数输入且整除时返回大数整数
+- **str `%` 格式化的浮点实参校验**：`"%x" % 1.5` 此前静默 `'1'`、`"%d" % float("nan")` 回绕 `'-9223372036854775808'`——`%d/%i` 对 NaN/inf 报 `ValueError`/`OverflowError`，`%x/%X/%o/%c` 对浮点报 CPython 同文案 `TypeError: an integer is required, not float`；`%d` 小整数不再经 float 往返（2^53 上不失真）
+- **`encode` / `split` / `rsplit` 关键字实参被忽略**：`"é".encode(encoding="ascii")` 此前静默按 utf-8 输出，改为 `encoding=` / `errors=` 关键字生效（`errors=` 同）；`"a,b".split(sep=",")` 此前按无分隔符处理，`sep=` / `maxsplit=` 关键字生效（bool 按 int）
+- **`rsplit` 丢失最左空字段**：`",a".rsplit(",")` 此前 `['a']`、`"".rsplit(",")` 此前 `[]`，改为 `['', 'a']` / `['']`（命中下标 0 后剩余前缀仍作为最左字段产出）
+- **str 空 needle 检索族**：`"abc".rfind("")` 此前 `0`、`"abc".find("", 1, 0)` 此前 `1`、`"abc".count("")` 此前 `0`——空子串检索改为钳制后的边界语义（rfind 取 end、find 校验 si<=ei、count 为区间长度+1），负 start/大数 end 经统一边界取值钳制
+- **`"abc".count` 系列以外 bool 实参静默忽略**：`"aaa".replace("a", "b", True)` 此前全替换、`"a b c".split(None, True)` 此前全分割——replace 的 count、split/rsplit 的 maxsplit、str/bytes 检索族的 start/end 对 bool 按 int 参与（统一边界取值钳制）
+- **`list.index` / `tuple.index` 缺 start/end**：`[1,2,3].index(1, 1)` 此前返回 `0`（忽略 start）、`[1,2,3].index(3, 0, 2)` 返回 `2`——start/end 限定检索区间（负数从尾部计、越界钳制），未命中报 CPython 同文案；tuple.index 同步补齐
+- **`list.pop(大数)` / `insert(大数)`**：`[1,2,3].pop(10**100)` 此前返回首元素、`[7,8].insert(10**100, 0)` 插入头部——大数下标报 `OverflowError: Python int too large to convert to C ssize_t`，bool 下标按 int 参与（`_seq_index_arg`）
+- **bytes 检索族负 start/大数 end**：`b"abc".find(b"a", -1)` 此前 `0`、`b"abc".count(b"a", -2)` 此前 `1`、`b"abc".find(b"a", 10**100)` 此前 `0`——start/end 改统一边界归一（负数从尾部计、大数按 ±无穷钳制），空子串检索与 str 侧同语义（count 空子串为区间长度+1）；连带补上 bytes / bytearray 此前缺失的 `rfind` / `rindex` 方法（`b"abc".rfind(b"")` 按 end 钳制）
+- **`bytearray` 负索引赋值报 IndexError**：`bytearray(b"abc")[-1] = 9` 此前 `IndexError`（读路径已有归一、写路径没有），改为负索引从尾部计数后校验（`b'ab\t'`），越界仍报 `IndexError: bytearray index out of range`
+- **set/dict 相等元素的保留方向与 CPython 相反**：`{1, True}` 此前迭代出 `True`（末元素胜出），`{1, 1.0}` 出 `1.0`——改为保留首个插入对象（`[1]` / `[1]` / `[1.0]`）；dict 侧 `{True: 'a', 1: 'b'}` 的键此前为 `1`，改为 `True`（首键对象经数值归一化后仍还原，bool/整值浮点/整值复数键同）
+- **`str.partition` / `rpartition` 空分隔符静默错元组**：`"abc".partition("")` 此前返回 `('abc', '', '')`，改为报 `ValueError: empty separator`（与 split("") 同族）
+- **`expandtabs` 不在 `\r` 处重置列计数**：`"a\rb\tc".expandtabs()` 此前 `'a\rb     c'`（仅 `\n` 归零），改为 `\r` 同样归零（`'a\rb       c'`）
+- **`bytes.center` 填充方向恒反向**：`b"ab".center(5)` 此前 `b' ab  '`（左 1 右 2），补奇偶校正项后为 `b'  ab '`（与 str 版一致）
+- **contextlib 两处抑制/传播破坏**：`with ExitStack() as s: s.enter_context(suppress(ValueError)); raise ValueError` 此前异常向外传播——`ExitStack.__exit__` 改为汇总内层管理器抑制结果并整体抑制；`with closing(C()): raise ...` 且 `C.close()` 返回 `True` 此前异常被静默抑制——`closing.__exit__` 改为忽略 close() 返回值恒不抑制（CPython 语义）
+- **`cmp_to_key` 比较函数返回非数值静默按 0**：`sorted([3,1,2], key=cmp_to_key(lambda a,b: "x"))` 此前静默乱序返回，改为与 0 的序比较报 `TypeError: '<' not supported...`；比较函数内异常（除零等）不再被吞
+- **`del globals()[名]` 复核与 dunder `__delitem__` 静默 no-op**：`del globals()["x"]`；dunder 直调 `d.__delitem__("缺键")`（dict / list / globals 视图）此前错误静默吞掉 KeyError（错误被转移到共享原型后清空实例），改为错误保留在实例上正常传播
+- **`type(生成器/文件对象).__name__` 误返回 `'type'`**：生成器表达式 / def 生成器 / `open()` 文件对象的类型此前解析为 `'type'`，补 `generator` / `TextIOWrapper` / `BufferedReader` 类型类后 `__name__` 正确（`__class__` 同步）
+- **绑定方法相等性按身份、缺 `__self__`**：`inst.m == inst.m` 此前 `False`、`inst.m.__self__` 报 AttributeError——改为按 `(函数, 所属实例)` 相等（`a.m == a.m` 为真、`a.m == b.m` 为假），并暴露 `__self__`
+- **生成器表达式对象缺 `close()` / `send()` / `throw()`**：`(x for x in [1]).close()` 此前 AttributeError——genexpr 补三方法与 `__next__`（协议面与 def 生成器一致）：未启动 `send` 非 None 报 `TypeError: can't send non-None value...`，`throw` 注入异常立即传播，`close` 后 `next` 报 StopIteration
+- **json 三处静默错值**：`json.dumps(float("nan"), allow_nan=False)` 此前静默 `'NaN'`，改为 `ValueError: Out of range float values are not JSON compliant: nan`；`json.dumps({True: 1})` 此前 `'{"1": 1}'`，改为 `'{"true": 1}'`（bool 键）；`json.dumps({1,2}, default=list)` 此前 `TypeError`，改为经 default 钩子序列化（`'[1, 2]'`）
+- **文件对象三处类型/静默错值**：`open(p, "rb").readline()` 此前返回 `str`，改为读至换行返回 `bytes`；`f.writelines(...)` 此前返回字符数，改为 `None`；`f.read(10**30)` 此前大数 size 恒 0 静默读空，改为报 `OverflowError: cannot fit 'int' into an index-sized integer`
+- **property 内省说谎**：只读 `property` 的 `fset` / `fdel` 此前返回新建 None 实例，`P.x.fset is None` 为 `False`——改为返回 None 单例（`is None` 判定成立）
+- **set 迭代中变更不报错**：`for x in {1,2,3}: s.add(99)` 此前按快照静默迭代完——补尺寸检查，报 `RuntimeError: Set changed size during iteration`（对齐 dict 键迭代器）
+- **`%` 格式化的截断形态静默返回部分结果**：`"abc%" % ()` 此前返回 `'abc'`，`"%(a" % {}` 此前返回 `''`——改为报 `ValueError: incomplete format` / `incomplete format key`（bytes 版未闭合 `(` 文案同步对齐）；实参不足 / 未用完 / 悬空 `%` 的错误优先级按 CPython 扫描期顺序判定
+- **json 序列化/解析四处（含非法 JSON 输出）**：`json.dumps("\U0001F600")` 此前输出非法五位 `\u1f600`，改为合法代理对 `\ud83d\ude00`；`json.loads("-")` 此前静默 `0`，改为 `JSONDecodeError`；`sort_keys=True` 混合键此前按字符串排序，改为按实际键对象比较（跨型报 `TypeError`）；`indent + separators` 的元素分隔符此前硬编码逗号，改为用分隔符参数
+- **`from m import *` 忽略模块 `__all__`**：模块定义 `__all__` 时此前仍导入全部非下划线成员，改为仅导入 `__all__` 列名（含下划线前缀），`__all__` 缺名报 `AttributeError`；无 `__all__` 时维持非下划线过滤
+- **`bisect` / `insort` 的 lo=/hi= 关键字被忽略**：`bisect.bisect_left([1,2,3], 0, lo=1)` 此前恒按 lo=0 搜索——lo=/hi= 关键字实参生效（与位置混用报 CPython 同文案 TypeError）；`insort` 的 key= 补实现（CPython 内部对检索值预施加 key）
+- **assert 消息 / except 类型表达式的求值异常被静默顶替**：`assert False, undefined_qq` 此前抛 AssertionError（NameError 被顶替），改为消息求值异常优先传播；`except undefined_qq` 的类型求值 NameError 此前被替换后落入后续子句捕获（破坏 try 隔离），改为立即传播
+- **itertools 十余函数急切物化为 list**：`chain` / `chain.from_iterable` / `product` / `combinations` / `permutations` / `zip_longest` / `takewhile` / `dropwhile` / `accumulate` / `pairwise` / `starmap` 此前返回 `list` 且急切物化（无限源耗尽步数阀），改为惰性迭代器（`type(...).__name__` 为 `'chain'` 等，`islice(chain(count(), ...), n)` 正常）；`product([1], [])` 此前引擎级 `SCRIPT ERROR`，改为空池保护返回 `[]`
+- **str 方法族六处**：`split("")` 空分隔符此前逐字符分割，改为报 `ValueError: empty separator`；`rsplit(None, maxsplit)` 此前丢左段内部空白，改为按 CPython 从右扫描（`"  a  b ".rsplit(None, 1)` -> `['  a', 'b']`）；`replace("", X)` 空串替换此前原样返回，改为展开（`"abc".replace("", "-")` -> `"-a-b-c-"`，count 限定生效）；`splitlines` 缺 `\x85`（NEL）等行界，补全 `\v`/`\f`/`\x1c`/`\x1d`/`\x1e`/`\x85`/`\u2028`/`\u2029`；`join` 此前静默字符串化非 str 元素，改为报 `TypeError: sequence item N: expected str instance, ...`；`encode` 未知错误处理器名此前当 strict 用，改为按 CPython 在编码出错时惰性报 `LookupError: unknown error handler name`，并补 `backslashreplace` / `xmlcharrefreplace` 处理器
+- **bytes 的 int 语义整体缺失**：`find`/`rfind`/`count`/`index`/`rindex` 与 `in` 此前不接受 int 实参（int 恒不命中 / 报 TypeError），改为按 0-255 单字节值参与（越界报 `ValueError: byte must be in range(0, 256)`）；`"a" in b"abc"` 此前静默 `False`，改为报 `TypeError: a bytes-like object is required`；`bytes("abc")` 此前静默 utf-8 编码，改为报 `TypeError: string argument without an encoding`（带 encoding 实参时按编码转换，报错文案含转义字符）；`in` 的 int 分支此前只查首字节，修正为全量扫描
+- **解析器四类非法源码静默放行**：十进制前导零字面量（`010`）此前求值为 10，改为编译期 `SyntaxError`；`global` 声明后置（名字先被读/写）此前静默通过，改为编译期 `SyntaxError`（`used prior` / `assigned to before` 文案区分）；tab/空格混用缩进此前静默通过，改为编译期 `TabError`（新增异常类型，常规列与替代列匹配不一致时触发）；`except*` 块内 `return`/`break`/`continue` 此前静默放行，改为编译期 `SyntaxError`
+- **`format(-1, "c")` 引擎级错误**：越界字符码此前触发引擎 `char()` `SCRIPT ERROR`（Python 层无异常），改为报 `OverflowError: %c arg not in range(0x110000)`
+- **`__format__` 协议不生效且返回值不校验**：用户类定义 `__format__` 此前被拒（`unsupported format string passed`），改为调用协议并校验返回值为 str（非 str 报 `TypeError: __format__ must return a str`）；`format(complex, spec)` 此前报不支持，改为按 float 逐分量格式化拼接（`format(1.5+2.5j, ".1f")` -> `'1.5+2.5j'`，宽度/对齐作用于整体）；f-string 路径同步联动
+- **`SystemExit` 缺 `.code`**：`SystemExit(3).code` 此前 `AttributeError`，改为 0 参 `None` / 1 参本身 / 多参元组（沿 MRO 继承）
+- **绑定方法缺 `__func__`**：普通方法 / classmethod 绑定方法的 `__func__` 此前 `AttributeError`，改为返回底层函数
+- **`%*d` 星号宽度/精度**：`"%*d" % (5, 42)` 此前 `not all arguments converted`，改为从实参取宽度（负宽左对齐，浮点宽报 `TypeError: * wants int`，大数报 `OverflowError`）；未知转换符（`"%v"`）此前静默原样返回，改为报 `ValueError: unsupported format character`（含十六进制码位与索引）
+- **int/float 缺 `conjugate`**：`(3).conjugate()` 此前 `AttributeError`，改为返回自身（complex 已有）
+- **`json.loads` 的 NaN/Infinity 拒绝与前导零报错形态**：`NaN`/`Infinity`/`-Infinity` 字面量此前报 `JSONDecodeError`，改为默认接受（大小写敏感）；`json.loads("01")` 此前 `Expecting value`，改为按 CPython 解析出 `0` 后剩余报 `Extra data`（容器内报分隔符错）
+- **`namedtuple` 字段名合法性校验缺失**：`namedtuple("P", ["1x"])` 此前静默创建，改为按 CPython 校验（非法标识符 / 关键字 / 下划线开头 / 重复字段，`ValueError` 文案区分）
+- **函数对象不支持自定义属性**：`f.custom = 1` 此前 `AttributeError`，改为函数对象携带 `__dict__`（任意属性读写）
+- **`range`/`slice` 相等性与 `slice.indices`**：`range(0,5,2) == range(0,6,2)` 此前按 (start, stop, step) 全等比较得 `False`，改为按元素序列（长度相同 + 非空时起点/步长相同）；`slice` 相等此前按引用比较，改为分量逐一比较；`slice.indices(n)` 此前 `AttributeError`，改为实现（含负索引 / 步长 0 报 `ValueError`）
+- **`__index__` 协议在 `range()` 构造不生效**：`range(Index())` 此前报 `TypeError`，改为实参经 `__index__` 归一（bool 按 0/1，大数保留任意精度）
+- **`math.factorial` 浮点实参静默计算**：`math.factorial(3.0)` 此前返回 6，改为报 `TypeError: 'float' object cannot be interpreted as an integer`
+- **`random.randrange` 负步长不支持 / 浮点静默 0**：负步长此前报 `empty range`，改为支持（`randrange(5, 0, -1)` 正常）；浮点实参此前静默 `0`，改为报 `TypeError: 'float' object cannot be interpreted as an integer`；文案对齐（`step=0` -> `zero step for randrange()`，空区间带参数回显）
+- **`time.sleep(inf)` 静默返回**：`sleep(inf)` 此前静默返回，改为报 `OverflowError: timestamp out of range`；`sleep(nan)` 报 `ValueError: Invalid value NaN`；超大有限值同报 `OverflowError`
+- **`sys.modules` 视图未与模块缓存同步**：`sys.modules.get("math") is math` 此前 `False`（视图内容为空），改为读取前同步；`del sys.modules["string"]` 此前 `KeyError`，改为驱逐模块缓存（可借此强制重载）
+- **简单 `import` 失败抛 `ImportError` 而非 `ModuleNotFoundError`**：`import no_such_mod` 此前 `except ModuleNotFoundError` 捕获不到，改为抛 `ModuleNotFoundError`（ImportError 子类，带 `.name` / `.path` 属性）；`from-import` 缺名文案对齐（`from 'math' (unknown location)` 形态）
+- **数字协议 dunder 不生效**：`round(R())`（用户 `__round__`）此前报 `TypeError type X doesn't define __round__`，改为调用协议；`math.floor`/`ceil`/`trunc` 的用户 `__floor__`/`__ceil__`/`__trunc__` 同补
+- **`int()` 不接受 bytes；`bin`/`oct`/`hex` 拒绝 bool**：`int(b"12")` 此前报 `TypeError not 'bytes'`，改为按 ASCII 解码（含显式 base，报错文案 `b'...'` 形态）；`bin(True)` 此前报 `TypeError bin() argument must be int`，改为 `'0b1'`（bool 是 int 子类）；三函数对 float/str 的报错文案改为 `'<t>' object cannot be interpreted as an integer`
+- **二元运算错误通道的右操作数残留**：`in` 等经右操作数报错后，池化对象的 `last_error` 残留会污染后续调用（`256 in b"abc"` 后 `startswith` 报错文案错乱），改为抛错后同时清空左右操作数
+- **`print` 的 sep/end 类型校验**：`print(1, sep=1)` 此前静默按字符串化处理，`sep=None` 被输出为 `1None2`；改为 `None` 按默认分隔符、非 str/None 报 CPython 同文案 `TypeError: sep/end must be None or a string, not '<t>'`
+- **`abs` 拒绝 bool**：`abs(True)` 此前报 `TypeError: bad operand type for abs(): 'bool'`，改为 `1`
+- **`bytes`/`bytearray` 构造实参校验**：`bytes([True])` 此前静默 `b''`、`bytearray([True])` 报 `TypeError`，改为 `b'\x01'` / `bytearray(b'\x01')`；`bytearray(-1)` 此前静默钳零为 `b''`，改为报 `ValueError: negative count`
+- **`min`/`max`/`sorted` 关键字实参三重失守**：`min(3, 1, default=0)` 此前静默返回 1，改为报 `TypeError: Cannot specify a default ... with multiple positional arguments`；`sorted(x, reverse=1)` 此前按 `False`（仅认 DSLBool），改为任意真值生效；`sorted(x, key=5)` 此前静默忽略按原始元素排序，改为报 `TypeError: 'int' object is not callable`；未知 kwarg（`min([1], foo=2)`）此前静默忽略，改为报 `TypeError: '<k>' is an invalid keyword argument`
+- **`getattr`/`setattr`/`delattr`/`hasattr` 接受非字符串属性名**：`getattr(5, 1)` 此前静默强转 `"1"` 后报 AttributeError，改为报 CPython 同文案 `TypeError: attribute name must be string, not 'int'`
+- **`pow(x, y, mod)` 实参类型校验**：`pow(2.0, 3, 5)` 此前静默按 `x**y % mod` 得 `3.0`，改为报 `TypeError: pow() 3rd argument not allowed unless all arguments are integers`；非数字实参（`pow(2, 3, "5")`）报 `unsupported operand type(s) for ** or pow()`；bool 按 int 归一（`pow(True, 3, 5)` 为 `1`）
+- **`reversed()` 不支持序列协议**：用户类 `__reversed__` 与 `__len__`+`__getitem__` 协议此前一律报 `reversed() arg is not iterable`，改为按 CPython 支持；set 报 `'set' object is not reversible`，不可逆对象报 `'<t>' object is not reversible`
+- **f-string 的 `!a` 转换不做 ASCII 转义**：`f"{'é'!a}"` 此前输出 `'é'`，改为 `'\xe9'`（复用 `ascii()` 转义规则，`!a` 与 `!r` 分路）
+- **`ord()` 不接受 bytes/bytearray**：`ord(b"a")` 此前报 `TypeError: ord() expected string of length 1`，改为 `97`；单字节长度校验与 str 同族
+- **链式下标/属性赋值解析失败**：`d["a"] = d["b"] = 5` / `l[0] = l[1] = 5` / `o.x = o.y = 5` 此前报 `SyntaxError: Unexpected token '='`（单下标/属性目标被误判为解包赋值路由），改为新增 `ChainAssign` 节点支持多目标链——值只求值一次、目标从左到右依次赋值（CPython 语义，dict 插入序一致）；含函数下标（`d[k("a")] = d[k("b")] = 5`）与变量混合链（`d["a"] = x = 5`）同支持
+- **下标中"元组 + 切片"混合形态静默错析**：`M()[0, 1:3]` 此前得 `slice((0, 1), 3, None)`，改为 `'(0, slice(1, 3, None))'`；`a[:, 1]` / `a[0:1, 2]` / `d[*a, 1]` 此前直接解析失败，改为统一元素解析器支持（元组下标元素可为切片或 `*` 解包，单 `*a` 下标包成元组）
+- **PEP 526 属性/下标注解目标被拒**：`self.x: int = 5` / `d[0]: int = 5` / `self.x: int` 此前报 `SyntaxError: invalid syntax`（注解分支仅认标识符），改为支持属性/下标目标——注解不求值不存储（CPython 同），仅值赋值
+- **推导式 for 目标仅支持裸名**：`[k for (k, v) in pairs]` / `{k: v for (k, v) in d.items()}` 此前报 `SyntaxError: Expected variable`，改为复用完整目标语法（嵌套解包 / 星形 / 括号，与语句级 for 一致）
+- **一批编译期约束缺失（CPython SyntaxError，PyGDS 静默放行）**：`def f(*)`/`def f(/)`/多重 `/`/无默认值跟有默认值/括号名 kwarg（`f((x) = 1)`）/`del f()`/`del a + b`/`from m import ()`/`a in not b`/`yield from x, y`/while 与 try 的 else 体内 break/`1 if lambda: 2 else 3` 全部改为报 SyntaxError；`@property` 作用于 class 经实测 CPython 亦放行，不动
+- **match 模式尾逗号被拒**：`case int(1,)` / `case Foo(x=1,)` / `case {1: x,}` 此前报 `SyntaxError`，改为合法（类模式与映射模式尾逗号，序列模式本已支持）
+- **`del a,` 尾逗号被拒**：`del a,` 此前报 `Unexpected token`，改为目标列表尾逗号合法
+- **`open` 模式白名单与文件对象权限模型缺口**：`"r+"` / `"x"` / `"wt"` 此前报 `invalid mode`，改为支持 r/w/a/x + b/t + + 组合（字符顺序不限）；`"x"` 对已存在文件报 `FileExistsError`（此前 invalid mode）；只写文件 `seek`/`tell` 此前误报 `not readable`，改为可用；只写拒绝文案补全 `not writable`；`writelines` 此前仅接受 list/tuple，改为任意可迭代；closed 文件 `readable()` 报 `ValueError`（`writable()` 返回 `False`，CPython 同）；文本模式 `seek(1, 1)` 此前静默支持，改为报 `UnsupportedOperation: can't do nonzero cur-relative seeks`；补 `truncate` / `seekable` / `isatty` 实现
+- **`reversed(deque)` 不支持**：`reversed(deque([1, 2, 3]))` 此前报 `reversed() arg is not iterable`，改为 `[3, 2, 1]`
+- **bool 拒绝群**：`math.atan2(True, 1)` 此前报 `TypeError`，改为正常计算（`_num_val` 归一 bool）；`deque.index(2, True)` / `Counter.most_common(True)` / `memoryview(b"abc")[True]` 此前报 `TypeError`，改为 bool 按 int 处理（`deque.rotate(True)` 与 `floor`/`ceil`/`trunc` 本已支持）
+- **contextlib 装饰器/内省缺口**：`@cm()`（contextmanager 产物作装饰器）此前报 `'_GeneratorContextManager' object is not callable`，改为按 ContextDecorator 语义返回包装函数（每次调用重建管理器、进入/执行/退出，抑制在途异常）；`ExitStack.push` 缺失，改为支持（回调与上下文管理器两种形态）；`stack.callback(...)` 此前返回 `None`，改为返回回调函数本身
+- **`bytes`/`bytearray` 实参校验缺口**：`b"%c" % (10**100,)` 此前报 `UnicodeEncodeError`，改为 `OverflowError: %c arg not in range(256)`（大数 is_big 判越界）；`b"a".ljust(5, b"xy")` 此前循环填充得 `b'axyxy'`，改为报 `TypeError: ljust() argument 2 must be a byte string of length 1`（ljust/rjust/center 同，fill 实参非单字节拒）；`b"ab".hex(sep="ab")` 此前静默得 `'61ab62'`，改为报 `ValueError: sep must be length 1.`；`bytes.fromhex("61\t62")` 此前报 `ValueError`，改为跳过全部 ASCII 空白得 `b'ab'`；`fromhex("az")` 错误位置改 1（此前 0）并补 `in fromhex() arg` 介词
+- **属性缺口**：`f.__kwdefaults__`（kw-only 默认值字典）此前 `AttributeError`，改为返回 `{'b': 1}`（无 kw-only 默认时为 `None`）；`P.x.__doc__` 此前 `AttributeError`，改为 `None`（property docstring）；`super().__thisclass__` / `__self__` / `__self_class__` 此前 `AttributeError`，改为返回对应引用；`iter([1,2]).__length_hint__` 此前 `AttributeError`，改为返回剩余元素数（未知为 `-1`）
+- **dict 视图集合语义 / frozenset 运算实参**：`dict.items() == {(1, 2)}` 等视图与 set 双向比较此前 `False`（补用例锁定）；`frozenset().union([1])` / `intersection([1])` 此前报 `TypeError: union() argument must be a set`，改为接受任意可迭代（与 DSLSet 侧一致，多实参合并）
+- **str 方法族校验缺口**：`"a".ljust(3, "")` / `"a".ljust(5, "xy")` 此前静默填充，改为报 `TypeError: The fill character must be exactly one character long`；非 str fill 报 `must be a unicode character, not '<t>'`；`"abc".startswith(1)` / `"abc".removeprefix(1)` 此前静默返回，改为报 `TypeError`（str 或 str 元组校验）；`"{:=5}".format("ab")` 此前得 `'   ab'`，改为报 `ValueError: '=' alignment not allowed in string format specifier`；`"{:+}".format("ab")` 补 `Sign not allowed in string format specifier`
+- **json `loads` BOM 边缘**：`json.loads('\ufeff{"a": 1}')` 此前报 `Expecting value`，改为 CPython 同文案 `Unexpected UTF-8 BOM (decode using utf-8-sig)`
+- **f-string 字段表达式尾随 token 静默截断**：`f"{1, 2}"` 此前输出 `'1'`（逗号后静默截断），改为 `'(1, 2)'`（字段按元组表达式解析并校验尾随 token）
+
+- **random 参数面**：`sample(k=浮点)` 此前静默截断，改为报 CPython 同文案 `TypeError`（范围内 `can't multiply sequence by non-int of type 'float'`，范围外 `ValueError`）；`getrandbits(65)` 此前 int64 移位回绕为负数，改为产出 65 位大数（>63 位按 32 位小端字组装）；`seed(2.5)` 此前按截断 int 播种（序列与 CPython 不同），改为按 CPython 的 float hash 播种（序列对齐）；`seed(b"ab")` 此前静默回退 OS 随机源（不可复现），改为确定性小端字展开；`choices(cum_weights=)` 此前被忽略（退化为均匀采样），改为按累积权重生效（与 weights 同时给出报 `TypeError`）；`setstate` 补状态元组长度/版本/元素校验（此前长度错误触发引擎级越界）
+- **statistics.quantiles**：`n` 此前可位置传入（静默截断），改为 keyword-only（位置实参报 `TypeError`）；`method="inclusive"` 此前被忽略（恒按 exclusive），改为生效（`data` 视为总体、最小/最大值作 0/100 分位）；exclusive 的 `j` 钳制到 `1..ld-1`（此前小样本越界触发引擎级错误）；未知 method 报 CPython 同文案 `ValueError`
+- **collections 构造校验**：`namedtuple(defaults=)` 此前整体忽略（缺末位字段报 missing），改为从末尾右对齐的缺省值补齐；namedtuple 实例切片此前报 `TypeError`，改为返回普通 tuple；`defaultdict(3)` 此前静默接受，改为报 `TypeError: first argument must be callable or None`；`defaultdict(int, [(1,2)])` 键值对序列初始化此前静默丢弃，改为按 dict 构造语义写入；`ValueError(foo=1)` 此前静默构造，改为报 `TypeError: ValueError() takes no keyword arguments`
+- **报错类型错位**：`for x in None` 此前报 `RuntimeError: iterable is null in for loop`，改为 `TypeError: 'NoneType' object is not iterable`；`json.loads(b"{}")` 此前报 `TypeError`（文案自相矛盾），改为 bytes/bytearray 按 UTF-8 解码后正常解析；`base64.b64decode("YWJ=")` 此前拒收 ASCII str，改为解码侧接受（编码侧仍拒，非 ASCII str 报 `ValueError`）
+- **exec 的 globals 写回缺 `del`**：`exec("del a", g)` 后 `g` 仍含 `"a"`（写回只覆盖赋值、不处理键删除），改为按快照对比删除被 `del` 的键
+- **模块成员补齐**：math `log1p`/`expm1`/`dist`（前两者按 CPython 数值语义级数高精度实现）、`gcd()`/`lcm()` 零参（`0`/`1`）、`hypot()` 单参（`abs`）；functools `wraps`/`lru_cache`/`singledispatch`（含 `@lru_cache` 无括号形态与 `cache_info`）与 `partial` 的 `func`/`args`/`keywords` 内省属性；statistics `fmean`/`geometric_mean`/`harmonic_mean`；itertools `filterfalse`/`batched`（惰性迭代器）；string `capwords`；heapq `nsmallest`/`nlargest`/`merge`（惰性多路归并）与 `heapreplace([])` 报 `IndexError`；random `triangular`/`randbytes` 与 `Random` 独立实例类（持有独立 MT 状态）；sys `exc_info`
+- **解析错误文案统一**：解析错误的 `last_error` 形态统一（`Line N, Column M: ...` 前缀使宿主侧归一为 `SyntaxError` 类，`Unexpected token` 等此前裸文案补前缀）；字面量赋值目标（`1 = x`）此前被静默接受（运行期 NameError），改为编译期报 `Invalid assignment target`
+- **del 未定义局部名**：函数体内 `del x`（`x` 未绑定）此前报 `NameError`，改为 `UnboundLocalError: cannot access local variable 'x' where it is not associated with a value`（模块级仍 `NameError`）
+- **nonlocal 编译期检查**：函数内 `nonlocal` 无外层绑定此前运行期才报，改为编译期报 `SyntaxError: no binding for nonlocal 'x' found`（同文件后续代码不执行）；模块级 `nonlocal` 此前报 `no binding...`，改为 CPython 同文案 `nonlocal declaration not allowed at module level`
+- **MRO 冲突文案**：`class V(Z, W)` 的基类顺序冲突此前报直接基类 `Z, W`，改为报真正冲突基类对（C3 合并点的阻塞头部，与 CPython 一致）
+- **delattr/property 文案**：`delattr(obj, "zz")` 此前报 `AttributeError: zz`，改为 `'<Cls>' object has no attribute 'zz'`；删除无 deleter 的 property 此前报 `can't delete attribute`，改为 `property 'x' of 'ROProp' object has no deleter`（无 setter 的赋值侧同族对齐）；property 类级 repr 对齐 `<property object>`
+- **空列表 pop 文案**：`[].pop()` / `[].pop(0)` / `[].pop(5)` 此前一律报 `pop index out of range`，改为 CPython 先查空再查越界的 `IndexError: pop from empty list`（非空列表越界仍 `pop index out of range`）
+- **next() 非迭代器文案**：`next(5)` 此前报 `TypeError: object is not an iterator`，改为补类型名 `'int' object is not an iterator`（CPython 同）
+- **嵌套/局部类默认 repr 限定名**：函数内定义的类实例 `str/repr` 此前为 `<Item object>`，改为含限定名链 `<outer.<locals>.Item object>`（顶层类不变）；类对象的 `repr` 与 `__qualname__` 同步（`<class '__main__.outer.<locals>.Item'>` / `outer.<locals>.Item`）
+- **str repr 转义 ASCII 控制字符**：`repr("a\x07b")` 此前输出原始 BEL 字节，改为 C0 全集与 DEL（`\x00-\x1f` 除 `\t\n\r` 及 `\x7f`）按 `\xNN` 转义（容器内字符串同）
+- **itertools.count / bytearray 文案**：`itertools.count(0, "a")` 此前报 `count() argument must be a number`，改为 CPython 同文案 `TypeError: a number is required`；`bytearray(b"a") += [1]` 此前静默按 extend 扩展，改为仅收 bytes-like 并报 `TypeError: can't concat list to bytearray`
+- **超范围八进制转义 SyntaxWarning**：`"\400"` 此前静默解码无告警，改为解析期发 `SyntaxWarning: invalid octal escape sequence '\400'`（值仍按 chr(0o400) 解码，`-W error` 时升 SyntaxError；`\377` 及 `\378` 形态无告警）
+- **format(str, "05") 零填充方向**：字符串的 `'0'` 此前按数值语义左补零（`'000ab'`），改为 CPython 的填充字符+左对齐语义 `'ab000'`（数值类型仍左补零 `'00012'`）
+- **str.strip 家族 Unicode 空白**：无实参 `strip/lstrip/rstrip` 此前仅剥 ASCII 空白（Godot `strip_edges`），NBSP 等 `\u00a0`/`\u2003`/`\u3000`/`\u2028` 原样保留，改为按 Python 空白全集剥离（`_is_py_ws` 同步补全 `U+2000-200A`/`U+2028`/`U+2029` 与 isspace 全集一致）
+- **int() 解析 Nd 十进制数字**：`int("١٢٣")` 此前报 `ValueError`，改为按 Nd 码位区间定位数值解析出 `123`（各进制/符号/空白前缀同，`_digit_value` 与 `DSLBigInt.digit_val` 双站点补齐）
+- **del 不支持删除文案统一**：`del "abc"[0]` 此前报 `'str' object does not support item deletion`，改为 CPython 同款缩约 `doesn't support item deletion`（str/bytes/mappingproxy/range 各站点统一）
+- **math.floor/ceil/trunc 非数值文案**：`math.floor("3")` 此前报 `floor() argument must be a number`，改为 CPython 同文案 `TypeError: must be real number, not str`（ceil 同）；`math.trunc("3")` 改为 `type str doesn't define __trunc__ method`
+- **globals() 支持非 str 键**：`globals()[5] = 1` 此前报 `TypeError: keys must be str`，改为 CPython 真 dict 语义——任意可哈希非 str 键可写读删（get/pop/setdefault/update/contains 同步，键不入全局名字空间）
+- **dir() 补 `__class__`**：`dir("abc")` 此前缺 `__class__`（CPython 任意对象/类均含），改为对非模块对象统一补入（模块的 dir 仅命名空间 + 模块专属 dunder，不含）
+- **生成器 repr 补限定名链**：genexpr `repr()` 此前落泛型 `<generator object>`，改为按定义处作用域计算限定名——类体 `A.<genexpr>`、函数内 `func.<locals>.<genexpr>`（含嵌套/方法/模块级 lambda）、模块级 `<genexpr>`；def 生成器 repr 改用函数限定名（嵌套为 `outer.<locals>.inner`）
+- **randint 空区间文案委托 randrange**：`random.randint(3, 1)` 此前报 `empty range for randint()`，改为 CPython 同款 `empty range in randrange(3, 2)`（回显 start 与 stop-1；模块级与 Random 实例两站点同步）
+
+### 测试
+
+- **既有用例清理**：ci/cases 全量文件统一格式规范化；清除注释中遗留的编号与历史字样（`D1` / `P4` / `v0.6.0-alpha.2` / `alpha.4` 及「本条目」「本批」等措辞）10 处；移除完成标记 `print("done")` 115 处（含 13 处变体；`syntax_yield_control` 两处位于 `except` 子句内的 `send-done` / `throw-done` 改为 `pass` 保持子句结构）
+- **检测形态恢复**：28 处会因格式规范化被改写的检测点恢复原样写法——数字字面量紧邻属性访问（`1e-300.hex()` / `1.0.is_integer()` / `1.5.is_integer()` 等）5 处、无括号解包目标（`for *a,` / `a6, =` / `tup1 = 1,` 及多行解包序列折叠回单行）4 处、进制与前缀大小写（`0X1f` / `0O7` / `0B0` / `1E1`）4 处、十六进制数字大小写（`0xff` / `0x4e2d`）5 处、一元负号紧贴幂或大数（`-2 ** 63` / `-2 ** 64` / `-10**30`）4 处、括号化模式与括号管理器（`case (1)` / `case (1 | 2)` / `with (CM("paren"))`）3 处、大写 Unicode 转义（`\U0001F600`）2 处；另删除 19 处块首空行（`try:` / `if:` / `else:` 后紧接类或装饰器定义前的空行，此前使解析报 `Expected indented block`）
+- **既有用例追加**：76 个既有用例文件追加覆盖本版修复涉及的各类行为，主题包括大数快路径群（math / statistics / int 位运算 / range / bytes 转换、`float.as_integer_ratio`、`int.to_bytes`）、容器协议（`dict.update` kwargs 键编码 / 元组键编码碰撞 / set 多实参 / deque 跨型比较 / namedtuple 字段校验 / Counter 保真）、对象协议（`__format__` / `__eq__` 自动不可哈希 / `__reversed__` / 绑定方法相等性 / property 内省 / 类对象属性赋值 / `super()` 属性写入 / 限定名 repr）、迭代与排序（`iter()` 零消费 / itertools 惰性化 / 稳定排序 / 序列比较错误传播 / 显式步长切片 / 生成器表达式急切求值）、字符串与字节方法族（encode / split 关键字实参、检索族负 start 与大数 end、截断形态报错、空白全集剥离、`%` 格式化浮点实参校验、repr 控制字符转义）、模块成员（json / base64 / bisect `key=` / random `randrange` / sys 视图同步 / contextlib 抑制与传播 / functools 内省 / operator.methodcaller）、语法与异常（`del` 尾逗号 / PEP 526 注解目标 / match 模式尾逗号 / 嵌套 `global` / `ModuleNotFoundError` / assert 与 `except*` 求值顺序 / 文件对象类型错值）
+- **新增 30 例**：`builtin_*` 4 例（`builtin_bigint_fastpath` 大数快速路径一致性回归安全网、`builtin_enumerate_start` enumerate 大数起始编号与 bool 起始、`builtin_globals` globals() 活视图四方法与删除、`builtin_sum_start` sum() 的 start= 关键字与类型校验）、`class_*` 3 例（`class_dict_key_eq` 用户类键「哈希 + 相等」分桶、`class_len_eq_protocol` `__len__` 与 `__eq__` 返回值协议校验、`class_stopiteration` `__next__` 抛 StopIteration 子类终止迭代）、`module_*` 3 例（`module_collections_counter` Counter 构造与 kwargs、相等比较、most_common 保真、`module_import_star` `from m import *` 遵守 `__all__` 导出面、`module_itertools_lazy` itertools 惰性迭代器：类型名、空池保护、无限源惰性）、`syntax_*` 9 例（`syntax_chain_assign` 链式下标与属性赋值解析、`syntax_error_wording` 解析错误统一为 SyntaxError 类、`syntax_except_star` `except*` 块内 return 编译期 SyntaxError、`syntax_global_prior` `global` 声明后置编译期 SyntaxError、`syntax_illegal_source2` 编译期约束缺失修复族、`syntax_leading_zero` 前导零字面量编译期 SyntaxError、`syntax_octal_escape` 超范围八进制转义告警、`syntax_subscript_tuple_slice` 元组与切片混合下标、`syntax_tab_mix` tab 与空格混用缩进 TabError）、`type_*` 11 例（`type_augassign_inplace` 增强赋值原地别名语义、`type_bool_bigint` bool 与大整数比较、幂与移位边界、`type_complex_bigint` complex 与大整数混算、`type_float_mod` float 取模与整除双舍入、`type_float_ratio` as_integer_ratio 大数缩放、`type_int_bytes` int 字节转换二补码与 from_bytes 大数、`type_int_repr` 大整数异常与键文案渲染、`type_int_truediv` int/int 真除单次舍入、`type_nan_compare` NaN 有序比较、`type_range_len` range 大数长度与 bool 成员、`type_setitem_dunder` `__setitem__` 直调路径切片赋值与校验）；其中 `syntax_except_star` / `syntax_global_prior` / `syntax_leading_zero` / `syntax_tab_mix` 声明 `same_error`，其余为 `same_output`；behavioral.md 中英同步（404 条）
+
 ## [0.8.6] - 2026-10-09
 
 ### 变更

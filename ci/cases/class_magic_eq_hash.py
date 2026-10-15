@@ -3,6 +3,7 @@
 
 # 用户类协议测试: __eq__ / __hash__ / 迭代协议 / 多重赋值目标
 
+
 # === __eq__ 参与容器操作 (in / remove / index / count) ===
 class A:
     def __init__(self, x):
@@ -23,6 +24,7 @@ lst.remove(a2)
 print("remove:", len(lst))
 print("index:", [a1, a3].index(a2))
 print("count:", [a1, a2].count(a1))
+
 
 # === __hash__ 用于字典键 / 集合元素 ===
 class P:
@@ -109,3 +111,36 @@ class Gen:
 print("gen-iter:", list(Gen()))
 for g in Gen():
     print("g:", g)
+
+
+# 定义 __eq__ 的类自动不可哈希; in 缺反射比较
+# CPython: 类型创建时把 __hash__ 置 None; 成员判定补 item.__eq__(element) 反射
+class Eq:
+    def __eq__(self, o):
+        return True
+
+
+try:
+    hash(Eq())
+except TypeError as e:
+    print("TE-hash:", e)
+print(Eq() in [1])
+side = []
+
+
+class Weird:
+    def __eq__(self, o):
+        side.append("eq")
+        return False
+
+
+print(Weird() in [1, 2], len(side))
+
+
+# 内建类型子类 (str) 沿用内建可哈希性, 不受影响
+class LS(str):
+    def __init__(self, *a):
+        pass
+
+
+print(hash(LS("ab")) == hash("ab"))

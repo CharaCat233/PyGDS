@@ -8,36 +8,6 @@ Comparison values: `same_output` = both ends complete and stdout matches verbati
 
 Grammar constructs (statements and expressions) and their compile-time `SyntaxError`s. Boundary rule: a case belongs to the construct that introduces the behavior — unpacking inside a `for` target belongs to `syntax_for`, while the `for` inside a comprehension belongs to the comprehension family; compile-time checks such as duplicate `match` bindings live under `syntax_match_*`.
 
-### class_protocol_validate
-
-- Responsibility: User-class magic method return type validation (invalid `__len__`/`__bool__`/`__init__`/`__repr__`/`__str__` return raises TypeError/ValueError)
-- Comparison: `same_output`
-- Source: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
-
-### exception_bool_rare
-
-- Responsibility: `__bool__` non-bool error propagation in rare paths (exception-group filter validation / lazy predicates / operator / any / all)
-- Comparison: `same_output`
-- Source: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
-
-### exception_except_bad_type
-
-- Responsibility: except clause with a non-BaseException-subclass type raises TypeError
-- Comparison: `same_output`
-- Source: [ci/cases/exception_except_bad_type.py](../../ci/cases/exception_except_bad_type.py)
-
-### exception_str_uninit
-
-- Responsibility: Custom exception without `super().__init__` formats `str(e)` from `args`
-- Comparison: `same_output`
-- Source: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
-
-### module_repr
-
-- Responsibility: Module repr form `(built-in <module 'x' (built-in)>)`
-- Comparison: `same_output`
-- Source: [ci/cases/module_repr.py](../../ci/cases/module_repr.py)
-
 ### syntax_annotation
 
 - Responsibility: Type annotations on function parameters, return values and variables
@@ -70,14 +40,14 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 
 ### syntax_async_await_chain
 
-- Duty: `await` evaluation semantics (nested synchronous coroutine driving, user `__await__` delegation, non-awaitable and invalid-iterator messages)
-- Compare: `same_output`
+- Responsibility: `await` evaluation semantics (nested synchronous coroutine driving, user `__await__` delegation, non-awaitable and invalid-iterator messages)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_async_await_chain.py](../../ci/cases/syntax_async_await_chain.py)
 
 ### syntax_async_def
 
-- Duty: `async def` coroutine-object lifecycle (created unstarted, send/throw/close, reuse and non-None first-send messages)
-- Compare: `same_output`
+- Responsibility: `async def` coroutine-object lifecycle (created unstarted, send/throw/close, reuse and non-None first-send messages)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_async_def.py](../../ci/cases/syntax_async_def.py)
 
 ### syntax_async_for_outside
@@ -88,14 +58,14 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 
 ### syntax_async_gen
 
-- Duty: async generator driving protocol (asend / athrow / aclose, manual `__anext__`, exhaustion after close)
-- Compare: `same_output`
+- Responsibility: async generator driving protocol (asend / athrow / aclose, manual `__anext__`, exhaustion after close)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_async_gen.py](../../ci/cases/syntax_async_gen.py)
 
 ### syntax_async_gen_return
 
-- Duty: `return` with a value inside an async generator raises a parse error (CPython message)
-- Compare: `same_error`
+- Responsibility: `return` with a value inside an async generator raises a parse error (CPython message)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_async_gen_return.py](../../ci/cases/syntax_async_gen_return.py)
 
 ### syntax_async_name_reserved
@@ -106,8 +76,8 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 
 ### syntax_async_never_awaited
 
-- Duty: never-awaited warning (unstarted coroutines; CPython emits at GC, PyGDS at script end — an established shape difference)
-- Compare: `same_output`
+- Responsibility: never-awaited warning (unstarted coroutines; CPython emits at GC, PyGDS at script end — an established shape difference)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_async_never_awaited.py](../../ci/cases/syntax_async_never_awaited.py)
 
 ### syntax_async_with_outside
@@ -124,14 +94,14 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 
 ### syntax_async_yield
 
-- Duty: `yield` inside `async def` legalized as an async generator (type, repr, async for, bare return, yielded values not auto-awaited)
-- Compare: `same_output`
+- Responsibility: `yield` inside `async def` legalized as an async generator (type, repr, async for, bare return, yielded values not auto-awaited)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_async_yield.py](../../ci/cases/syntax_async_yield.py)
 
 ### syntax_async_yieldfrom
 
-- Duty: `yield from` inside an async function raises a parse error (CPython message)
-- Compare: `same_error`
+- Responsibility: `yield from` inside an async function raises a parse error (CPython message)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_async_yieldfrom.py](../../ci/cases/syntax_async_yieldfrom.py)
 
 ### syntax_await_nonasync_fn
@@ -163,6 +133,12 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Responsibility: `SyntaxError` for a positional argument after a keyword argument at a call site
 - Comparison: `same_error`
 - Source: [ci/cases/syntax_call_err1.py](../../ci/cases/syntax_call_err1.py)
+
+### syntax_chain_assign
+
+- Responsibility: chained subscript/attribute assignment parsing (`d["a"]=d["b"]=5`, I1-40); value evaluated once, targets assigned left-to-right
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_chain_assign.py](../../ci/cases/syntax_chain_assign.py)
 
 ### syntax_closure
 
@@ -224,16 +200,28 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_ellipsis.py](../../ci/cases/syntax_ellipsis.py)
 
+### syntax_error_wording
+
+- Responsibility: Parse errors unified to SyntaxError class (literal assignment / bare else / incomplete expr / illegal del target etc., I2-1)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_error_wording.py](../../ci/cases/syntax_error_wording.py)
+
+### syntax_except_star
+
+- Responsibility: `return` inside an `except*` block triggers compile-time `SyntaxError`
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_except_star.py](../../ci/cases/syntax_except_star.py)
+
 ### syntax_except_star_mixed
 
-- Duty: mixing `except` and `except*` on one try raises a parse error (CPython message)
-- Compare: `same_error`
+- Responsibility: mixing `except` and `except*` on one try raises a parse error (CPython message)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_except_star_mixed.py](../../ci/cases/syntax_except_star_mixed.py)
 
 ### syntax_except_star_bare
 
-- Duty: bare `except*:` without exception types raises a parse error (CPython message)
-- Compare: `same_error`
+- Responsibility: bare `except*:` without exception types raises a parse error (CPython message)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_except_star_bare.py](../../ci/cases/syntax_except_star_bare.py)
 
 ### syntax_expected_colon
@@ -338,11 +326,23 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_global.py](../../ci/cases/syntax_global.py)
 
+### syntax_global_prior
+
+- Responsibility: `global` declared after a name is used triggers compile-time `SyntaxError`
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_global_prior.py](../../ci/cases/syntax_global_prior.py)
+
 ### syntax_if
 
 - Responsibility: Consecutive `if`/`elif` conditions evaluated independently
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_if.py](../../ci/cases/syntax_if.py)
+
+### syntax_illegal_source2
+
+- Responsibility: batch of missing compile-time constraints (illegal parameter forms / illegal del targets / empty paren import / unary not after comparison / yield from tuple / break in else body / bare lambda in conditional, I1-44)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_illegal_source2.py](../../ci/cases/syntax_illegal_source2.py)
 
 ### syntax_import
 
@@ -395,6 +395,12 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 - Responsibility: `lambda` definitions, default parameters, closures and `sort` `key`
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_lambda.py](../../ci/cases/syntax_lambda.py)
+
+### syntax_leading_zero
+
+- Responsibility: Leading-zero decimal literal triggers compile-time `SyntaxError`
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_leading_zero.py](../../ci/cases/syntax_leading_zero.py)
 
 ### syntax_line_cont
 
@@ -560,8 +566,8 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 
 ### syntax_nonlocal_unbound
 
-- Duty: `nonlocal` without binding message (compile-time in CPython, runtime at call in PyGDS, text aligned)
-- Compare: `same_error`
+- Responsibility: Unbound `nonlocal` and module-level declarations raise a compile-time `SyntaxError` (message aligned with CPython)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_nonlocal_unbound.py](../../ci/cases/syntax_nonlocal_unbound.py)
 
 ### syntax_number_literal
@@ -569,6 +575,12 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 - Responsibility: Numeric literals: bases, underscores, scientific notation
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_number_literal.py](../../ci/cases/syntax_number_literal.py)
+
+### syntax_octal_escape
+
+- Responsibility: Out-of-range octal escapes emit SyntaxWarning (I2-14; value still decoded, -W error upgrades to SyntaxError)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_octal_escape.py](../../ci/cases/syntax_octal_escape.py)
 
 ### syntax_one_line_stmt
 
@@ -653,6 +665,18 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 - Responsibility: Implicit concatenation of adjacent string literals
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_str_concat.py](../../ci/cases/syntax_str_concat.py)
+
+### syntax_subscript_tuple_slice
+
+- Responsibility: mixed tuple + slice forms in subscripts (`M()[0, 1:3]` / `a[:, 1]` / `d[*a, 1]`, I1-41)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_subscript_tuple_slice.py](../../ci/cases/syntax_subscript_tuple_slice.py)
+
+### syntax_tab_mix
+
+- Responsibility: Inconsistent tab/space indentation triggers compile-time `TabError`
+- Comparison: `same_error`
+- Source: [ci/cases/syntax_tab_mix.py](../../ci/cases/syntax_tab_mix.py)
 
 ### syntax_ternary
 
@@ -788,8 +812,8 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 
 ### syntax_with_parenthesized
 
-- Duty: parenthesized manager lists (3.10) and tuple-ambiguity fallback (as after the closing paren / nested tuples)
-- Compare: `same_output`
+- Responsibility: parenthesized manager lists (3.10) and tuple-ambiguity fallback (as after the closing paren / nested tuples)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_with_parenthesized.py](../../ci/cases/syntax_with_parenthesized.py)
 
 ### syntax_while_else
@@ -800,38 +824,38 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 
 ### syntax_with
 
-- Duty: `with` statement grammar core, multi-manager ordering, control-flow traversal and try/finally cross-check
-- Compare: `same_output`
+- Responsibility: `with` statement grammar core, multi-manager ordering, control-flow traversal and try/finally cross-check
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_with.py](../../ci/cases/syntax_with.py)
 
 ### syntax_with_as_target
 
-- Duty: all `as` target forms (tuple/nested/starred/attribute/subscript) and manager still exited on unpack failure
-- Compare: `same_output`
+- Responsibility: all `as` target forms (tuple/nested/starred/attribute/subscript) and manager still exited on unpack failure
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_with_as_target.py](../../ci/cases/syntax_with_as_target.py)
 
 ### syntax_with_bare_as
 
-- Duty: `with x as:` missing target raises a parse error (invalid syntax)
-- Compare: `same_error`
+- Responsibility: `with x as:` missing target raises a parse error (invalid syntax)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_with_bare_as.py](../../ci/cases/syntax_with_bare_as.py)
 
 ### syntax_with_missing_colon
 
-- Duty: `with` header missing colon raises a parse error (expected ':')
-- Compare: `same_error`
+- Responsibility: `with` header missing colon raises a parse error (expected ':')
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_with_missing_colon.py](../../ci/cases/syntax_with_missing_colon.py)
 
 ### syntax_with_starred_as
 
-- Duty: bare starred target in `with x as *a:` raises a parse error (same rule as for targets)
-- Compare: `same_error`
+- Responsibility: bare starred target in `with x as *a:` raises a parse error (same rule as for targets)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_with_starred_as.py](../../ci/cases/syntax_with_starred_as.py)
 
 ### syntax_with_trailing_comma
 
-- Duty: trailing comma in the manager list raises a parse error (invalid syntax)
-- Compare: `same_error`
+- Responsibility: trailing comma in the manager list raises a parse error (invalid syntax)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_with_trailing_comma.py](../../ci/cases/syntax_with_trailing_comma.py)
 
 ### syntax_yield
@@ -920,19 +944,25 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 
 ### syntax_yield_with
 
-- Duty: generator and `with` interaction (yield in body, `as` binding across steps, close and throw through the exit path)
-- Compare: `same_output`
+- Responsibility: generator and `with` interaction (yield in body, `as` binding across steps, close and throw through the exit path)
+- Comparison: `same_output`
 - Source: [ci/cases/syntax_yield_with.py](../../ci/cases/syntax_yield_with.py)
 
 ### syntax_yield_with_genexit
 
-- Duty: yielding again after `with` suppresses GeneratorExit raises ignored (CPython message)
-- Compare: `same_error`
+- Responsibility: yielding again after `with` suppresses GeneratorExit raises ignored (CPython message)
+- Comparison: `same_error`
 - Source: [ci/cases/syntax_yield_with_genexit.py](../../ci/cases/syntax_yield_with_genexit.py)
 
 ## Comprehensions (`comprehension_*`)
 
 List, dict and set comprehensions and generator expressions. Boundary with `syntax_for`: comprehensions are their own constructs, so their inner `for`/`if`, multi-`for` nesting (`comprehension_multi`) and similar behavior belong here.
+
+### comprehension_await
+
+- Responsibility: await inside comprehensions (element / key-value / condition / nested comprehension / first-clause iterable await legal within async functions, sync contexts report `asynchronous comprehension outside of an asynchronous function`, sleep suspend replay)
+- Comparison: `same_output`
+- Source: [ci/cases/comprehension_await.py](../../ci/cases/comprehension_await.py)
 
 ### comprehension_dict
 
@@ -992,6 +1022,14 @@ Functions in the built-in namespace: print/len/isinstance/getattr/iter/min/max/s
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_ascii.py](../../ci/cases/builtin_ascii.py)
 
+### builtin_bigint_fastpath
+
+- Responsibility: Big integer fast-path consistency regression safety net (I2-13 confirmed item)
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_bigint_fastpath.py](../../ci/cases/builtin_bigint_fastpath.py)
+
+Big integers as dict keys (in/get/equality bucketing), `10**40`/`10**400`-scale arithmetic/mod/shift/bitwise/radix/divmod/round, negatives and mixed signs, int/str conversion round-trips — identical on both ends
+
 ### builtin_open
 
 - Responsibility: `open()` text/binary read-write, line iteration, seek and error texts
@@ -1026,11 +1064,23 @@ A functional property assigned in a class body gets its attribute name via the c
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_convert.py](../../ci/cases/builtin_convert.py)
 
+### builtin_enumerate_start
+
+- Responsibility: enumerate bigint start and bool start (I0-42): arbitrary-precision counting (verified against CPython 3.12)
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_enumerate_start.py](../../ci/cases/builtin_enumerate_start.py)
+
 ### builtin_getattr
 
 - Responsibility: `getattr`/`setattr`/`delattr` attribute operations
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_getattr.py](../../ci/cases/builtin_getattr.py)
+
+### builtin_globals
+
+- Responsibility: globals() live-view four methods and deletion (I0-52): get/pop/setdefault/update write live dict, del by string key
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_globals.py](../../ci/cases/builtin_globals.py)
 
 ### builtin_hasattr
 
@@ -1136,6 +1186,12 @@ The identity hash uses CPython 3.12-style process randomisation by default (the 
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_sorted_zip.py](../../ci/cases/builtin_sorted_zip.py)
 
+### builtin_sum_start
+
+- Responsibility: sum() start= keyword argument and type checks (I0-41): keyword takes effect, string start rejected, type errors propagate
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_sum_start.py](../../ci/cases/builtin_sum_start.py)
+
 ### builtin_type_dir
 
 - Responsibility: Three-argument `type` class creation, `dir`, `float.hex`
@@ -1151,6 +1207,18 @@ The identity hash uses CPython 3.12-style process randomisation by default (the 
 ## Built-in Types (`type_*`)
 
 Construction, operator semantics (e.g. floor-division rounding on negatives) and methods of built-in types. Large method families are split by aspect (`type_str_format`, `type_dict_view_live`, ...).
+
+### type_augassign_inplace
+
+- Responsibility: in-place augmented assignment alias semantics for builtin containers (I0-38): dict |= / set |= / bytearray += mutate in place, list += extends
+- Comparison: `same_output`
+- Source: [ci/cases/type_augassign_inplace.py](../../ci/cases/type_augassign_inplace.py)
+
+### type_bool_bigint
+
+- Responsibility: bool vs bigint comparison/equality (I0-26) and bool pow/shift boundaries (I0-35): bigint dispatch, trivial results for |base|<=1, shifts promote to bigint, >>64 is 0
+- Comparison: `same_output`
+- Source: [ci/cases/type_bool_bigint.py](../../ci/cases/type_bool_bigint.py)
 
 ### type_bool_shortcircuit
 
@@ -1174,8 +1242,8 @@ bytearray is unhashable (dict keys raise `unhashable type: 'bytearray'`); `bytes
 
 ### type_class_repr
 
-- Duty: class-object repr matches str as `<class 'X'>` (covering container elements and formatting paths)
-- Compare: `same_output`
+- Responsibility: class-object repr matches str as `<class 'X'>` (covering container elements and formatting paths)
+- Comparison: `same_output`
 - Source: [ci/cases/type_class_repr.py](../../ci/cases/type_class_repr.py)
 
 ### type_complex
@@ -1185,6 +1253,12 @@ bytearray is unhashable (dict keys raise `unhashable type: 'bytearray'`); `bytes
 - Source: [ci/cases/type_complex.py](../../ci/cases/type_complex.py)
 
 `1+0j` shares key and hash with `1`; ordering raises `'<' not supported...`; complex power uses exact repeated multiplication for integer exponents and the libm polar path for non-integer ones (including `**0.5`) — compare with `round(..., N)` (ci.md rule 4)
+
+### type_complex_bigint
+
+- Responsibility: complex with bigint mixing/comparison and division overflow (I0-29/I0-36): bigint operand rounded to double, OverflowError on overflow, Smith-scaled division
+- Comparison: `same_output`
+- Source: [ci/cases/type_complex_bigint.py](../../ci/cases/type_complex_bigint.py)
 
 ### type_ctor_three_args
 
@@ -1296,6 +1370,12 @@ Pragmatic support covers one-dimensional B-format views only; bytes-backed views
 - Comparison: `same_output`
 - Source: [ci/cases/type_dunder_methods.py](../../ci/cases/type_dunder_methods.py)
 
+### type_float_mod
+
+- Responsibility: double-rounding fixes for float mod/floordiv (I0-27): exact fmod then sign correction, quotient via Python-style mod then single rounding, negative zero
+- Comparison: `same_output`
+- Source: [ci/cases/type_float_mod.py](../../ci/cases/type_float_mod.py)
+
 ### type_float_parse
 
 - Responsibility: correctly-rounded float string parsing: hard literals / float() syntax validation and underscores / subnormals and inf boundaries / shortest repr round-trip
@@ -1303,6 +1383,12 @@ Pragmatic support covers one-dimensional B-format views only; bytes-backed views
 - Source: [ci/cases/type_float_parse.py](../../ci/cases/type_float_parse.py)
 
 Float literals and `float()` strings go through a self-produced correctly-rounded parser (big-integer ratio + round-half-to-even); hard cases (`9007199254740993.0` / `1e23` / the subnormal `5e-324`) match CPython bit for bit; the repr shortest-round-trip check uses the same parser, so subnormals no longer fall back to 17 digits; `math.copysign` gained negative-zero sign-bit semantics
+
+### type_float_ratio
+
+- Responsibility: float.as_integer_ratio big scaling and is_integer boundaries (I0-31/I0-34): bigint-backed scaling, zero is (0,1), NaN/inf error types, inf not integer
+- Comparison: `same_output`
+- Source: [ci/cases/type_float_ratio.py](../../ci/cases/type_float_ratio.py)
 
 ### type_frozenset
 
@@ -1327,6 +1413,12 @@ Float literals and `float()` strings go through a self-produced correctly-rounde
 - Responsibility: `int(str, base)` base parsing and `base=0` prefixes
 - Comparison: `same_output`
 - Source: [ci/cases/type_int_base.py](../../ci/cases/type_int_base.py)
+
+### type_int_bytes
+
+- Responsibility: int.to_bytes two's-complement and from_bytes bigint (I0-32/I0-43): two's-complement for negatives, boundary values allowed, byteorder/length checks, >8 bytes exact
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_bytes.py](../../ci/cases/type_int_bytes.py)
 
 ### type_int_floordiv_mod
 
@@ -1392,6 +1484,18 @@ Note: `range(10**30)` constructs lazily in CPython, while PyGDS converges range 
 
 The `x`/`X`/`o`/`b` (incl. `#` alternate form and `_` grouping), `c`, and `f`/`e`/`g`/`%` branches previously read the fast-path `value` (always 0 for big ints) and silently printed `"0"` or `chr(0)`; they now produce the correct base/fixed output or raise as in CPython (`c` and beyond-double-range raise `OverflowError`; class-name comparison sidesteps the C-long platform boundary). Also fixes `_fixed_format_parts` zero-padding for fixed-point formatting beyond int64 (previously `f"{1e30:f}"` went out of bounds) and `format()` swallowing `last_error` instead of propagating it.
 
+### type_int_repr
+
+- Responsibility: bigint repr rendering in exception messages/KeyError (I0-33): bigint value 0 rendered as 0, now full decimal string
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_repr.py](../../ci/cases/type_int_repr.py)
+
+### type_int_truediv
+
+- Responsibility: single-rounding int/int true division and division by zero (I0-28/I0-30): 54-55 bit quotient plus sticky remainder, bigint / 0 raises ZeroDivisionError
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_truediv.py](../../ci/cases/type_int_truediv.py)
+
 ### type_list
 
 - Responsibility: `list` construction, CRUD methods and `+`/`*` operations
@@ -1409,6 +1513,18 @@ The `x`/`X`/`o`/`b` (incl. `#` alternate form and `_` grouping), `c`, and `f`/`e
 - Responsibility: `sort` `key`/`reverse` and `sorted`
 - Comparison: `same_output`
 - Source: [ci/cases/type_list_sort.py](../../ci/cases/type_list_sort.py)
+
+### type_nan_compare
+
+- Responsibility: NaN in ordered comparisons always yields False (I0-25): the unordered sentinel was used as a comparison result so `1 < nan` was True, now follows IEEE/CPython semantics
+- Comparison: `same_output`
+- Source: [ci/cases/type_nan_compare.py](../../ci/cases/type_nan_compare.py)
+
+### type_range_len
+
+- Responsibility: range bigint length ceil tail, fast-path len wraparound and True in range (I0-57/58/65)
+- Comparison: `same_output`
+- Source: [ci/cases/type_range_len.py](../../ci/cases/type_range_len.py)
 
 ### type_seq_compare
 
@@ -1441,6 +1557,12 @@ The `x`/`X`/`o`/`b` (incl. `#` alternate form and `_` grouping), `c`, and `f`/`e
 - Source: [ci/cases/type_range_big.py](../../ci/cases/type_range_big.py)
 
 range arguments keep arbitrary precision instead of converging to the index width, matching CPython's lazy semantics; materialisation of lengths beyond the index width (list / tuple / sorted) and len raise OverflowError with CPython's message; out-of-range big slices of small ranges clamp identically and the read-only `start` / `stop` / `step` attributes are aligned
+
+### type_setitem_dunder
+
+- Responsibility: `__setitem__` dunder direct-call slice assignment and type/out-of-range validation (I0-8): the statement path worked while dunder direct calls silently no-op'd, now both share the statement implementation
+- Comparison: `same_output`
+- Source: [ci/cases/type_setitem_dunder.py](../../ci/cases/type_setitem_dunder.py)
 
 ### type_slice
 
@@ -1546,6 +1668,12 @@ range arguments keep arbitrary precision instead of converging to the index widt
 - Comparison: `same_output`
 - Source: [ci/cases/type_tuple.py](../../ci/cases/type_tuple.py)
 
+### type_type_alias_type
+
+- Responsibility: type(type alias instance) returns TypeAliasType
+- Comparison: `same_output`
+- Source: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)
+
 ## Standard Library Modules (`module_*`)
 
 PyGDS's built-in standard library modules (`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys` / `time` / `contextlib` / `bisect` / `heapq` / `base64` / `json` / `logging`); the full list is in [builtin.md](./builtin.md). A single function with enough behavior of its own is split into a sub-file (e.g. `module_math_sqrt`).
@@ -1628,6 +1756,12 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Comparison: `same_output`
 - Source: [ci/cases/module_collections.py](../../ci/cases/module_collections.py)
 
+### module_collections_counter
+
+- Responsibility: Counter construction preserving counts/kwargs/equality/most_common fidelity (I0-50): negative/float/bigint counts kept, kwargs effective, compares by underlying mapping
+- Comparison: `same_output`
+- Source: [ci/cases/module_collections_counter.py](../../ci/cases/module_collections_counter.py)
+
 ### module_collections_defaultdict
 
 - Responsibility: `defaultdict` `repr` and mapping-style construction
@@ -1658,6 +1792,12 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Comparison: `same_output`
 - Source: [ci/cases/module_functools_cmp_to_key.py](../../ci/cases/module_functools_cmp_to_key.py)
 
+### module_import_star
+
+- Responsibility: `from m import *` honors module `__all__` export surface
+- Comparison: `same_output`
+- Source: [ci/cases/module_import_star.py](../../ci/cases/module_import_star.py)
+
 ### module_itertools
 
 - Responsibility: `chain`/`product`/combinatorics and `islice`
@@ -1681,6 +1821,12 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Responsibility: `repeat`/`cycle`/`count`/`takewhile`
 - Comparison: `same_output`
 - Source: [ci/cases/module_itertools_infinite.py](../../ci/cases/module_itertools_infinite.py)
+
+### module_itertools_lazy
+
+- Responsibility: itertools lazy-iterator type names / empty-pool guard / infinite-source laziness
+- Comparison: `same_output`
+- Source: [ci/cases/module_itertools_lazy.py](../../ci/cases/module_itertools_lazy.py)
 
 ### module_itertools_tee
 
@@ -1752,6 +1898,12 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Comparison: `same_output`
 - Source: [ci/cases/module_random_types.py](../../ci/cases/module_random_types.py)
 
+### module_repr
+
+- Responsibility: Module repr form `(built-in <module 'x' (built-in)>)`
+- Comparison: `same_output`
+- Source: [ci/cases/module_repr.py](../../ci/cases/module_repr.py)
+
 ### module_statistics
 
 - Responsibility: `mean`/`median`/`stdev` statistics
@@ -1776,8 +1928,8 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 
 ### class_async_protocol
 
-- Duty: user-class async protocols (`__aiter__`/`__anext__`/`__aenter__`/`__aexit__`, async for/with driving) and the `aiter`/`anext` builtins
-- Compare: `same_output`
+- Responsibility: user-class async protocols (`__aiter__`/`__anext__`/`__aenter__`/`__aexit__`, async for/with driving) and the `aiter`/`anext` builtins
+- Comparison: `same_output`
 - Source: [ci/cases/class_async_protocol.py](../../ci/cases/class_async_protocol.py)
 
 ### class_basic
@@ -1822,12 +1974,6 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Comparison: `same_error`
 - Source: [ci/cases/class_dup_kw.py](../../ci/cases/class_dup_kw.py)
 
-### comprehension_await
-
-- Responsibility: await inside comprehensions (element / key-value / condition / nested comprehension / first-clause iterable await legal within async functions, sync contexts report `asynchronous comprehension outside of an asynchronous function`, sleep suspend replay)
-- Comparison: `same_output`
-- Source: [ci/cases/comprehension_await.py](../../ci/cases/comprehension_await.py)
-
 ### class_metaclass
 
 - Responsibility: custom metaclass mechanics (metaclass= `__new__` / `__init__` class-creation hooks with ns mutation writeback / `__call__` instance-creation override / metaclass methods and attributes resolved via type(cls) / instance attribute access not leaking through the metaclass / two-metaclass conflict / `__prepare__` call side effects / implicit `__module__` and `__qualname__` in the namespace)
@@ -1854,14 +2000,14 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 
 ### class_binding_errors
 
-- Duty: qualified names in function binding-error messages (methods as `Class.name`, nested as `outer.<locals>.inner`, plain and lambda unqualified)
-- Compare: `same_output`
+- Responsibility: qualified names in function binding-error messages (methods as `Class.name`, nested as `outer.<locals>.inner`, plain and lambda unqualified)
+- Comparison: `same_output`
 - Source: [ci/cases/class_binding_errors.py](../../ci/cases/class_binding_errors.py)
 
 ### class_context_protocol
 
-- Duty: user-class context manager protocol semantics (exit argument shapes, suppression truth table, exception replacement and nested unwinding)
-- Compare: `same_output`
+- Responsibility: user-class context manager protocol semantics (exit argument shapes, suppression truth table, exception replacement and nested unwinding)
+- Comparison: `same_output`
 - Source: [ci/cases/class_context_protocol.py](../../ci/cases/class_context_protocol.py)
 
 ### class_decorators
@@ -1882,6 +2028,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Comparison: `same_output`
 - Source: [ci/cases/class_diamond.py](../../ci/cases/class_diamond.py)
 
+### class_dict_key_eq
+
+- Responsibility: hash-plus-equality bucketing for user-class dict/set keys (I0-44): same-hash slots distinguished by __eq__, bigint __hash__ no longer collapses all keys
+- Comparison: `same_output`
+- Source: [ci/cases/class_dict_key_eq.py](../../ci/cases/class_dict_key_eq.py)
+
 ### class_hooks
 
 - Responsibility: Class creation hooks: ordering, chained calls, failure rollback
@@ -1899,6 +2051,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: Introspection attributes of classes/objects and exception tracebacks
 - Comparison: `same_output`
 - Source: [ci/cases/class_introspect.py](../../ci/cases/class_introspect.py)
+
+### class_len_eq_protocol
+
+- Responsibility: user __len__ returning bool and __eq__ returning int protocol checks (I0-37): bool as int subclass, int truthiness, negative len raises ValueError
+- Comparison: `same_output`
+- Source: [ci/cases/class_len_eq_protocol.py](../../ci/cases/class_len_eq_protocol.py)
 
 ### class_magic_attr
 
@@ -1990,6 +2148,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Comparison: `same_output`
 - Source: [ci/cases/class_protocol_numconv.py](../../ci/cases/class_protocol_numconv.py)
 
+### class_protocol_validate
+
+- Responsibility: User-class magic method return type validation (invalid `__len__`/`__bool__`/`__init__`/`__repr__`/`__str__` return raises TypeError/ValueError)
+- Comparison: `same_output`
+- Source: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
+
 ### class_scope
 
 - Responsibility: Class body scope, comprehensions in class bodies and `super` in `property`
@@ -2007,6 +2171,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: Starred base expansion, duplicate and non-class base errors
 - Comparison: `same_output`
 - Source: [ci/cases/class_star_bases.py](../../ci/cases/class_star_bases.py)
+
+### class_stopiteration
+
+- Responsibility: user __next__ raising StopIteration subclass ends iteration (I0-61): subclass treated as exhaustion, PEP 479 for generators
+- Comparison: `same_output`
+- Source: [ci/cases/class_stopiteration.py](../../ci/cases/class_stopiteration.py)
 
 ### class_super
 
@@ -2054,6 +2224,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Comparison: `same_output`
 - Source: [ci/cases/exception_base_match.py](../../ci/cases/exception_base_match.py)
 
+### exception_bool_rare
+
+- Responsibility: `__bool__` non-bool error propagation in rare paths (exception-group filter validation / lazy predicates / operator / any / all)
+- Comparison: `same_output`
+- Source: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
+
 ### exception_divzero
 
 - Responsibility: Bare `except` catching divide-by-zero
@@ -2065,6 +2241,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Responsibility: `format`/slicing/power/`setattr` error shape collection
 - Comparison: `same_output`
 - Source: [ci/cases/exception_err_shapes.py](../../ci/cases/exception_err_shapes.py)
+
+### exception_except_bad_type
+
+- Responsibility: except clause with a non-BaseException-subclass type raises TypeError
+- Comparison: `same_output`
+- Source: [ci/cases/exception_except_bad_type.py](../../ci/cases/exception_except_bad_type.py)
 
 ### exception_finally_after_except
 
@@ -2092,14 +2274,14 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 
 ### exception_group
 
-- Duty: `ExceptionGroup` and `BaseExceptionGroup` (construction validation, attributes, str/repr, subgroup/split)
-- Compare: `same_output`
+- Responsibility: `ExceptionGroup` and `BaseExceptionGroup` (construction validation, attributes, str/repr, subgroup/split)
+- Comparison: `same_output`
 - Source: [ci/cases/exception_group.py](../../ci/cases/exception_group.py)
 
 ### exception_except_star
 
-- Duty: `except*` semantics (subgroup matching and shape, auto-wrapping, multi-clause remainder consumption, else/finally, handler exceptions)
-- Compare: `same_output`
+- Responsibility: `except*` semantics (subgroup matching and shape, auto-wrapping, multi-clause remainder consumption, else/finally, handler exceptions)
+- Comparison: `same_output`
 - Source: [ci/cases/exception_except_star.py](../../ci/cases/exception_except_star.py)
 
 ### exception_hierarchy
@@ -2180,6 +2362,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Comparison: `same_output`
 - Source: [ci/cases/exception_str.py](../../ci/cases/exception_str.py)
 
+### exception_str_uninit
+
+- Responsibility: Custom exception without `super().__init__` formats `str(e)` from `args`
+- Comparison: `same_output`
+- Source: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
+
 ### exception_tuple_except
 
 - Responsibility: `except` tuple with multiple types hits one of them
@@ -2222,8 +2410,8 @@ PyGDS-specific suspend/resume mechanics (statement replay after a `time.sleep`-t
 
 ### suspend_async_replay
 
-- Duty: suspension and replay inside coroutine bodies (sleep in await chains / async for / async with, interleaved multi-coroutine driving)
-- Compare: `same_output`
+- Responsibility: suspension and replay inside coroutine bodies (sleep in await chains / async for / async with, interleaved multi-coroutine driving)
+- Comparison: `same_output`
 - Source: [ci/cases/suspend_async_replay.py](../../ci/cases/suspend_async_replay.py)
 
 ### suspend_call_replay
@@ -2310,8 +2498,8 @@ Suspension on `sleep` inside `__next__` propagates to consumers via the iterator
 
 ### suspend_with_replay
 
-- Duty: suspension and replay of the `with` body and `__exit__` (enter marker prevents re-entry, P0-22 parking stack-up)
-- Compare: `same_output`
+- Responsibility: suspension and replay of the `with` body and `__exit__` (enter marker prevents re-entry, P0-22 parking stack-up)
+- Comparison: `same_output`
 - Source: [ci/cases/suspend_with_replay.py](../../ci/cases/suspend_with_replay.py)
 
 ### suspend_zip_multi_arg
@@ -2321,9 +2509,3 @@ Suspension on `sleep` inside `__next__` propagates to consumers via the iterator
 - Source: [ci/cases/suspend_zip_multi_arg.py](../../ci/cases/suspend_zip_multi_arg.py)
 
 zip consumes argument by argument; when one argument's consumption suspends mid-way it propagates the suspension immediately and abandons the call instead of fetching the next argument's iterator while `_suspended` is set (the user `__iter__` would spuriously suspend and return null, misreported as `zip() arg is not iterable`); replay rounds reuse each argument's generator via the generator memo in occurrence order (I2-61). Includes single-argument comparison plus fielded instances, three arguments, and mixed sequence forms; protocol-driven `__iter__` / `__next__` calls no longer borrow the ambient call node for retired completion records
-
-### type_type_alias_type
-
-- Responsibility: type(type alias instance) returns TypeAliasType
-- Comparison: `same_output`
-- Source: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)

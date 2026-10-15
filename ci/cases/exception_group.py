@@ -39,6 +39,7 @@ print("subgroup-none:", g2.subgroup(KeyError))
 m2, r2 = g2.split(KeyError)
 print("split-nomatch:", m2, str(r2))
 
+
 # except Exception 可捕获 ExceptionGroup (双继承), KeyboardInterrupt 组不被捕获
 def catch_test():
     try:

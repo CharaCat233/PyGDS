@@ -1,7 +1,7 @@
 # 职责: 异常 args/str/repr 与 repr 引号选择
 # 比对: same_output
 
-# 异常对象 args/str/repr 与 repr 引号选择 (v0.6.0-alpha.2)
+# 异常对象 args/str/repr 与 repr 引号选择
 
 # 直接构造
 e = ValueError("boom")
@@ -34,9 +34,12 @@ try:
 except KeyError as ke:
     print(str(ke), repr(ke))
 
+
 # 用户异常继承
 class MyErr(Exception):
     pass
+
+
 me = MyErr("custom")
 print(me.args, str(me), repr(me))
 try:
@@ -44,16 +47,22 @@ try:
 except MyErr as m2:
     print(m2.args, str(m2))
 
+
 # __init__ 覆盖时 args 仍随构造参数记录 (BaseException.__new__ 语义)
 class CErr(Exception):
     def __init__(self, code):
         self.code = code
+
+
 ce = CErr(7)
 print(ce.args, ce.code)
+
 
 # args 属性存在于继承链任意层级
 class Sub(MyErr):
     pass
+
+
 print(Sub("s").args)
 
 # repr 引号选择: 含单引号用双引号包裹, 含双引号用单引号, 都含用单引号转义
@@ -71,4 +80,3 @@ try:
 except ValueError as qe:
     print(repr(qe))
 
-print("done_exc_repr")

@@ -6,10 +6,12 @@
 import time
 import itertools
 
+
 def g2():
     for i in [0, 1, 2]:
         time.sleep(0)
         yield i
+
 
 # 单语句直接消费 (重放轮整体重建)
 print([(k, list(v)) for k, v in itertools.groupby(g2(), key=lambda x: x < 2)])

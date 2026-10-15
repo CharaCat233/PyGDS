@@ -1,9 +1,10 @@
-# 职责: 自定义异常未调 super().__init__ 时 str(e) 按 args 格式化 (I2-66)
+# 职责: 自定义异常未调 super().__init__ 时 str(e) 按 args 格式化
 # 比对: same_output
 
 # 用户异常覆写 __init__ 且不调用 super().__init__ 时, _wrapped 不建立,
 # str(e) 退化为类型名 (旧); 现按 CPython 以 args 格式化: 无参空串, 单参 str,
 # 多参元组 repr, KeyError 子类单参用 repr
+
 
 class E2(Exception):
     def __init__(self, x):

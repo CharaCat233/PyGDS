@@ -36,7 +36,8 @@ print(log)
 
 # 行内体: 冒号后单条语句 (与 if/while 同一 block 机制)
 log.clear()
-with CM("d"): log.append("inline-body")
+with CM("d"):
+    log.append("inline-body")
 print(log)
 
 # 嵌套 with: 内层先进入也先退出
@@ -74,6 +75,7 @@ for i in range(3):
     log.append("after-%d" % i)
 print(log)
 
+
 # return 穿越体: __exit__ 触发后函数返回体的返回值, 不被 __exit__ 返回值污染
 def ret_through():
     with CM("r"):
@@ -90,6 +92,7 @@ try:
 except ValueError as err:
     print("caught", err)
 print(log)
+
 
 # as 目标是函数局部名: 绑定进函数作用域 (局部名集合收集覆盖 with 目标)
 def scoped():

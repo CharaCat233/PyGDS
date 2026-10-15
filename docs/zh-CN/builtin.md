@@ -202,6 +202,17 @@ repr(42)                 # "42"
 repr([1, 2, 3])          # "[1, 2, 3]"
 ```
 
+### `ascii(obj)`
+
+对应 Python `ascii()`，返回对象的 `repr` 字符串，非 ASCII 字符转义为 `\x` / `\u` / `\U` 形式
+
+```python
+ascii("abc")        # "'abc'"
+ascii("é")          # "'\xe9'"
+ascii("中")         # "'\u4e2d'"
+ascii([1, "é"])     # "[1, '\xe9']"
+```
+
 ### `hash(obj)`
 
 对应 Python `hash()`，返回对象的哈希值
@@ -327,6 +338,17 @@ def g():
     yield 1
 it3 = iter(g())
 print(list(it3), list(it3))     # [1] [] (生成器耗尽后不可重复消费)
+```
+
+### `next(iterator[, default])`
+
+对应 Python `next()`，取迭代器的下一项。迭代器耗尽时：提供 `default` 返回默认值，否则报 `StopIteration`；实参不是迭代器（缺 `__next__`）报 `TypeError: '<t>' object is not an iterator`
+
+```python
+it = iter([1, 2])
+next(it)            # 1
+next(it, 99)        # 2
+next(it, 99)        # 99 (已耗尽, 返回默认值)
 ```
 
 ### `zip(*iterables, strict=False)`
@@ -564,6 +586,43 @@ print(type(f).__name__)                        # filter
 
 ---
 
+### 动态求值与作用域字典
+
+以下函数（`eval` / `exec` / `compile` / `globals` / `locals` / `vars`）与 CPython 对齐，差异点随文注明
+
+#### `eval(source[, globals])`
+
+把字符串按单表达式求值并返回结果；多语句或赋值语句报 `SyntaxError`（`invalid syntax (<string>, line 1)`）；第二实参为 `dict` 时以其建独立环境（差异：CPython 为活 dict 视图，PyGDS 为快照写回），内建名在该环境可见
+
+#### `exec(source[, globals])`
+
+把字符串按语句集执行，返回 `None`；`globals` 实参为 `dict` 时以其建独立环境并写回顶层绑定（含被 `del` 删除的键）。动态代码顶层不支持程序挂起（遇 `time.sleep` 等报 `RuntimeError: dynamic code top-level cannot be suspended`）；`exec` 内定义的函数 / 生成器被主脚本调用时可正常挂起
+
+#### `compile(source, filename, mode)`
+
+返回 code 对象（`mode` 限 `"exec"` / `"eval"` / `"single"`，非法值报 `ValueError`）；code 对象带 `co_name` / `co_filename` / `co_firstlineno` 元数据，可透传给 `eval` / `exec` 执行；`co_code` 字节码不实现（PyGDS 持 AST）
+
+#### `globals()` / `locals()` / `vars(obj)`
+
+- `globals()`：返回全局环境的活视图（dict 形态，读写即时生效，可 `del` 删除名字）
+- `locals()`：函数内返回局部绑定快照；模块层等价 `globals()`
+- `vars(obj)`：返回实例字典；无 `__dict__` 的对象（如 `5`）报 `TypeError: vars() argument must have __dict__ attribute`
+
+```python
+eval("1 + 2")                                # 3
+exec("y = 7")                                # y 绑定到当前作用域
+g = {}
+exec("q = 9", g)
+print(g["q"])                                # 9 (写回 globals 实参)
+
+eval(compile("3+4", "<s>", "eval"))          # 7
+c = compile("1", "<x>", "eval")
+print(c.co_name, c.co_filename)              # <module> <x>
+
+globals()["gv"] = 42
+print(gv)                                    # 42 (活视图读写)
+```
+
 ## 内置模块 (import)
 
 PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib`、`bisect`、`heapq`、`base64`、`json`、`logging` 内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
@@ -584,7 +643,8 @@ from math import *                # 导入所有公开成员 (非下划线开头
 | :--- | :--- |
 | 常量 | `pi` `e` `tau` `inf` `nan` |
 | 基础 | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
-| 指数/对数 | `exp` `log` `log2` `log10` |
+| 指数/对数 | `exp` `log` `log1p` `expm1` `log2` `log10` |
+| 几何 | `dist` |
 | 三角函数 | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
 | 角度 | `degrees` `radians` |
 | 整数 | `factorial` `gcd` `comb` `perm` `prod` `lcm` |
@@ -604,9 +664,13 @@ math.lcm(4, 6)       # 12   (最小公倍数)
 math.cbrt(-8)        # -2.0 (立方根, 支持负数)
 math.remainder(7, 3) # 1.0  (IEEE 754 余数, 商取最近偶数)
 math.remainder(1.5, 1)  # -0.5
+math.log1p(0.5)      # 0.4054651081081644 (ln(1+x), 小 x 高精度)
+math.expm1(0.5)      # 0.6487212707001282 (e**x - 1, 小 x 高精度)
+math.dist([1, 2], [4, 6])   # 5.0 (欧氏距离, 两序列须等长)
 ```
 
 > `math.remainder(x, y)` 返回 `x - n*y`，其中 `n` 为 `x/y` 四舍五入到最近偶数，除数为零或 `x` 为无穷时抛 `ValueError`
+> `math.gcd()` / `math.lcm()` 零参返回 `0` / `1`；`math.hypot(x)` 单参返回 `abs(x)`；`math.dist` 两序列长度不等报 `ValueError`
 
 ### `random` 模块
 
@@ -622,6 +686,8 @@ math.remainder(1.5, 1)  # -0.5
 | `shuffle(seq)` | 原地打乱列表 |
 | `sample(population, k)` | 返回 k 个不重复的随机元素 |
 | `gauss(mu=0.0, sigma=1.0)` | 正态分布采样（Box-Muller 变换） |
+| `triangular(low=0.0, high=1.0, mode=None)` | 三角分布采样 |
+| `randbytes(n)` | 返回 n 字节随机 `bytes` |
 | `getrandbits(k)` | 返回 k 个随机二进制位的整数 |
 | `getstate()` / `setstate(state)` | 保存与恢复生成器内部状态 |
 
@@ -636,6 +702,7 @@ random.randint(1, 6)   # 1..6 内
 
 > **注意**：PyGDS 的 `random` 实现与 CPython 同源的 MT19937（Mersenne Twister）：整数种子走 CPython 同款 `init_by_array` 播种路径，数值序列与 CPython 对齐（`random_mt` 用例守护）；字符串种子经 PyGDS 自有哈希展开，序列与 CPython 不同（文档化差异）。`seed()` 可保证在 PyGDS 内部复现相同序列
 > **说明**：抽样函数的参数类型规则与 CPython 一致——`choice` / `shuffle` 取 `len(seq)` 后按整数下标索引/赋值，因此生成器报 `TypeError: object of type`generator`has no len()`、集合报 `not subscriptable`、`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`，字典按键取（键非 `0..n-1` 时 `KeyError`）；`sample` 接受列表/元组/字符串/`range`；`choices` 的 `weights` 只需可迭代，可传生成器
+> **`Random` 类**：`random.Random(seed)` 创建持有独立 MT 状态的实例（`r.random()` / `r.randint()` 等方法与模块级同名同语义），便于隔离随机序列；两个同种子实例产生相同序列
 
 ### `statistics` 模块
 
@@ -648,6 +715,9 @@ random.randint(1, 6)   # 1..6 内
 | `pstdev(data)` | 总体标准差（除以 n） |
 | `variance(data)` | 样本方差（除以 n-1） |
 | `pvariance(data)` | 总体方差（除以 n） |
+| `fmean(data)` | 浮点算术平均值（结果恒为 float） |
+| `geometric_mean(data)` | 几何平均值（数据须为正） |
+| `harmonic_mean(data)` | 调和平均值（数据须为非负） |
 | `quantiles(data, n=4)` | 分位切点（exclusive 方法，返回 n-1 个值，数据点少于 2 个时抛 `StatisticsError`） |
 
 ```python
@@ -668,6 +738,9 @@ statistics.quantiles([1, 2, 3, 4], n=2)  # [2.5] (中位数切点)
 | :--- | :--- |
 | `reduce(func, iterable[, initial])` | 从左到右累积归约 |
 | `partial(func, *args, **kwargs)` | 偏函数（预绑定部分参数） |
+| `wraps(wrapped)` | 装饰器：把被包装函数的 `__name__` / `__doc__` 等元数据复制到包装函数 |
+| `lru_cache(maxsize=128, typed=False)` | LRU 缓存装饰器；`@lru_cache` 无括号形态按默认 `maxsize=128`；包装函数带 `cache_info()` / `cache_clear()` |
+| `singledispatch(func)` | 单分派泛型函数；`@f.register(类型)` 注册实现，未命中走默认实现 |
 | `cmp_to_key(func)` | 把旧式 `cmp(a, b)` 函数转成可用于 `key=` 的 key 工厂 |
 
 ```python
@@ -680,6 +753,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 
 > `cmp_to_key(func)` 返回一个 key 工厂，调用它包装元素后，`sorted(key=...)` / `list.sort(key=...)`
 > 按 `func(a, b)` 返回值的符号决定顺序（负数在前，零相等，正数在后）
+> `partial` 对象可内省：`.func`（原函数）/ `.args`（位置实参元组）/ `.keywords`（关键字实参 dict）
+> `lru_cache` 的 `maxsize=None` 为无界缓存；`typed=True` 时不同类型实参分别缓存
 
 ### `itertools` 模块（常用子集）
 
@@ -700,6 +775,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `pairwise(iterable)` | 相邻元素配对，返回长度为 n-1 的元组列表 |
 | `groupby(iterable, key=None)` | 相邻分组，产出 `(key, grouper)` 对；grouper 为与外层共享游标的惰性一次性迭代器，外层推进后旧 grouper 立即耗尽 |
 | `starmap(func, iterable)` | 用每组参数解包调用 `func`，返回结果列表 |
+| `filterfalse(predicate, iterable)` | 保留谓词为假的元素（`predicate` 为 `None` 时保留假值元素），返回惰性迭代器 |
+| `batched(iterable, n)` | 按长度 n 批量切分为元组流（惰性）；`n < 1` 报 `ValueError` |
 | `tee(iterable, n=2)` | 从一个可迭代对象派生 n 个独立游标（返回 n 元组） |
 | `chain.from_iterable(iterable)` | 拼接一个可迭代对象中的各子可迭代对象 |
 
@@ -724,7 +801,8 @@ list(pairwise([1, 2, 3]))              # [(1, 2), (2, 3)]
 list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 ```
 
-> **注意**：这些函数当前返回完整的 `list`（`list(chain(...))` 直接得到结果，不需要再包一层 `list()`）。无限对象（`repeat`/`cycle`/`count`）必须配合 `islice`/`takewhile` 等惰性消费，不能直接 `list()`
+> **注意**：这些函数返回 **惰性迭代器**（与 CPython 同形，`type(...).__name__` 即函数名如 `'chain'` / `'product'`，`iter` 一致性成立）；可被 `list()` / `for` / `islice` 消费，且能配合无限源惰性推进（`islice(chain(count(), [1, 2]), 5)` 正常）
+> `product([])` 等含空池调用返回空迭代器（不报错）；`repeat` 指定 `times` 时亦为迭代器（`list(repeat(5, 3))` 得 `[5, 5, 5]`）
 > `groupby` 保持相邻分组语义（相同键不相邻时会分成多组）；grouper 为惰性迭代器，消费时用 `list(g)` 转换，且只能消费一次
 
 ### `collections` 模块
@@ -769,6 +847,7 @@ print(p._asdict()["x"])                     # 1
 | 逻辑 | `not_` `truth` |
 | 序列 | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
 | 取值器 | `itemgetter` `attrgetter` |
+| 调用 | `methodcaller(name, *args, **kwargs)`（调用目标对象的方法） |
 | 矩阵乘 | `matmul` |
 | 索引 | `index`（整数协议转换，等价 `__index__`） |
 
@@ -785,6 +864,9 @@ operator.attrgetter("x")(obj)       # obj.x
 # 与 sorted 配合
 pairs = [(2, "b"), (1, "a")]
 sorted(pairs, key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
+
+operator.methodcaller("upper")("abc")     # 'ABC' (调用目标对象的方法)
+operator.methodcaller("pop")([1, 2, 3])  # 3 (目标对象不再作为尾随实参)
 ```
 
 > `itemgetter(k1, k2, ...)` / `attrgetter("a", "b")` 返回可调用对象：单参数返回单个值，多参数返回由各值组成的元组；`attrgetter` 的属性名支持 `a.b` 点号路径
@@ -832,6 +914,8 @@ print(list(counter()))                                  # [0, 1, 2]
 - 参数为非数值时报 `TypeError`，为负数时报 `ValueError`（错误信息与 CPython 一致）
 - 支持在生成器函数体内、推导式内以及嵌套生成器（生成器体内再迭代另一个生成器）内调用，行为与 CPython 一致
 
+> **未实现成员**：`strftime` / `strptime` / `gmtime` / `localtime` / `mktime` / `ctime` / `asctime` 未提供（`from time import strftime` 报 `ImportError`）
+
 ### `string` 模块（字符串常量）
 
 | 常量 | 值 |
@@ -844,13 +928,163 @@ print(list(counter()))                                  # [0, 1, 2]
 | `octdigits` | `'01234567'` |
 | `punctuation` | ASCII 标点符号（32 个） |
 | `whitespace` | `' \t\n\r\v\f'` |
+| `capwords(s, sep=None)` | 按分隔符切分并首字母大写后重新拼接（`sep` 为 `None` 时按空白切分并单空格连接） |
 | `printable` | `digits + ascii_letters + punctuation + whitespace` |
 
 ```python
 import string
 string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 string.digits          # '0123456789'
+string.capwords("the quick brown fox")   # 'The Quick Brown Fox'
+string.capwords("a_b-c", "-")           # 'A_b-C' (按 '-' 切分)
 ```
+
+### `sys` 模块
+
+解释器与运行环境信息
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `version` / `version_info` | 版本字符串与版本元组（对齐 CPython 3.12 形态） |
+| `maxsize` | 平台整数上限（`2**63 - 1`） |
+| `byteorder` | 宿主字节序（`'little'` / `'big'`） |
+| `platform` | 宿主平台（`win32` / `linux` / `darwin`） |
+| `argv` | 命令行实参列表（脚本可读写） |
+| `executable` | 解释器可执行文件路径 |
+| `path` | 用户模块检索目录列表（初始 `[""]`，语义见 [usage.md](usage.md)） |
+| `modules` | 模块缓存活视图；`del sys.modules["x"]` 驱逐缓存（再次 `import` 重新加载） |
+| `intern(s)` | 字符串驻留（非 `str` 报 `TypeError`） |
+| `exc_info()` | 活动异常三元组 `(type, value, traceback)`；无活动异常时为 `(None, None, None)` |
+| `exit([code])` | 抛出 `SystemExit`（未捕获时按退出码进入错误终态） |
+| `set_int_max_str_digits(n)` / `get_int_max_str_digits()` | 十进制转换上限（`0` 解除上限，非零值须 ≥ 640） |
+
+```python
+import sys
+sys.maxsize                        # 9223372036854775807
+sys.platform                       # 'win32' / 'linux' / 'darwin'
+type(sys.modules["sys"]).__name__  # 'module'
+del sys.modules["string"]          # 驱逐缓存 (再次 import 重新加载)
+sys.intern("a" + "bc")             # 'abc' (驻留)
+```
+
+> `sys.exit` 的差异：未捕获时 PyGDS 进入解释器错误终态并报告，CPython 静默结束进程（`SystemExit` 可正常捕获，`.args` 为实参元组）
+
+### `contextlib` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `contextmanager(func)` | 把生成器函数转为上下文管理器工厂；产出值绑定 `as` 目标，体异常经 `throw` 注入生成器，抑制则以无异常退出；产物同时是 `ContextDecorator` |
+| `closing(thing)` | 退出时调用 `thing.close()` |
+| `suppress(*exceptions)` | 抑制列出的异常，未命中的照常传播 |
+| `nullcontext(enter_result=None)` | 空上下文管理器（`as` 目标为 `enter_result`） |
+| `ExitStack()` | 回调栈：`enter_context(cm)` / `callback(fn, *a, **kw)`（返回回调本身，可作装饰器）/ `push(cm)` / `pop_all()` / `close()`，退出时逆序回放 |
+
+```python
+from contextlib import contextmanager, suppress
+
+@contextmanager
+def cm(tag):
+    print("enter", tag)
+    try:
+        yield tag
+    finally:
+        print("exit", tag)
+
+with cm("a") as v:          # enter a / exit a
+    print("body", v)
+
+with suppress(ValueError):
+    int("x")                 # 不抛出
+
+@cm("deco")                 # contextmanager 产物作装饰器 (ContextDecorator)
+def f():
+    return 1
+f()                         # enter deco / exit deco
+```
+
+> 生成器各阶段（进入前 / 暂停点 / 退出时）的 `time.sleep` 与主动挂起 API 支持挂起重放，副作用不重复执行
+
+### `bisect` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `bisect_left(a, x[, lo[, hi]][, key=])` | 返回 x 在有序序列中的插入点（相等取左边界） |
+| `bisect_right(a, x[, lo[, hi]][, key=])` / `bisect` | 右侧插入点（`bisect` 为标准别名） |
+| `insort_left(a, x[, lo[, hi]][, key=])` | 按左边界插入（原地） |
+| `insort_right(a, x[, lo[, hi]][, key=])` / `insort` | 按右边界插入（`insort` 为标准别名） |
+
+```python
+import bisect
+a = [1, 3, 5, 7, 9]
+bisect.bisect_left(a, 5)         # 2
+bisect.bisect_right(a, 5)        # 3
+bisect.bisect_left(a, 5, 0, 3)   # 2 (lo / hi 限定范围)
+b = [1, 3, 5, 7]
+bisect.insort_left(b, 5)         # b -> [1, 3, 5, 5, 7]
+```
+
+> `key=` 只施加于列表元素、不施加于检索值（CPython 语义）；元素不可比较时 `TypeError` 正常传播；`key` 不可调用或索引实参非法按 CPython 校验
+
+### `heapq` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `heappush(heap, item)` / `heappop(heap)` | 入堆 / 弹出最小元素（原地维护小顶堆） |
+| `heapify(heap)` | 原地建堆 |
+| `heapreplace(heap, item)` | 弹出最小元素并推入新元素（空堆报 `IndexError`） |
+| `heappushpop(heap, item)` | 推入并弹出最小元素 |
+| `nsmallest(n, iterable[, key=])` / `nlargest(n, iterable[, key=])` | 前 n 小 / 前 n 大元素列表 |
+| `merge(*iterables[, key=][, reverse=])` | 多路归并（要求各输入已排序），惰性迭代器 |
+
+```python
+import heapq
+h = []
+heapq.heappush(h, 3)
+heapq.heappush(h, 1)
+heapq.heappop(h)                          # 1
+heapq.nsmallest(3, [5, 1, 8, 2, 9, 3])    # [1, 2, 3]
+list(heapq.merge([1, 3, 5], [2, 4, 6]))   # [1, 2, 3, 4, 5, 6]
+```
+
+### `base64` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `b64encode(data[, altchars])` / `b64decode(s[, altchars[, validate]])` | 标准 Base64 编解码（`altchars` 替换 `+/`，如 `b"-_"`） |
+| `standard_b64encode` / `standard_b64decode` | 标准字母表 |
+| `urlsafe_b64encode` / `urlsafe_b64decode` | URL 安全字母表（`-` `_`） |
+| `b16encode(data)` / `b16decode(s)` | Base16 编解码 |
+| `encodebytes(data)` / `decodebytes(s)` | 每 76 字符换行的 Base64 文本形态 |
+
+```python
+import base64
+base64.b64encode(b"hello")        # b'aGVsbG8='
+base64.b64decode(b"aGVsbG8=")     # b'hello'
+base64.b64encode(b"hi", b"-_")    # 自定义 altchars
+base64.b16encode(b"\x01\xab")     # b'01AB'
+```
+
+> 编码侧拒绝 `str`（报 `TypeError`），解码侧接受 ASCII `str`；填充不合法按 CPython 报 `ValueError`（长度 mod 4 == 1 与非法填充的文案区分）
+
+### `json` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `dumps(obj[, indent][, sort_keys][, separators][, ensure_ascii][, allow_nan][, default])` | 序列化为 JSON 字符串 |
+| `loads(s)` | 反序列化（完整解析：字符串转义 / 数值 / 前导零校验 / 嵌套） |
+| `dump(obj, fp, ...)` / `load(fp)` | 文件对象读写形态 |
+| `JSONDecodeError` | 解析错误异常类（`ValueError` 子类） |
+
+```python
+import json
+json.dumps({"a": 1})                          # '{"a": 1}'
+json.dumps({"a": 1}, indent=2)                # 缩进多行输出
+json.dumps({"a": 1}, sort_keys=True, separators=(",", ":"))
+json.loads('{"a": [1, 2.5, true, null]}')     # {'a': [1, 2.5, True, None]}
+json.dumps(10**40)                            # 大整数原样输出 (任意精度)
+```
+
+> `ensure_ascii=False` 输出原生非 ASCII 字符（默认转义为 `\uXXXX`）；`sort_keys` 排序键；`separators=(项分隔符, 键值分隔符)`；`allow_nan=False` 对 `nan` / `inf` 报 `ValueError`；非字符串键按 JSON 字面量转义（`{1: 2}` → `{"1": 2}`，bool 键 → `true` / `false`）；不可序列化对象报 `TypeError`（可传 `default=` 钩子转换）
 
 ### `logging` 模块（日志输出）
 

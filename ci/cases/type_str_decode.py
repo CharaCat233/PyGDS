@@ -1,4 +1,4 @@
-# 职责: str(object, encoding, errors) 编码解码路径与类型校验 (I2-58)
+# 职责: str(object, encoding, errors) 编码解码路径与类型校验
 # 比对: same_output
 # 锚定: CPython 3.12
 

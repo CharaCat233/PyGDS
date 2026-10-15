@@ -6,21 +6,21 @@
 import math
 
 # 基础运算
-print(math.sqrt(16))          # 4.0
-print(math.isqrt(17))         # 4
-print(math.floor(3.7))        # 3
-print(math.floor(-3.7))       # -4
-print(math.ceil(3.2))         # 4
-print(math.ceil(-3.2))        # -3
-print(math.trunc(-3.7))       # -3
-print(math.fabs(-3.5))        # 3.5
+print(math.sqrt(16))  # 4.0
+print(math.isqrt(17))  # 4
+print(math.floor(3.7))  # 3
+print(math.floor(-3.7))  # -4
+print(math.ceil(3.2))  # 4
+print(math.ceil(-3.2))  # -3
+print(math.trunc(-3.7))  # -3
+print(math.fabs(-3.5))  # 3.5
 
 # 浮点运算
-print(math.fmod(10, 3))       # 1.0
+print(math.fmod(10, 3))  # 1.0
 print(round(math.pow(2, 10), 6))  # 1024.0
 print(round(math.exp(1), 6))  # 2.718282
-print(round(math.log(8, 2), 6))   # 3.0
-print(round(math.log2(8), 6))     # 3.0
+print(round(math.log(8, 2), 6))  # 3.0
+print(round(math.log2(8), 6))  # 3.0
 print(round(math.log10(100), 6))  # 2.0
 
 # 三角函数
@@ -32,22 +32,22 @@ print(round(math.atan2(1, 1), 6))  # 0.785398
 
 # 角度转换
 print(round(math.degrees(math.pi), 6))  # 180.0
-print(round(math.radians(180), 6))      # 3.141593
+print(round(math.radians(180), 6))  # 3.141593
 
 # 整数与符号
-print(math.factorial(5))      # 120
-print(math.gcd(12, 18))       # 6
+print(math.factorial(5))  # 120
+print(math.gcd(12, 18))  # 6
 print(math.copysign(3.0, -1.0))  # -3.0
 print(math.copysign(-3.0, 2.0))  # 3.0
 
 # 常数 (通过 round 避免字符串表示差异)
-print(round(math.pi, 5))      # 3.14159
-print(round(math.e, 5))       # 2.71828
+print(round(math.pi, 5))  # 3.14159
+print(round(math.e, 5))  # 2.71828
 
 # 判定
-print(math.isnan(0.0))        # False
-print(math.isinf(1.0))        # False
-print(math.isfinite(1.0))     # True
+print(math.isnan(0.0))  # False
+print(math.isinf(1.0))  # False
+print(math.isfinite(1.0))  # True
 
 # 域错误路径
 print(math.floor(2.7), math.sqrt(16))
@@ -79,4 +79,152 @@ except ValueError as e:
 print(math.comb(3, 5))
 print(math.perm(5, 7))
 
-print("done")
+
+# math 大数/类型快路径群 (此前大数 value 恒 0, 浮点 int64 截断回绕)
+print(math.floor(10**30))
+print(math.floor(-(10**30)))
+print(math.ceil(10**30))
+print(math.ceil(-(10**30)))
+print(math.trunc(10**30))
+print(math.floor(1e300))
+print(math.ceil(1e300))
+print(math.trunc(1e300))
+print(math.floor(-2.5))
+print(math.ceil(-2.5))
+print(math.floor(2.5))
+print(math.floor(7))
+print(math.floor(True))
+print(math.isqrt(10**20))
+print(math.isqrt(2))
+print(math.isqrt(10**30 - 1))
+print(math.isqrt(2**100))
+print(math.factorial(21))
+print(math.factorial(0))
+print(math.factorial(1))
+print(len(str(math.factorial(100))))
+print(math.comb(10**20, 2))
+print(math.comb(5, 2))
+print(math.comb(10, 0))
+print(len(str(math.perm(60, 30))))
+print(math.perm(5, 2))
+print(math.gcd(8, 12, 18))
+print(math.gcd(0, 5))
+print(math.gcd(10**20, 5))
+print(math.lcm(4, 6, 8))
+print(math.lcm(10**20, 5))
+print(math.prod([10**20, 10**20]))
+print(math.prod([2, 3, 4]))
+print(math.prod([]))
+print(math.prod([1.5, 2.0]))
+
+# 类型校验 (此前静默截断/按 0)
+try:
+    math.isqrt(4.0)
+except TypeError as e:
+    print("TE-isqrt:", str(e))
+
+try:
+    math.gcd(4.0, 6)
+except TypeError as e:
+    print("TE-gcd:", str(e))
+
+try:
+    math.factorial(3.0)
+except TypeError as e:
+    print("TE-fact:", str(e))
+
+try:
+    math.prod(["a", "b"])
+except TypeError as e:
+    print("TE-prod:", str(e))
+
+# 域错误
+try:
+    print(math.log(8, 0))
+except ValueError as e:
+    print("VE-log0:", str(e))
+
+try:
+    print(math.log(8, 1))
+except ZeroDivisionError as e:
+    print("ZDE-log1:", str(e))
+
+try:
+    print(math.floor(float("nan")))
+except ValueError as e:
+    print("VE-nan:", str(e))
+
+try:
+    print(math.floor(float("inf")))
+except OverflowError as e:
+    print("OE-inf:", str(e))
+
+# math 域错误 (此前 math.pow/math.fmod 返回 nan 而非报 ValueError)
+try:
+    math.pow(-8, 0.5)
+except ValueError as e:
+    print("VE-pow:", e)
+try:
+    math.pow(0.0, -1)
+except ValueError as e:
+    print("VE-pow2:", e)
+try:
+    math.fmod(1, 0)
+except ValueError as e:
+    print("VE-fmod:", e)
+print(round(math.pow(2, 0.5), 6))
+print(round(math.fmod(10.5, 3), 6))
+
+# math.factorial 拒绝浮点 (CPython 3.12 文案)
+try:
+    math.factorial(3.0)
+except TypeError as e:
+    print("TE:", str(e))
+print(math.factorial(5))
+
+
+# 数字协议 __round__/__floor__/__ceil__/__trunc__ (经 math 侧验证)
+class MF28:
+    def __floor__(self):
+        return 7
+
+
+print(math.floor(MF28()))
+
+
+# bool 是 int 子类 (floor/ceil/trunc/atan2 接受 bool)
+print(math.floor(True))
+print(math.ceil(True))
+print(math.trunc(True))
+print(math.atan2(True, 1))
+print(math.floor(False))
+
+# log1p/expm1/dist 补齐, gcd/lcm/hypot 边界
+import math
+
+print("l1p:", math.log1p(0.5), math.log1p(1e-16))
+print("em1:", math.expm1(0.5), math.expm1(1e-16))
+print("dist:", math.dist([1, 2], [4, 6]), math.dist((0, 0), (3, 4)))
+try:
+    math.dist([1, 2], [4, 6, 7])
+except ValueError as e:
+    print("dist-v:", str(e))
+print("gcd0:", math.gcd(), math.gcd(12, 18))
+print("lcm0:", math.lcm(), math.lcm(4, 6))
+print("hyp1:", math.hypot(3), math.hypot(3, -4))
+
+
+# floor/ceil/trunc 非数值实参文案对齐 CPython
+def _show_floor(label, fn):
+    try:
+        print(label, "OK", fn())
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_show_floor("floor_str", lambda: math.floor("3"))
+_show_floor("ceil_str", lambda: math.ceil("3"))
+_show_floor("trunc_str", lambda: math.trunc("3"))
+_show_floor("floor_none", lambda: math.floor(None))
+_show_floor("floor_list", lambda: math.floor([1]))
+_show_floor("floor_num", lambda: math.floor(3.7))

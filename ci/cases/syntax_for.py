@@ -1,7 +1,7 @@
 # 职责: for 目标星形、嵌套、下标属性与解包错误文案
 # 比对: same_output
 
-# for 目标的星形名 / 嵌套 / 字符串解包 / 下标与属性目标 (P1-59)
+# for 目标的星形名 / 嵌套 / 字符串解包 / 下标与属性目标
 for *h, t in ([[1, 2], [3]],):
     print(h, t)
 
@@ -69,6 +69,7 @@ try:
 except ValueError as e:
     print("VE3:", e)
 
+
 # 循环变量在函数局部作用域的静态收集
 def collect():
     total = 0
@@ -78,3 +79,10 @@ def collect():
 
 
 print(collect())
+
+# for x in None 报 TypeError (而非 RuntimeError)
+try:
+    for x in None:
+        pass
+except TypeError as e:
+    print("for-none:", str(e))

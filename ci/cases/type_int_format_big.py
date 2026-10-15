@@ -3,11 +3,13 @@
 big = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF  # 96-bit, 超出 int64
 huge = 10**400  # 超出 double 范围
 
+
 def show(label, fn):
     try:
         print(label, "OK", fn())
     except Exception as e:
         print(label, type(e).__name__)
+
 
 # x/X/o/b: 输出正确进制 (含 # 备用形式与 _ 分组)
 print("fx", f"{big:x}")

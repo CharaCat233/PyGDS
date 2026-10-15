@@ -78,3 +78,54 @@ for b in bytearray(b"ab"):
     print(b)
 print(bytes(ba4))
 print(ba4.startswith(b"ab"), b"cd" in ba4)
+
+# bytearray 构造实参校验 (bool 按 int; 负数报 negative count)
+print(bytearray([True]))
+print(bytearray([True, False, 1]))
+try:
+    bytearray(-1)
+except ValueError as e:
+    print("VE-neg:", e)
+try:
+    bytearray([-1])
+except ValueError as e:
+    print("VE-range:", e)
+try:
+    bytearray(["x"])
+except TypeError as e:
+    print("TE-item:", e)
+
+
+# bytearray += 仅收 bytes-like (CPython), list/tuple 报 can't concat
+def _ba_iadd_list():
+    b = bytearray(b"a")
+    b += [1]
+
+
+def _ba_iadd_tuple():
+    b = bytearray(b"a")
+    b += (1, 2)
+
+
+def _ba_iadd_bytes():
+    b = bytearray(b"a")
+    b += b"bc"
+    return b
+
+
+def _ba_iadd_ba():
+    b = bytearray(b"a")
+    b += bytearray(b"d")
+    return b
+
+
+try:
+    _ba_iadd_list()
+except TypeError as e:
+    print("ba-iadd-list:", type(e).__name__, str(e))
+try:
+    _ba_iadd_tuple()
+except TypeError as e:
+    print("ba-iadd-tuple:", type(e).__name__, str(e))
+print("ba-iadd-bytes:", _ba_iadd_bytes())
+print("ba-iadd-ba:", _ba_iadd_ba())

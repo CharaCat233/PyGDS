@@ -1,9 +1,10 @@
-# 职责: except 子句类型非法 (非 BaseException 子类) 报 TypeError (I2-65)
+# 职责: except 子句类型非法 (非 BaseException 子类) 报 TypeError
 # 比对: same_output
 
 # 匹配阶段的 except 类型表达式必须是可捕获异常类 (自身或元组成员为 BaseException
 # 子类的类), 否则按 CPython 报 TypeError; 元组全部成员先整体校验; 首个子句命中后
 # 后续子句不再校验; try 体未抛异常时非法子句不触发
+
 
 def t(label, fn):
     try:

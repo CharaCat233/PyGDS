@@ -7,17 +7,20 @@ import time
 import itertools
 import operator
 
+
 def g():
     for i in [5, 6, 7]:
         time.sleep(0)
         yield i
+
 
 def g2():
     for i in [0, 1, 2]:
         time.sleep(0)
         yield i
 
-print('-'.join(str(x) for x in g()))
+
+print("-".join(str(x) for x in g()))
 print(list(itertools.pairwise(g())))
 print([(k, list(v)) for k, v in itertools.groupby(g2(), key=lambda x: x < 2)])
 print(operator.countOf(g(), 6))

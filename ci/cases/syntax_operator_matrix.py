@@ -23,7 +23,7 @@ def bi(a, b, op):
         if op == "%":
             return "OK:" + repr(a % b)
         if op == "**":
-            return "OK:" + repr(a ** b)
+            return "OK:" + repr(a**b)
         if op == "<<":
             return "OK:" + repr(a << b)
         if op == ">>":
@@ -108,7 +108,7 @@ print(repr(True << 1), repr(True >> 1))
 print(repr(True & 1), repr(True | 1))
 print(repr(True // 2), repr(True % 2), repr(True / 2))
 print(repr(True // 1.5), repr(True % 1.5))
-print(repr(True + True), repr(True * True), repr(True ** True))
+print(repr(True + True), repr(True * True), repr(True**True))
 
 # === % 命名字段与映射实参 ===
 print("%(a)s" % {"a": 1})

@@ -6,6 +6,7 @@ def show(label, fn):
     except Exception as e:
         print(label, type(e).__name__)
 
+
 # === 类型×说明符兼容性 (CPython: int 拒 's', float 拒 b/c/d/o/x/X/s, str 拒数值, 容器拒任何说明符) ===
 show("int s", lambda: format(42, "s"))
 show("bool s", lambda: format(True, "s"))

@@ -23,13 +23,13 @@ def cmp_str(a, b):
 
 
 # 旧式比较函数用于 sorted(key=)
-print(sorted([3, 1, 4, 1, 5], key=cmp_to_key(cmp_desc)))     # [5, 4, 3, 1, 1]
-print(sorted(["bb", "a", "ccc"], key=cmp_to_key(cmp_len)))   # ['a', 'bb', 'ccc']
+print(sorted([3, 1, 4, 1, 5], key=cmp_to_key(cmp_desc)))  # [5, 4, 3, 1, 1]
+print(sorted(["bb", "a", "ccc"], key=cmp_to_key(cmp_len)))  # ['a', 'bb', 'ccc']
 print(sorted(["banana", "apple", "cherry"], key=cmp_to_key(cmp_str)))
 
 # lambda 形式
-print(sorted([1, 2, 3], key=cmp_to_key(lambda a, b: b - a)))   # [3, 2, 1]
-print(sorted([1, 2, 3], key=cmp_to_key(lambda a, b: a - b)))   # [1, 2, 3]
+print(sorted([1, 2, 3], key=cmp_to_key(lambda a, b: b - a)))  # [3, 2, 1]
+print(sorted([1, 2, 3], key=cmp_to_key(lambda a, b: a - b)))  # [1, 2, 3]
 
 # 与 reverse 组合
 print(sorted([1, 2, 3], key=cmp_to_key(lambda a, b: a - b), reverse=True))
@@ -41,19 +41,36 @@ print(sorted(pairs, key=cmp_to_key(lambda a, b: a[1] - b[1])))
 # list.sort 同样支持
 lst = [2, 5, 1, 4]
 lst.sort(key=cmp_to_key(lambda a, b: a - b))
-print(lst)      # [1, 2, 4, 5]
+print(lst)  # [1, 2, 4, 5]
 
 # 返回对象可调用
-print(callable(cmp_to_key(lambda a, b: 0)))    # True
-print(type(cmp_to_key(lambda a, b: 0)))        # <class 'functools.KeyWrapper'>
-print(type(cmp_to_key(lambda a, b: 0)(5)))     # <class 'functools.KeyWrapper'>
-print(cmp_to_key(lambda a, b: 0))              # <functools.KeyWrapper object>
+print(callable(cmp_to_key(lambda a, b: 0)))  # True
+print(type(cmp_to_key(lambda a, b: 0)))  # <class 'functools.KeyWrapper'>
+print(type(cmp_to_key(lambda a, b: 0)(5)))  # <class 'functools.KeyWrapper'>
+print(cmp_to_key(lambda a, b: 0))  # <functools.KeyWrapper object>
+
 
 # 与普通 key 函数结果一致
 def key_neg(x):
     return -x
 
 
-print(sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a)) == sorted([3, 1, 2], key=key_neg))
+print(
+    sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))
+    == sorted([3, 1, 2], key=key_neg)
+)
 
-print("done")
+
+# 比较函数返回非数值时传播 TypeError (此前静默按 0)
+try:
+    print(sorted([3, 1, 2], key=cmp_to_key(lambda a, b: "x")))
+except TypeError as e:
+    print("TE:", e)
+try:
+    print(sorted([3, 1, 2], key=cmp_to_key(lambda a, b: None)))
+except TypeError as e:
+    print("TE2:", e)
+try:
+    print(sorted([3, 1, 2], key=cmp_to_key(lambda a, b: 1 / 0)))
+except ZeroDivisionError as e:
+    print("ZE:", e)

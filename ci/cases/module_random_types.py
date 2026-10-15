@@ -105,4 +105,3 @@ d = {0: "zero", 1: "one", 2: "two"}
 random.shuffle(d)
 print(len(d), d[0] in ["zero", "one", "two"])
 
-print("done")

@@ -1,5 +1,6 @@
-# 职责: 类体方法组装即时性 (P0-25): property/setter/deleter、classmethod/staticmethod、限定名、__set_name__/__init_subclass__ 次序、类与方法装饰器、super 定位
+# 职责: 类体方法组装即时性: property/setter/deleter、classmethod/staticmethod、限定名、__set_name__/__init_subclass__ 次序、类与方法装饰器、super 定位
 # 比对: same_output
+
 
 # property + setter + deleter
 class P:
@@ -25,6 +26,7 @@ print(p.v)
 del p.v
 print(p.v)
 
+
 # classmethod / staticmethod
 class M:
     factor = 3
@@ -46,6 +48,7 @@ print(M.scaled(2), M().scaled(2), M.plain(1), M().plain(1), M().norm(5))
 # 方法限定名与 repr
 print(M.norm.__qualname__, M.norm.__name__)
 
+
 # 类体内 print 方法对象 (def 时即绑定)
 class Q:
     def m(self):
@@ -53,7 +56,9 @@ class Q:
 
     fn = m
 
+
 print(callable(Q.fn), Q().fn())
+
 
 # __set_name__ / __init_subclass__ 次序
 class Desc:
@@ -80,12 +85,15 @@ def deco(cls):
 class D:
     v = 1
 
+
 print(D.v, D.decoed)
+
 
 # 方法装饰器与内建组合
 def shout(fn):
     def wrapper(*a, **k):
         return fn(*a, **k) + "!"
+
     return wrapper
 
 
@@ -98,7 +106,9 @@ class E:
     def chello(cls):
         return "yo"
 
+
 print(E().hello(), E.chello())
+
 
 # 方法默认参数读类体变量(定义期)
 class F:
@@ -107,7 +117,9 @@ class F:
     def mul(self, v=unit):
         return v * 2
 
+
 print(F().mul())
+
 
 # super() 定位
 class GBase:
@@ -119,11 +131,14 @@ class GChild(GBase):
     def who(self):
         return "child+" + super().who()
 
+
 print(GChild().who())
+
 
 # 继承方法查找 + 类属性遮蔽
 class HBase:
     tag = "base"
+
     def shared(self):
         return "shared"
 
@@ -131,7 +146,9 @@ class HBase:
 class HChild(HBase):
     tag = "child"
 
+
 print(HChild.tag, HBase.tag, HChild().shared())
+
 
 # 类体内 raise 语句
 class R:
@@ -140,7 +157,9 @@ class R:
     except ValueError as e:
         note = str(e)
 
+
 print(R.note)
+
 
 # match 语句在类体
 class MM:
@@ -152,4 +171,43 @@ class MM:
         case "b":
             kind = "B"
 
+
 print(MM.kind)
+
+
+# 绑定方法相等性按 (函数, self) + __self__ 属性 (此前按身份比较)
+class M86:
+    def m(self):
+        return 1
+
+    def n(self):
+        return 2
+
+
+m86a = M86()
+m86b = M86()
+print(m86a.m == m86a.m)
+print(m86a.m != m86a.m)
+print(m86a.m == m86b.m)
+print(m86a.m == m86a.n)
+print(m86a.m.__self__ is m86a)
+print(m86a.m.__self__ is m86b)
+print(m86a.m.__self__ == m86a)
+print(m86a.m is m86a.m)
+print(m86a.m == 5)
+print(m86a.m.__self__.__class__.__name__)
+
+
+# 绑定方法 __func__ (普通方法 / classmethod)
+class A14:
+    def f(self):
+        return 1
+
+    @classmethod
+    def cm(cls):
+        return 2
+
+
+print(A14().f.__func__.__name__)
+print(A14.cm.__func__.__name__)
+print(A14().f.__self__ is not None)

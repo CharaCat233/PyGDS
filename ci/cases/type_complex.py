@@ -64,7 +64,7 @@ try:
 except ZeroDivisionError as e:
     print("ZD:", e)
 try:
-    0j ** -1
+    0j**-1
 except ZeroDivisionError as e:
     print("ZD2:", e)
 x = 1 + 2j

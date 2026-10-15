@@ -82,4 +82,3 @@ for v in d.values():
 print(d.keys() == d.keys())
 print(set(d.keys()) == {"a", "b", "c"})
 
-print("done")

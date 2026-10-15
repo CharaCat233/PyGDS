@@ -51,4 +51,17 @@ time.sleep(0.05)
 t2 = time.monotonic()
 print(t2 > t1)
 
-print("done")
+
+# time.sleep(inf)/nan 报错 (此前静默返回)
+import math as _m
+
+try:
+    time.sleep(_m.inf)
+except OverflowError as e:
+    print("OE:", str(e))
+try:
+    time.sleep(_m.nan)
+except ValueError as e:
+    print("VE:", str(e))
+time.sleep(0.001)
+print("slept")

@@ -1,7 +1,7 @@
-# 职责: 任意精度 int 在索引位边界的收敛 (P0-13, CPython Py_ssize_t 同构)
+# 职责: 任意精度 int 在索引位边界的收敛 (CPython Py_ssize_t 同构)
 # 比对: same_output
 
-big = 10 ** 30
+big = 10**30
 lst = [1, 2, 3]
 s = "abcdef"
 t = (4, 5, 6)
@@ -73,14 +73,13 @@ except OverflowError as e:
 
 # 巨移位: 结果位数不可控 (巨幂的 MemoryError 属资源相关行为, 不做双端断言)
 try:
-    print(1 << (2 ** 70))
+    print(1 << (2**70))
 except OverflowError as e:
     print("OE8:", e)
 
 # to_bytes 长度不足
 try:
-    print((10 ** 30).to_bytes(4, "big"))
+    print((10**30).to_bytes(4, "big"))
 except OverflowError as e:
     print("OE9:", e)
-print((10 ** 30).to_bytes(16, "big")[:4].hex())
-print("done")
+print((10**30).to_bytes(16, "big")[:4].hex())

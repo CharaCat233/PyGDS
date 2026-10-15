@@ -4,13 +4,16 @@
 # (yield 0) + (yield from inner()): inner 耗尽后 yield from 值为 None,
 # None + None 触发 TypeError, 两种驱动形态的产出与异常均须一致
 
+
 def inner():
     yield 1
     yield 2
 
+
 def gen():
     v = (yield 0) + (yield from inner())
     yield v
+
 
 # next 逐步驱动: 0, 1, 2 之后抛 TypeError
 x = gen()

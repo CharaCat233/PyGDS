@@ -1,8 +1,9 @@
-# 职责: str.format 手动/自动字段编号混用报 ValueError (I2-64)
+# 职责: str.format 手动/自动字段编号混用报 ValueError
 # 比对: same_output
 
 # 手动编号 ({0}/{1}) 与自动编号 ({}) 在同一格式串混用时报 ValueError,
 # 文案按切换方向区分 (CPython 同); 嵌套规格与关键字实参参与编号模式跟踪
+
 
 def t(label, fn):
     try:

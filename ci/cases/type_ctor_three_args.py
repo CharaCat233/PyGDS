@@ -1,7 +1,8 @@
-# 职责: type() 三参错误文案对齐 type.__new__() (I2-69)
+# 职责: type() 三参错误文案对齐 type.__new__()
 # 比对: same_output
 
 # type(name, bases, dict) 三参形态的参数类型错误文案为 type.__new__() 前缀 (CPython 同)
+
 
 def t(label, fn):
     try:

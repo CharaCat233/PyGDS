@@ -33,6 +33,7 @@ print(out)
 print(max(g), min(g))
 print(tuple(g))
 
+
 # 迭代中抛出的其他错误照常传播
 class Bad:
     def __getitem__(self, k):
@@ -47,3 +48,25 @@ try:
     list(Bad())
 except KeyError as e:
     print("propagated:", e)
+
+# min/max/sorted 关键字实参校验
+try:
+    min(3, 1, default=0)
+except TypeError as e:
+    print("TE-min-default:", e)
+try:
+    max(3, 1, default=0)
+except TypeError as e:
+    print("TE-max-default:", e)
+try:
+    min([1], foo=2)
+except TypeError as e:
+    print("TE-min-unknown:", e)
+try:
+    max([1], foo=2)
+except TypeError as e:
+    print("TE-max-unknown:", e)
+try:
+    sorted([1], foo=2)
+except TypeError as e:
+    print("TE-sorted-unknown:", e)

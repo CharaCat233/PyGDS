@@ -55,9 +55,18 @@ print(f"list: {lst[1]}")
 x = 5
 print(f"outer {f'inner {x}'}")
 
-print("done")
 
-# 备用形式与零填充: 前缀参与布局 (P2-46)
-print(f"{255:#06x}")             # 0x00ff
-print(f"{-255:#06x}")            # -0x0ff
-print(f"{8:#06o}")               # 0o0010
+# 备用形式与零填充: 前缀参与布局
+print(f"{255:#06x}")  # 0x00ff
+print(f"{-255:#06x}")  # -0x0ff
+print(f"{8:#06o}")  # 0o0010
+
+# !a 转换做 ASCII 转义
+print(f"{'é'!a}")
+print(f"{'汉字'!a}")
+print(f"{'a'!a}")
+print(f"{'é'!r}")
+
+# f-string 字段元组表达式
+print(f"{1, 2}")
+print(f"{1, 2, 3}")

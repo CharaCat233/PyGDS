@@ -1,4 +1,4 @@
-# 职责: type(类型别名实例) 返回 TypeAliasType (I2-70)
+# 职责: type(类型别名实例) 返回 TypeAliasType
 # 比对: same_output
 
 # PEP 695 type 别名绑定 TypeAliasType 对象, type(别名) 返回 TypeAliasType 类型类

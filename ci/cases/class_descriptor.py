@@ -2,7 +2,6 @@
 # 比对: same_output
 
 
-
 class Desc:
     def __get__(self, obj, owner):
         if obj is None:

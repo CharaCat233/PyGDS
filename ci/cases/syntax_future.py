@@ -1,4 +1,4 @@
-# 职责: from __future__ 导入的 _Feature 绑定与文档字符串位置豁免 (I2-41)
+# 职责: from __future__ 导入的 _Feature 绑定与文档字符串位置豁免
 # 比对: same_output
 # 锚定: CPython 3.12
 

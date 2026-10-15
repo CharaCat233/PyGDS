@@ -71,8 +71,8 @@ class Lexer:
 	var line: int = 1
 	## 当前列号
 	var column: int = 1
-	## 缩进, 用于生成 INDENT/DEDENT
-	var indent_stack: Array = [0]
+	## 缩进, 用于生成 INDENT/DEDENT (元素为 [常规列, 替代列(tab=1)])
+	var indent_stack: Array = [[0, 0]]
 	## 最近一次整数字符串转换是否回绕
 	var literal_overflow := false
 	## int↔str 转换的十进制位数上限 (CPython 3.11+ 的 int_max_str_digits 默认 4300): [br]
@@ -176,27 +176,36 @@ class Lexer:
 		if expression_mode:
 			return
 		var spaces = 0
+		var altspaces = 0
 		const TAB_SIZE = 8
 		while peek() == ' ' or peek() == '\t':
 			if peek() == ' ':
 				spaces += 1
+				altspaces += 1
 			else:
-				spaces += TAB_SIZE
+				# tab 停靠到 8 的倍数 (CPython 同算法); altspaces 按 tab=1 计
+				spaces = (spaces / TAB_SIZE + 1) * TAB_SIZE
+				altspaces += 1
 			advance()
 		start = current
 		# 空行 (含 CRLF 行尾) 不触发缩进处理, 仅随后的换行产出 NEWLINE
 		if peek() == '\n' or peek() == '\r':
 			return
-		var top = indent_stack.back()
+		# tab/空格混用的歧义检测 — 常规列匹配与替代列匹配不一致时按 CPython 报 TabError
+		var top_pair: Array = indent_stack.back()
+		if (spaces == top_pair[0]) != (altspaces == top_pair[1]):
+			report.error("TabError: inconsistent use of tabs and spaces in indentation")
+			return
+		var top: int = indent_stack.back()[0]
 		if spaces > top:
-			indent_stack.append(spaces)
+			indent_stack.append([spaces, altspaces])
 			tokens.append(Token.new(TokenType.INDENT, "", null, line, column))
 		elif spaces < top:
-			while indent_stack.size() > 1 and indent_stack.back() > spaces:
+			while indent_stack.size() > 1 and indent_stack.back()[0] > spaces:
 				indent_stack.pop_back()
 				tokens.append(Token.new(TokenType.DEDENT, "", null, line, column))
-			if indent_stack.back() != spaces:
-				report.error("Inconsistent indentation at line %d" % line)
+			if indent_stack.back()[0] != spaces:
+				report.error("SyntaxError: inconsistent indentation at line %d" % line)
 				
 	## 扫描一个 Token
 	func scan_token():
@@ -593,6 +602,9 @@ class Lexer:
 						oct_cnt += 1
 					if not _check_cp(oct_val):
 						return result
+					# 超范围八进制转义 (\400-\777) 按 CPython 发 SyntaxWarning (值仍解码, -W error 时升为 SyntaxError)
+					if oct_val > 255:
+						report.print_msg("SyntaxWarning: invalid octal escape sequence '\\%s'\n" % s.substr(i + 1, oct_cnt))
 					result += String.chr(oct_val)
 					i += 1 + oct_cnt
 				_:
@@ -822,6 +834,10 @@ class Lexer:
 				return
 			add_token(TokenType.FLOAT, val)
 		else:
+			# 十进制前导零字面量拒绝 (CPython 同文案, 0x/0o/0b 已在前面分支处理)
+			if int_part.length() > 1 and int_part[0] == "0":
+				report.error("SyntaxError: leading zeros in decimal integer literals are not permitted; use an 0o prefix for octal integers")
+				return
 			var int_val = _digits_to_int(int_part, 10)
 			# 复数字面量虚部 1j
 			if peek() == 'j' or peek() == 'J':
@@ -1788,6 +1804,18 @@ class UnpackAssign extends Expr:
 		targets = t
 		value = v
 
+## 链式赋值 a = b[0] = c.x = expr [br]
+## 值表达式只求值一次, 再按目标从左到右依次赋值 (CPython 语义), [br]
+## 目标为 Variable / GetItem / GetAttr
+class ChainAssign extends Expr:
+	## 目标列表 (从左到右, 实际类型 Array[Variable | GetItem | GetAttr])
+	var targets: Array
+	## 右侧值表达式
+	var value: Expr
+	func _init(t, v):
+		targets = t
+		value = v
+
 ## 赋值表达式 (walrus 运算符 :=), 例如 (n := len(a)) [br]
 ## 求值时先赋值再返回右侧值, 目标只能是简单变量名
 class WalrusExpr extends Expr:
@@ -2181,8 +2209,10 @@ class TypeAliasStmt extends Stmt:
 		value = v
 
 class AnnotatedAssign extends Stmt:
-	## 变量名
+	## 变量名 (target 为 null 时的简单名注解)
 	var name: String
+	## 注解目标 (GetAttr/GetItem, 属性/下标注解, 简单名为 null)
+	var target: Expr = null
 	## 注解表达式
 	var annotation: Expr
 	## 可选的初始化值表达式
@@ -2190,11 +2220,13 @@ class AnnotatedAssign extends Stmt:
 	## 构造带注解声明 [br]
 	## [param n] 变量名 [br]
 	## [param a] 注解表达式 [br]
-	## [param v] 初始化值表达式 (裸注解为 null)
-	func _init(n, a, v):
+	## [param v] 初始化值表达式 (裸注解为 null) [br]
+	## [param t] 注解目标 (属性/下标, 简单名为 null)
+	func _init(n, a, v, t = null):
 		name = n
 		annotation = a
 		value = v
+		target = t
 
 class GlobalStmt extends Stmt:
 	## 声明为全局的变量名列表 (CPython 允许 global a, b 多名声明)
@@ -2261,7 +2293,7 @@ class FromImportStmt extends Stmt:
 	var names: Array
 	## 是否星号导入 (from math import *)
 	var star: bool = false
-	## 相对导入 (from . import x / from .mod import x, I2-71): PyGDS 无父包上下文,
+	## 相对导入 (from . import x / from .mod import x): PyGDS 无父包上下文,
 	## 运行期按 CPython 报 ImportError
 	var relative: bool = false
 	## 构造 from-import 语句 [br]
@@ -2863,6 +2895,12 @@ class DSLObject:
 				var res = klass._invoke_func(method, [self, rhs] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if res is DSLBool:
 					return res.value
+				if res is DSLInteger:
+					# __eq__ 返回整值时按真值解释 (CPython 的 == 结果直接参与真值判定)
+					var ri = res as DSLInteger
+					return ri.is_big() or ri.value != 0
+				if res is DSLFloat:
+					return res.value != 0.0
 		return self == rhs
 	
 	## 不等判定 (容器操作中的 != 语义) [br]
@@ -3003,7 +3041,7 @@ class DSLObject:
 					return DSLString.new("")
 				if res is DSLString:
 					return res
-				# I2-63: __str__ 必须返回字符串 (CPython 文案按返回类型)
+				# __str__ 必须返回字符串 (CPython 文案按返回类型)
 				if res != null and ip != null and not ip._suspended:
 					ip.raise_exception("TypeError", "__str__ returned non-string (type %s)" % res._type_name())
 				return DSLString.new("")
@@ -3016,7 +3054,7 @@ class DSLObject:
 					return DSLString.new("")
 				if rep_res is DSLString:
 					return rep_res
-				# I2-63: str() 经 __repr__ 回退时, 非字符串按 str() 路径文案报错 (CPython 同)
+				# str() 经 __repr__ 回退时, 非字符串按 str() 路径文案报错 (CPython 同)
 				if rep_res != null and ip2 != null and not ip2._suspended:
 					ip2.raise_exception("TypeError", "__str__ returned non-string (type %s)" % rep_res._type_name())
 				return DSLString.new("")
@@ -3032,10 +3070,13 @@ class DSLObject:
 					return DSLString.new("")
 				if res is DSLString:
 					return res
-				# I2-63: __repr__ 必须返回字符串 (CPython 文案按返回类型)
+				# __repr__ 必须返回字符串 (CPython 文案按返回类型)
 				if res != null and ip != null and not ip._suspended:
 					ip.raise_exception("TypeError", "__repr__ returned non-string (type %s)" % res._type_name())
 				return DSLString.new("")
+		# 局部类的默认 repr 用限定名 (outer.<locals>.Item)
+		if klass != null and klass.qualname != "":
+			return DSLString.new("<" + klass.qualname + " object>")
 		return DSLString.new("<" + _type_name() + " object>")
 	
 	## 从元素数组构建 set (dict 视图集合运算用)
@@ -3136,14 +3177,16 @@ class DSLObject:
 		if _wrapped != null and _wrapped is DSLException:
 			return _wrapped._dsl_str()
 		if fields != null and klass != null:
-			return "<%s object>" % klass.name
+			# 局部类用限定名 (outer.<locals>.Item), 顶层类退化为类名 (与 CPython 归一后一致)
+			var disp = klass.qualname if klass.qualname != "" else klass.name
+			return "<%s object>" % disp
 		# 对于普通对象返回 "<类型名 object at 0x地址>" 格式
 		return "<%s object at 0x%x>" % [_type_name(), _object_id]
 	
 	## 真值判定, 按 CPython 的优先级查用户类协议 [br]
 	## __bool__ 优先, 无 __bool__ 但定义了 __len__ 时以非 0 为真, 两者都无则恒为真 [br]
 	## 与 __len__ / __str__ / __contains__ / __eq__ 的既有桥接保持同一形状 [br]
-	## __bool__ 返回非 bool 时按 CPython 报 TypeError (I2-63), 错误通道由调用方 [br]
+	## __bool__ 返回非 bool 时按 CPython 报 TypeError, 错误通道由调用方 [br]
 	## 经 report.has_error 传播; 返回 false 仅为占位, 不得据此继续执行语义 [br]
 	## [returns] 对象的真值
 	func _dsl_bool() -> bool:
@@ -3165,8 +3208,30 @@ class DSLObject:
 			var len_method = klass._lookup_method("__len__")
 			if len_method != null:
 				var len_res = klass._invoke_func(len_method, [self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if len_res is DSLBool:
+					# bool 是 int 子类: True/False 按 1/0 参与真值判定
+					return len_res.value
 				if len_res is DSLInteger:
-					return len_res.value != 0
+					var li = len_res as DSLInteger
+					if li.is_big():
+						# CPython: __len__ 返回超索引位宽的大数, 真值判定亦报 OverflowError
+						var ip_big = Interpreter.active
+						if ip_big != null:
+							ip_big.raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
+						return false
+					if li.value < 0:
+						var ip_len = Interpreter.active
+						if ip_len != null:
+							ip_len.raise_exception("ValueError", "__len__() should return >= 0")
+						return false
+					return li.value != 0
+				if len_res == null:
+					# 挂起等未产出结果: 回退假值 (错误通道未置, 由挂起重放机制接手)
+					return false
+				var ip_len2 = Interpreter.active
+				if ip_len2 != null:
+					ip_len2.raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % len_res._type_name())
+				return false
 		return true
 		
 	func _dsl_iter() -> DSLIterator:
@@ -3381,7 +3446,7 @@ class DSLObject:
 			if method != null:
 				klass._invoke_func(method, [self, _index] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				return
-		last_error = "TypeError: '%s' object does not support item deletion" % _type_name()
+		last_error = "TypeError: '%s' object doesn't support item deletion" % _type_name()
 		return null
 	
 	func _dsl_getitem(index: DSLObject) -> DSLObject:
@@ -3434,6 +3499,47 @@ class DSLObject:
 			n += 1
 			i += 1
 		return n
+
+	## 预扫描 % 格式串: 按 CPython 扫描期顺序返回首个错误消息, 无错返回 "" [br]
+	## 映射要求 / 截断形态 (未闭合命名字段 / 结尾悬空 %) / 位置实参不足均在此判定, [br]
+	## 用于 bytes 路径在实参个数校验前拦截 (格式串截断时 CPython 优先报扫描期错误)
+	func _percent_scan_error(fmt: String, values: Array[DSLObject], mapping_like: bool) -> String:
+		var vi = 0
+		var i = 0
+		while i < fmt.length():
+			if fmt[i] != "%":
+				i += 1
+				continue
+			if i + 1 < fmt.length() and fmt[i + 1] == "%":
+				i += 2
+				continue
+			var j = i + 1
+			var is_named = false
+			if j < fmt.length() and fmt[j] == "(":
+				# 映射检查先于闭括号检查 (与 CPython PyUnicode_Format 顺序一致)
+				if not mapping_like:
+					return "TypeError: format requires a mapping"
+				var close = fmt.find(")", j + 1)
+				if close < 0:
+					return "ValueError: incomplete format key"
+				j = close + 1
+				is_named = true
+			while j < fmt.length() and "-+ 0#".contains(fmt[j]):
+				j += 1
+			while j < fmt.length() and fmt[j].is_valid_int():
+				j += 1
+			if j < fmt.length() and fmt[j] == ".":
+				j += 1
+				while j < fmt.length() and fmt[j].is_valid_int():
+					j += 1
+			if j >= fmt.length():
+				return "ValueError: incomplete format"
+			if not is_named:
+				if vi >= values.size():
+					return "TypeError: not enough arguments for format string"
+				vi += 1
+			i = j + 1
+		return ""
 
 	static func _py_float_repr(v: float) -> String:
 		if is_nan(v):
@@ -3919,7 +4025,7 @@ class DSLObject:
 		if o is DSLString:
 			return _py_str_repr(o.value)
 		if o is DSLInteger:
-			return str(o.value)
+			return _int_dec_of(o)
 		if o is DSLFloat:
 			return _py_float_repr(o.value)
 		if o is DSLComplex:
@@ -3931,10 +4037,14 @@ class DSLObject:
 		if o is DSLClass:
 			# 类对象 repr 与 str 同为 <class 'X'> 形态
 			return o._dsl_str()
+		# 用户类实例的默认 repr 用限定名 (局部类 outer.<locals>.Item 链)
+		if o.klass != null and o.klass.qualname != "":
+			return "<" + o.klass.qualname + " object>"
 		return "<" + o._type_name() + " object>"
 
 	## Python 风格的字符串 repr 转义 (静态方法) [br]
-	## 转义换行/制表/回车/反斜杠/单引号, 用于容器 (list/tuple/dict/set) 的字符串表示 [br]
+	## 转义换行/制表/回车/反斜杠/单引号与 ASCII 控制字符 (C0 全集 + DEL), 用于容器 [br]
+	## (list/tuple/dict/set) 的字符串表示 [br]
 	## [param v] 原始字符串 [br]
 	## [returns] 转义后的字符串
 	static func _py_str_repr(v: String) -> String:
@@ -3954,6 +4064,9 @@ class DSLObject:
 				r += "\\\\"
 			elif ch == q:
 				r += "\\" + q
+			elif ch.unicode_at(0) < 0x20 or ch.unicode_at(0) == 0x7f:
+				# ASCII C0 控制字符 (\x00-\x1f 除已处理的 \t\n\r) 与 DEL 按 \xNN 转义
+				r += "\\x%02x" % ch.unicode_at(0)
 			else:
 				r += ch
 		return q + r + q
@@ -4008,6 +4121,28 @@ class DSLObject:
 		return INDEX_ERR
 		
 	
+	## 序列成员判定的相等臂 (CPython list/tuple contains 语义):
+	## 先按元素左位直判, 未命中且任一侧带用户 __eq__ 时经反射分派补试
+	## (element.__eq__(item) 先行, 未实现再 item.__eq__(element))
+	## [returns] 1 命中 / 0 未命中 / -1 比较中抛出异常或挂起 (调用方透传 null)
+	func _seq_contains_eq(element: DSLObject, item: DSLObject) -> int:
+		if element._dsl_eq(item):
+			return 1
+		var ip = Interpreter.active
+		if ip == null:
+			return 0
+		var rv = ip._compare_with_reflect(element, item, "__eq__", func(): return null)
+		if ip._suspended:
+			return -1
+		if rv == null:
+			return -1 if ip.report.has_error else 0
+		if rv is DSLBool:
+			return 1 if (rv as DSLBool).value else 0
+		if rv is DSLObject:
+			return 1 if rv._dsl_bool() else 0
+		return 0
+
+
 	## 下标转换失败 (INDEX_ERR) 的收尾: report 有在途异常时不写文案 (用户 __index__ 内 raise 照常传播) [br]
 	## err_obj.last_error 已有内容时保留 (如 __index__ 返回非 int 的文案) [br]
 	## [param idx] 原下标对象 (用于错误文案的类型名) [br]
@@ -4039,6 +4174,39 @@ class DSLObject:
 				return null
 			return idx
 		return DSLInteger.pooled(i)
+
+	## 序列下标实参归一 (pop/insert 用): bool 按 int, 大数按 CPython 报 OverflowError, [br]
+	## 缺省用 fallback; 出错时置 last_error 并返回哨兵值
+	func _seq_index_arg(args: Array[DSLObject], idx: int, fallback: int) -> int:
+		if idx >= args.size():
+			return fallback
+		var a = DSLObject._unwrap_dsl(args[idx])
+		if a is DSLBool:
+			return 1 if a.value else 0
+		if a is DSLInteger:
+			if (a as DSLInteger).is_big():
+				last_error = "OverflowError: Python int too large to convert to C ssize_t"
+				return -9223372036854775808
+			return a.value
+		return fallback
+
+	## 序列区间边界实参 (index 的 start/end 用): bool 按 int, 大数按 ±∞ 钳制, [br]
+	## 返回钳到 [0, maxval] 的值
+	func _bound_index_arg(args: Array[DSLObject], idx: int, fallback: int, maxval: int) -> int:
+		var v = fallback
+		if idx < args.size():
+			var a = DSLObject._unwrap_dsl(args[idx])
+			if a is DSLBool:
+				v = 1 if a.value else 0
+			elif a is DSLInteger:
+				var oi = a as DSLInteger
+				if oi.is_big():
+					v = -9223372036854775808 if oi.big_neg else 9223372036854775807
+				else:
+					v = oi.value
+		if v < 0:
+			v = max(0, v + maxval)
+		return mini(v, maxval)
 		
 	
 	## 生成算术运算类型错误 [br]
@@ -4152,6 +4320,79 @@ class DSLSlice extends DSLObject:
 			return step if step != null else DSLNone.new()
 		return super._dsl_getattribute(name)
 
+	## slice 相等 (start/stop/step 逐一比较, None 与缺省等同)
+	static func _slice_bound_eq(a, b) -> bool:
+		if a == null or a is DSLNone:
+			return b == null or b is DSLNone
+		if b == null or b is DSLNone:
+			return false
+		return a._dsl_eq(b)
+
+	func _dsl_eq(other: DSLObject) -> bool:
+		var rhs = DSLObject._unwrap_dsl(other)
+		if not (rhs is DSLSlice):
+			return false
+		var os = rhs as DSLSlice
+		return _slice_bound_eq(start, os.start) and _slice_bound_eq(stop, os.stop) and _slice_bound_eq(step, os.step)
+
+	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		if args.size() == 2:
+			return DSLBool.new(_dsl_eq(args[1]))
+		return DSLBool.new(_dsl_eq(args[0]))
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		if args.size() == 2:
+			return DSLBool.new(not _dsl_eq(args[1]))
+		return DSLBool.new(not _dsl_eq(args[0]))
+
+	## slice.indices(length) - 按长度归一化边界 (CPython slice.indices 语义)
+	func builtin_indices(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLSlice
+		var n = 0
+		if args.size() >= 2:
+			var narg = DSLObject._unwrap_dsl(args[1])
+			if narg is DSLInteger:
+				if (narg as DSLInteger).is_big():
+					last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+					return null
+				n = narg.value
+			elif narg is DSLBool:
+				n = 1 if narg.value else 0
+			else:
+				last_error = "TypeError: 'slice.indices()' argument must be an integer"
+				return null
+		var pstep = 1
+		if self_obj.step != null and not (self_obj.step is DSLNone):
+			pstep = _seq_index_int(self_obj.step, self_obj)
+			if pstep == DSLObject.INDEX_ERR:
+				return null
+		if pstep == 0:
+			last_error = "ValueError: slice step cannot be zero"
+			return null
+		var pstart = 0 if pstep > 0 else n - 1
+		var pstop = n if pstep > 0 else -1
+		if self_obj.start != null and not (self_obj.start is DSLNone):
+			pstart = _seq_index_int(self_obj.start, self_obj)
+			if pstart == DSLObject.INDEX_ERR:
+				return null
+			if pstart < 0:
+				pstart += n
+			if pstep > 0:
+				pstart = clampi(pstart, 0, n)
+			else:
+				pstart = clampi(pstart, -1, n - 1)
+		if self_obj.stop != null and not (self_obj.stop is DSLNone):
+			pstop = _seq_index_int(self_obj.stop, self_obj)
+			if pstop == DSLObject.INDEX_ERR:
+				return null
+			if pstop < 0:
+				pstop += n
+			if pstep > 0:
+				pstop = clampi(pstop, 0, n)
+			else:
+				pstop = clampi(pstop, -1, n - 1)
+		return DSLTuple.new([DSLInteger.pooled(pstart), DSLInteger.pooled(pstop), DSLInteger.pooled(pstep)])
+
 ## DSL 布尔类型, 对应 Python bool, 表示 true 和 false
 class DSLBool extends DSLObject:
 	## 底层的布尔值
@@ -4176,7 +4417,11 @@ class DSLBool extends DSLObject:
 		if other is DSLBool:
 			return DSLBool.new(l == (1 if other.value else 0))
 		if other is DSLInteger:
-			return DSLBool.new(l == other.value)
+			# 大数形态的 value 未定义, 经大数比较分派
+			var oi = other as DSLInteger
+			if oi.is_big():
+				return DSLInteger.pooled(l)._cmp_big(oi, "==")
+			return DSLBool.new(l == oi.value)
 		if other is DSLFloat:
 			return DSLBool.new(float(l) == other.value)
 		return DSLBool.new(false)
@@ -4205,7 +4450,11 @@ class DSLBool extends DSLObject:
 		if other is DSLBool:
 			return value == other.value
 		if other is DSLInteger:
-			return (1 if value else 0) == other.value
+			# 大数形态的 value 未定义, 经大数比较分派
+			var oi = other as DSLInteger
+			if oi.is_big():
+				return DSLInteger.pooled(1 if value else 0)._cmp_big(oi, "==").value
+			return (1 if value else 0) == oi.value
 		if other is DSLFloat:
 			return float(1 if value else 0) == other.value
 		return false
@@ -4224,7 +4473,7 @@ class DSLBool extends DSLObject:
 		if uo is DSLComplex and (op == "+" or op == "-" or op == "*" or op == "/" or op == "**"):
 			var op_map = {"+": "magic_add", "-": "magic_sub", "*": "magic_mul", "/": "magic_div", "**": "magic_pow"}
 			return DSLComplex.delegate(op_map[op], self, uo)
-		# 以 args[0] 为左操作数 (类级描述符经 proto 绑定调用时 self 是 proto, I2-73)
+		# 以 args[0] 为左操作数 (类级描述符经 proto 绑定调用时 self 是 proto)
 		var lhs = (args[0] as DSLBool)._as_int()
 		var rhs = args[1]
 		if rhs is DSLBool:
@@ -4232,9 +4481,15 @@ class DSLBool extends DSLObject:
 		var a = lhs._promote(rhs, op)
 		if a[0] == null:
 			return null
-		# 大数操作数分派 (二元算术结果恒为 int/float, bool 不折叠)
-		if a[1] is DSLInteger and (lhs.is_big() or (a[1] as DSLInteger).is_big()):
-			return lhs._binop_big(a[1], op)
+		# 大数操作数分派 (二元算术结果恒为 int/float, bool 不折叠) [br]
+		# 幂例外: |底数| <= 1 时大数指数结果平凡 (0/1), 由 match 分支直接给出; [br]
+		# 大数路径的错误写在快路径 lhs (驻留池共享对象) 上, 失败时搬回自身通道
+		if a[1] is DSLInteger and (a[1] as DSLInteger).is_big() and op != "**":
+			var r_big = lhs._binop_big(a[1], op)
+			if r_big == null:
+				last_error = lhs.last_error
+				lhs.last_error = ""
+			return r_big
 		match op:
 			"+":
 				return DSLInteger.pooled(a[1].value + lhs.value) if a[1] is DSLInteger else DSLFloat.new(float(lhs.value) + a[1].value)
@@ -4252,14 +4507,20 @@ class DSLBool extends DSLObject:
 				return DSLFloat.new(float(lhs.value) / float(a[1].value))
 			"//":
 				if a[1].value == 0:
-					last_error = "ZeroDivisionError: integer division or modulo by zero"
+					if a[1] is DSLFloat:
+						last_error = "ZeroDivisionError: float floor division by zero"
+					else:
+						last_error = "ZeroDivisionError: integer division or modulo by zero"
 					return null
 				if a[1] is DSLFloat:
 					return DSLFloat.new(floor(float(lhs.value) / a[1].value))
 				return DSLInteger.pooled(DSLInteger._py_floordiv(lhs.value, int(a[1].value)))
 			"%":
 				if a[1].value == 0:
-					last_error = "ZeroDivisionError: integer modulo by zero"
+					if a[1] is DSLFloat:
+						last_error = "ZeroDivisionError: float modulo"
+					else:
+						last_error = "ZeroDivisionError: integer modulo by zero"
 					return null
 				if a[1] is DSLFloat:
 					var bf = float(lhs.value)
@@ -4267,9 +4528,24 @@ class DSLBool extends DSLObject:
 				return DSLInteger.pooled(DSLInteger._py_mod(lhs.value, int(a[1].value)))
 			"**":
 				if a[1] is DSLInteger:
-					if a[1].value < 0:
-						return DSLFloat.new(pow(float(lhs.value), float(a[1].value)))
-					return DSLInteger.pooled(int(pow(float(lhs.value), float(a[1].value))))
+					var bi = a[1] as DSLInteger
+					if bi.is_big():
+						# 大数指数: |底数| <= 1 时结果平凡 (CPython 同型)
+						if lhs.value == 0:
+							return DSLInteger.pooled(0)
+						return DSLFloat.new(1.0) if bi.big_neg else DSLInteger.pooled(1)
+					if bi.value < 0:
+						if lhs.value == 0:
+							last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
+							return null
+						return DSLFloat.new(1.0)
+					# 任意底数的 0 次幂为 1 (CPython: False ** 0 == 1, 0 ** 0 == 1)
+					if bi.value == 0:
+						return DSLInteger.pooled(1)
+					return DSLInteger.pooled(lhs.value)
+				if lhs.value == 0 and a[1].value < 0.0:
+					last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
+					return null
 				return DSLFloat.new(pow(float(lhs.value), a[1].value))
 		return null
 
@@ -4294,7 +4570,7 @@ class DSLBool extends DSLObject:
 	func magic_pow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return _bool_binary(args, "**")
 
-	## 一元运算: 同样按整数语义处理 (以 args[0] 计, 兼容类级描述符绑定调用, I2-73)
+	## 一元运算: 同样按整数语义处理 (以 args[0] 计, 兼容类级描述符绑定调用)
 	func magic_neg(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLInteger.pooled(- (1 if (args[0] as DSLBool).value else 0))
 
@@ -4313,7 +4589,7 @@ class DSLBool extends DSLObject:
 			return _arithmetic_type_error(op, rhs)
 		var rhsi = rhs as DSLInteger
 		if rhsi.is_big():
-			# 与大数的位运算走整数路径 (结果恒为 int); 左操作数以 args[0] 计 (I2-73)
+			# 与大数的位运算走整数路径 (结果恒为 int), 左操作数以 args[0] 计
 			return (args[0] as DSLBool)._as_int()._binop_big(rhsi, op)
 		var l = 1 if (args[0] as DSLBool).value else 0
 		var res = 0
@@ -4322,14 +4598,20 @@ class DSLBool extends DSLObject:
 				if rhs.value < 0:
 					last_error = "ValueError: negative shift count"
 					return null
-				if l != 0 and rhs.value >= 63:
-					last_error = "OverflowError: integer left shift exceeds 64-bit range"
-					return null
+				# 0 左移任意位恒为 0 (避免宿主巨移位的未定义形态)
+				if l == 0:
+					return DSLInteger.pooled(0)
+				# 结果超 int64: 走大数路径 (CPython 为任意精度)
+				if rhs.value >= 63:
+					return (args[0] as DSLBool)._as_int()._binop_big(rhsi, "<<")
 				res = l << rhs.value
 			">>":
 				if rhs.value < 0:
 					last_error = "ValueError: negative shift count"
 					return null
+				# 宿主位移 >= 64 位回绕: bool 右移 >= 64 恒为 0 (CPython 同)
+				if l == 0 or rhs.value >= 64:
+					return DSLInteger.pooled(0)
 				res = l >> rhs.value
 			"&":
 				res = l & rhs.value
@@ -4364,11 +4646,15 @@ class DSLBool extends DSLObject:
 		if rhs is DSLBool:
 			rhs = (rhs as DSLBool)._as_int()
 		if rhs is DSLInteger:
+			var rhsi = rhs as DSLInteger
+			# 大数形态的 value 未定义, 经大数比较分派
+			if rhsi.is_big():
+				return DSLInteger.pooled(l)._cmp_big(rhsi, op)
 			match op:
-				"<": return DSLBool.new(l < rhs.value)
-				">": return DSLBool.new(l > rhs.value)
-				"<=": return DSLBool.new(l <= rhs.value)
-				">=": return DSLBool.new(l >= rhs.value)
+				"<": return DSLBool.new(l < rhsi.value)
+				">": return DSLBool.new(l > rhsi.value)
+				"<=": return DSLBool.new(l <= rhsi.value)
+				">=": return DSLBool.new(l >= rhsi.value)
 		if rhs is DSLFloat:
 			match op:
 				"<": return DSLBool.new(float(l) < rhs.value)
@@ -4482,7 +4768,7 @@ class DSLExceptionDescriptor extends DSLObject:
 ## 表示约定: (neg: bool, limbs: Array[int]) —— limbs 为 32 位一组的**小端幅值** [br]
 ## (下标 0 为最低位), 规范化后无前导零 limb; 零表示为空 limbs 且 neg=false [br]
 ## 全部算法与 CPython longobject 同型: floor 除法 / 余数符号随除数 / 无限二补数位运算 / [br]
-## hash 模 2^61-1。调用方 (DSLInteger) 负责快路径分派与 DSLObject 包装
+## hash 模 2^61-1, 调用方 (DSLInteger) 负责快路径分派与 DSLObject 包装
 class DSLBigInt:
 	const BASE := 4294967296
 	const MASK := 4294967295
@@ -4850,6 +5136,50 @@ class DSLBigInt:
 			return _mag_divmod_short(a, b[0])
 		return _mag_divmod_knuth(a, b)
 
+	## 整数真除: 商 53 位半到偶单次舍入 (CPython long_true_divide 同型) [br]
+	## 两侧各转 double 再相除会对商双重舍入 (快路径值超 53 位时 float 已丢精度), [br]
+	## 此处取 q * 2^S 的 54~55 位整商与粘位余数, 一次舍入出 double [br]
+	## [returns] [true, 商值]; 商超 double 上界返回 [false, 0.0] (调用方报 OverflowError)
+	static func true_divide(neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> Array:
+		var neg = neg_a != neg_b
+		if mag_is_zero(a):
+			if neg:
+				var zz := 0.0
+				return [true, -zz]
+			return [true, 0.0]
+		# S 取 54 与位长差之差: 整商 Q = floor(q * 2^S) 恰为 54~55 位, 粘位 t = R/D ∈ [0, 1)
+		var s = 54 - (mag_bitlen(a) - mag_bitlen(b))
+		var dm: Array
+		if s >= 0:
+			dm = mag_divmod(mag_shl(a, s), b)
+		else:
+			dm = mag_divmod(a, mag_shl(b, -s))
+		var q_i: int = to_i64(false, dm[0])
+		var n = 54 if q_i < 18014398509481984 else 55
+		var drop = n - 53
+		var keep = q_i >> drop
+		var low = q_i & ((1 << drop) - 1)
+		var half = 1 << (drop - 1)
+		var sticky = not mag_is_zero(dm[1])
+		var m = keep
+		if low > half or (low == half and sticky):
+			m = keep + 1
+		elif low == half and (keep & 1) == 1:
+			m = keep + 1
+		# 结果 = m * 2^(drop - S): 逐段乘精确的 2 的幂 (宿主无 ldexp, 一步 pow 会下溢为 0)
+		var f = float(m)
+		var e: int = drop - s
+		while e > 1000:
+			f *= pow(2.0, 1000.0)
+			e -= 1000
+		while e < -1000:
+			f *= pow(2.0, -1000.0)
+			e += 1000
+		f *= pow(2.0, float(e))
+		if is_inf(f):
+			return [false, 0.0]
+		return [true, -f if neg else f]
+
 	## 带符号 floor 除法: 返回 [neg_q, q, neg_r, r]; 余数符号随除数 (CPython 语义)
 	static func divmod(neg_a: bool, a: Array[int], neg_b: bool, b: Array[int]) -> Array:
 		var dm = mag_divmod(a, b)
@@ -4987,6 +5317,11 @@ class DSLBigInt:
 		var lower = ch.to_lower()
 		if lower >= "a" and lower <= "z":
 			return lower.unicode_at(0) - 87
+		# Nd 十进制数字 (如阿拉伯-印度数字) 按码位区间定位数值
+		var cp = ch.unicode_at(0)
+		for r in DSLString._ND_RANGES:
+			if cp >= r[0] and cp <= r[1]:
+				return cp - r[0]
 		return -1
 
 	## 指定进制数字串 -> [neg, limbs] (调用方已校验字符合法性与下划线)
@@ -5427,25 +5762,23 @@ class DSLInteger extends DSLObject:
 				return null
 			return DSLFloat.new(a[0].value / a[1].value)
 		var oi = a[1] as DSLInteger
-		# 大数真除 (零判断移后, 大数的 value 未定义)
-		if self_obj.is_big() or oi.is_big():
-			if oi.is_big() or oi.value != 0:
-				if oi._pair()[1].is_empty():
-					self_obj.last_error = "ZeroDivisionError: division by zero"
-					return null
-			var top = self_obj._to_float_checked()
-			if top == null:
-				self_obj.last_error = "OverflowError: integer division result too large for a float"
-				return null
-			var oof = oi._to_float_checked()
-			if oof == null:
-				self_obj.last_error = "OverflowError: integer division result too large for a float"
-				return null
-			return DSLFloat.new(top / oof)
-		if oi.value == 0:
+		# 零判断以幅值 limbs 计 (大数形态的 value 未定义, 快路径 0 的 limbs 为空)
+		if oi._pair()[1].is_empty():
 			self_obj.last_error = "ZeroDivisionError: division by zero"
 			return null
-		return DSLFloat.new(float(self_obj.value) / float(oi.value))
+		# 双方绝对值均低于 2^53: double 精确承载两个操作数, 宿主除法即单次正确舍入
+		if not self_obj.is_big() and not oi.is_big() \
+				and self_obj.value > -9007199254740992 and self_obj.value < 9007199254740992 \
+				and oi.value > -9007199254740992 and oi.value < 9007199254740992:
+			return DSLFloat.new(float(self_obj.value) / float(oi.value))
+		# 精确真除: 54~55 位整商 + 粘位余数一次舍入 (CPython long_true_divide 同型)
+		var pa = self_obj._pair()
+		var pb = oi._pair()
+		var td = DSLBigInt.true_divide(pa[0], pa[1], pb[0], pb[1])
+		if not td[0]:
+			self_obj.last_error = "OverflowError: integer division result too large for a float"
+			return null
+		return DSLFloat.new(td[1])
 	
 	## 一元正号: 数值本身 (CPython 中 +x 即 x)
 	func magic_pos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -5477,7 +5810,19 @@ class DSLInteger extends DSLObject:
 			var sf = self_obj._to_float_checked()
 			if sf == null:
 				return null
-			return DSLFloat.new(floor(sf / other.value))
+			# CPython float_divmod (先取 Python 语义 mod 再求商, 见 DSLFloat.magic_floordiv)
+			var m = fmod(sf, other.value)
+			if m != 0.0 and ((other.value < 0.0) != (m < 0.0)):
+				m += other.value
+			var d = (sf - m) / other.value
+			if d == 0.0:
+				var zd = sf / other.value
+				var zz := 0.0
+				return DSLFloat.new(-zz if 1.0 / zd < 0.0 else zz)
+			var fd = floor(d)
+			if d - fd > 0.5:
+				fd += 1.0
+			return DSLFloat.new(fd)
 		self_obj._arithmetic_type_error("//", other)
 		return null
 
@@ -5507,7 +5852,11 @@ class DSLInteger extends DSLObject:
 			var sf = self_obj._to_float_checked()
 			if sf == null:
 				return null
-			return DSLFloat.new(sf - other.value * floor(sf / other.value))
+			# CPython float_mod 算法 (精确 fmod 后按除数符号校正)
+			var m = fmod(sf, other.value)
+			if m != 0.0 and ((other.value < 0.0) != (m < 0.0)):
+				m += other.value
+			return DSLFloat.new(m)
 		self_obj._arithmetic_type_error("%", other)
 		return null
 
@@ -5587,6 +5936,11 @@ class DSLInteger extends DSLObject:
 			if bf3 == 0.0 and other.value < 0.0:
 				self_obj.last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
 				return null
+			# 负底数非整值指数: CPython 升格 complex (主值分支 arg = pi), 宿主 pow 会给出 nan
+			if bf3 < 0.0 and other.value != floor(other.value):
+				var mag_i = pow(-bf3, other.value)
+				var ang_i = PI * other.value
+				return DSLComplex.new(mag_i * cos(ang_i), mag_i * sin(ang_i))
 			return DSLFloat.new(pow(bf3, other.value))
 		self_obj._arithmetic_type_error("** or pow()", other)
 		return null
@@ -5597,7 +5951,11 @@ class DSLInteger extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		# bool 是 int 的子类: 1 == True 为真 (CPython 语义)
 		if other is DSLComplex:
-			return DSLBool.new(other.imag == 0.0 and self_obj._cmp_with_float(other.real) == 0)
+			if other.imag != 0.0:
+				return DSLBool.new(false)
+			# CPython 把 int 与 complex 的实部按精确比较 (与 int==float 同语义,
+			# 10**100 与 1e100+0j 不相等: 10^100 的精确值 ≠ 1e100 的 double 近似)
+			return DSLBool.new(self_obj._cmp_with_float(other.real) == 0)
 		if other is DSLInteger:
 			var oi = other as DSLInteger
 			if self_obj.is_big() or oi.is_big():
@@ -5617,7 +5975,10 @@ class DSLInteger extends DSLObject:
 		var other = args[1]
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLComplex:
-			return DSLBool.new(not (other.imag == 0.0 and self_obj._cmp_with_float(other.real) == 0))
+			if other.imag != 0.0:
+				return DSLBool.new(true)
+			# 与 complex 实部的精确比较 (与 int==float 同语义, 见 magic_eq)
+			return DSLBool.new(self_obj._cmp_with_float(other.real) != 0)
 		if other is DSLInteger:
 			var oi = other as DSLInteger
 			if self_obj.is_big() or oi.is_big():
@@ -5645,7 +6006,8 @@ class DSLInteger extends DSLObject:
 				return self_obj._cmp_big(oi, "<")
 			return DSLBool.new(self_obj.value < oi.value)
 		if other is DSLFloat:
-			return DSLBool.new(self_obj._cmp_with_float(other.value) < 0)
+			# 无序 (-2 哨兵, NaN 参与) 时全部序比较为 False (CPython IEEE 语义)
+			return DSLBool.new(self_obj._cmp_with_float(other.value) == -1)
 		self_obj._comparison_type_error("<", other)
 		return DSLBool.new(false)
 
@@ -5681,7 +6043,9 @@ class DSLInteger extends DSLObject:
 				return self_obj._cmp_big(oi, "<=")
 			return DSLBool.new(self_obj.value <= oi.value)
 		if other is DSLFloat:
-			return DSLBool.new(self_obj._cmp_with_float(other.value) <= 0)
+			# 无序 (-2 哨兵, NaN 参与) 时全部序比较为 False (CPython IEEE 语义)
+			var le_c = self_obj._cmp_with_float(other.value)
+			return DSLBool.new(le_c == -1 or le_c == 0)
 		self_obj._comparison_type_error("<=", other)
 		return DSLBool.new(false)
 
@@ -5822,9 +6186,9 @@ class DSLInteger extends DSLObject:
 		return self_obj._arithmetic_type_error("&", other)
 
 	## 带 int_max_str_digits 上限的十进制转换 (CPython 3.11+ 对齐): [br]
-	## 超限时经活动解释器抛 ValueError 并返回空串; 解释器未激活 (宿主直调) 或 [br]
-	## 上限为 0 时不限制。超限判定先以位长估算 (log10(2) 整数低估值) 在 O(n²) 的 [br]
-	## to_dec 之前提前中止, 避免对巨数浪费计算; 估算未超时以转换结果的真实位数精查
+	## 超限时经活动解释器抛 ValueError 并返回空串, 解释器未激活 (宿主直调) 或上限为 0 时不限制 [br]
+	## 超限判定先以位长估算 (log10(2) 整数低估值) 在 O(n²) 的 [br]
+	## to_dec 之前提前中止, 避免对巨数浪费计算, 估算未超时以转换结果的真实位数精查
 	static func _dec_str_checked(obj: DSLInteger) -> String:
 		if not obj.is_big():
 			return str(obj.value)
@@ -5970,42 +6334,71 @@ class DSLInteger extends DSLObject:
 			v = v >> 1
 		return DSLInteger.pooled(bits)
 
+	## int.conjugate() 返回自身 (CPython: 实数的共轭是自身)
+	func builtin_conjugate(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return args[0]
+
 	func builtin_to_bytes(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
-		var v = self_obj.value
 		var mag_limbs: Array[int] = []
 		var v_neg = false
 		if self_obj.is_big():
 			mag_limbs = self_obj.big_limbs.duplicate()
 			v_neg = self_obj.big_neg
 		else:
-			mag_limbs = DSLBigInt.mag_of_i64_abs(v)
-			v_neg = v < 0
+			mag_limbs = DSLBigInt.mag_of_i64_abs(self_obj.value)
+			v_neg = self_obj.value < 0
 		var length = args[1].value if args.size() >= 2 and args[1] is DSLInteger else 1
 		var byteorder = args[2].value if args.size() >= 3 and args[2] is DSLString else "big"
 		var signed = false
 		if kwargs.has("signed") and kwargs["signed"] is DSLBool:
 			signed = kwargs["signed"].value
+		if byteorder != "big" and byteorder != "little":
+			last_error = "ValueError: byteorder must be either 'little' or 'big'"
+			return null
+		if length < 0:
+			last_error = "ValueError: length argument must be non-negative"
+			return null
 		if v_neg and not signed:
 			last_error = "OverflowError: can't convert negative int to unsigned"
 			return null
-		# 幅值须落在 length 字节内 (带符号再扣一位); 大数按位长比较, 快路径按 2^limit 比
 		var need_bits = DSLBigInt.mag_bitlen(mag_limbs)
-		var cap_bits = length * 8 - (1 if signed else 0)
-		if need_bits > cap_bits or (not self_obj.is_big() and self_obj.value == -9223372036854775807 - 1 and signed and length * 8 < 64):
-			last_error = "OverflowError: int too big to convert"
-			return null
+		var cap = length * 8
+		# 输出按 L 字节二补码语义: 负数 = 2^(8L) - |v|, 逐字节取反 +1 构造 (不经 2^(8L) 大数中间量)
 		var out: Array[int] = []
-		var i = 0
-		while i < length:
-			var limb = mag_limbs[i / 4] if i / 4 < mag_limbs.size() else 0
-			out.append((limb >> ((i % 4) * 8)) & 0xFF)
-			i += 1
+		if v_neg:
+			# 负数合法域: |v| <= 2^(8L-1), 边界值 |v| == 2^(8L-1) 单独放行
+			var fits = need_bits <= cap - 1
+			if not fits and need_bits == cap:
+				var one_l: Array[int] = [1]
+				fits = DSLBigInt.mag_cmp(mag_limbs, DSLBigInt.mag_shl(one_l, cap - 1)) == 0
+			if not fits:
+				last_error = "OverflowError: int too big to convert"
+				return null
+			var i2 = 0
+			while i2 < length:
+				var limb = mag_limbs[i2 / 4] if i2 / 4 < mag_limbs.size() else 0
+				out.append((~(limb >> ((i2 % 4) * 8))) & 0xFF)
+				i2 += 1
+			var carry = 1
+			var j = 0
+			while j < length and carry != 0:
+				var s2 = out[j] + carry
+				out[j] = s2 & 0xFF
+				carry = s2 >> 8
+				j += 1
+		else:
+			# 非负合法域: v < 2^(8L) (有符号时再扣一位)
+			if need_bits > cap - (1 if signed else 0):
+				last_error = "OverflowError: int too big to convert"
+				return null
+			var i = 0
+			while i < length:
+				var limb = mag_limbs[i / 4] if i / 4 < mag_limbs.size() else 0
+				out.append((limb >> ((i % 4) * 8)) & 0xFF)
+				i += 1
 		if byteorder == "big":
 			out.reverse()
-		elif byteorder != "little":
-			last_error = "ValueError: byteorder must be either 'little' or 'big'"
-			return null
 		return DSLBytes.new(out)
 
 	func builtin_hex(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -6111,10 +6504,23 @@ class DSLFloat extends DSLObject:
 			if denom == 0:
 				self_obj.last_error = "ZeroDivisionError: float floor division by zero"
 				return null
-			return DSLFloat.new(floor(self_obj.value / denom))
+			# CPython float_divmod: 先得 Python 语义的 mod (符号随除数), 商 = (a - mod) / b
+			# 一次舍入后 floor + 半值校正 (floor(a/b) 先除后取整在大数量级下双重舍入错值)
+			var m = fmod(self_obj.value, denom)
+			if m != 0.0 and ((denom < 0.0) != (m < 0.0)):
+				m += denom
+			var d = (self_obj.value - m) / denom
+			if d == 0.0:
+				var zd = self_obj.value / denom
+				var zz := 0.0
+				return DSLFloat.new(-zz if 1.0 / zd < 0.0 else zz)
+			var fd = floor(d)
+			if d - fd > 0.5:
+				fd += 1.0
+			return DSLFloat.new(fd)
 		self_obj._arithmetic_type_error("//", other)
 		return null
-	
+
 	func magic_mod(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var other = args[1]
@@ -6126,8 +6532,11 @@ class DSLFloat extends DSLObject:
 			if v == 0:
 				self_obj.last_error = "ZeroDivisionError: float modulo"
 				return null
-			# CPython 的 float % 符号跟随除数 (fmod 是 C 语义, 符号跟随被除数)
-			return DSLFloat.new(self_obj.value - v * floor(self_obj.value / v))
+			# CPython float_mod: 精确 fmod 后按除数符号校正 (a - b*floor(a/b) 的双舍入错值)
+			var m = fmod(self_obj.value, v)
+			if m != 0.0 and ((v < 0.0) != (m < 0.0)):
+				m += v
+			return DSLFloat.new(m)
 		self_obj._arithmetic_type_error("%", other)
 		return null
 	
@@ -6145,6 +6554,11 @@ class DSLFloat extends DSLObject:
 			if self_obj.value == 0.0 and pf < 0.0:
 				self_obj.last_error = "ZeroDivisionError: 0.0 cannot be raised to a negative power"
 				return null
+			# 负底数非整值指数: CPython 升格 complex (主值分支 arg = pi), 宿主 pow 会给出 nan
+			if self_obj.value < 0.0 and pf != floor(pf):
+				var mag_f = pow(-self_obj.value, pf)
+				var ang_f = PI * pf
+				return DSLComplex.new(mag_f * cos(ang_f), mag_f * sin(ang_f))
 			return DSLFloat.new(pow(self_obj.value, pf))
 		self_obj._arithmetic_type_error("** or pow()", other)
 		return null
@@ -6193,7 +6607,8 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return DSLBool.new(self_obj.value > other.value)
 		if other is DSLInteger:
-			return DSLBool.new((other as DSLInteger)._cmp_with_float(self_obj.value) < 0)
+			# 无序 (-2 哨兵, NaN 参与) 时全部序比较为 False (CPython IEEE 语义)
+			return DSLBool.new((other as DSLInteger)._cmp_with_float(self_obj.value) == -1)
 		self_obj._comparison_type_error(">", other)
 		return DSLBool.new(false)
 
@@ -6219,7 +6634,9 @@ class DSLFloat extends DSLObject:
 		if other is DSLFloat:
 			return DSLBool.new(self_obj.value >= other.value)
 		if other is DSLInteger:
-			return DSLBool.new((other as DSLInteger)._cmp_with_float(self_obj.value) <= 0)
+			# 无序 (-2 哨兵, NaN 参与) 时全部序比较为 False (CPython IEEE 语义)
+			var ge_c = (other as DSLInteger)._cmp_with_float(self_obj.value)
+			return DSLBool.new(ge_c == -1 or ge_c == 0)
 		self_obj._comparison_type_error(">=", other)
 		return DSLBool.new(false)
 	
@@ -6324,13 +6741,23 @@ class DSLFloat extends DSLObject:
 
 	func builtin_is_integer(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var v = args[0].value
-		return DSLBool.new(v == floor(v) and not is_nan(v))
+		# 无穷与 NaN 均非整数 (inf == floor(inf) 成立, 需显式排除)
+		return DSLBool.new(not is_nan(v) and not is_inf(v) and v == floor(v))
+
+	## float.conjugate() 返回自身 (CPython: 实数的共轭是自身)
+	func builtin_conjugate(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return args[0]
 
 	func builtin_as_integer_ratio(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var v = args[0].value
-		if is_inf(v) or is_nan(v):
-			last_error = "OverflowError: cannot convert %s to integer ratio" % ("Infinity" if is_inf(v) else "NaN")
+		if is_nan(v):
+			last_error = "ValueError: cannot convert NaN to integer ratio"
 			return null
+		if is_inf(v):
+			last_error = "OverflowError: cannot convert Infinity to integer ratio"
+			return null
+		if v == 0.0:
+			return DSLTuple.new([DSLInteger.pooled(0), DSLInteger.pooled(1)])
 		var neg = v < 0.0
 		var m = abs(v)
 		var e = 0
@@ -6346,15 +6773,14 @@ class DSLFloat extends DSLObject:
 		while mant != 0 and mant % 2 == 0:
 			mant /= 2
 			exp += 1
-		var num = mant if not neg else -mant
-		var den = 1
-		while exp < 0:
-			den *= 2
-			exp += 1
-		while exp > 0:
-			num *= 2
-			exp -= 1
-		return DSLTuple.new([DSLInteger.pooled(num), DSLInteger.pooled(den)])
+		# 缩放经大数承载 (int64 连乘 2 在 |exp| 超界时回绕: 2.0**63 -> INT64_MIN, 5e-324 -> (1, 0))
+		var one_l: Array[int] = [1]
+		if exp >= 0:
+			var num_mag = DSLBigInt.mag_shl(DSLBigInt.mag_of_i64_abs(mant), exp)
+			var num_big = DSLInteger.from_big(neg, num_mag)
+			return DSLTuple.new([num_big, DSLInteger.pooled(1)])
+		var den_big = DSLInteger.from_big(false, DSLBigInt.mag_shl(one_l, -exp))
+		return DSLTuple.new([DSLInteger.pooled(mant if not neg else -mant), den_big])
 
 	## IEEE 754 双精度的十六进制浮点字符串 (1 位隐含整数 + 13 位十六进制小数 + 2 的幂指数)
 	func builtin_hex(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -6421,10 +6847,15 @@ class DSLComplex extends DSLObject:
 	func _type_name() -> String:
 		return "complex"
 
-	## 提取数值实参的实部候选 (int/float/bool -> float, 其余 null)
+	## 提取数值实参的实部候选 (int/float/bool -> float, 其余 null) [br]
+	## 大数经 53 位舍入转 double, 越界时返回 null 且错误写在实参对象的通道上
 	static func _num_part(o: DSLObject) -> Variant:
 		if o is DSLInteger:
-			return float(o.value)
+			var oi = o as DSLInteger
+			# 大数形态的 value 未定义, 直接读会把全量大数当 0
+			if oi.is_big():
+				return oi._to_float_checked()
+			return float(oi.value)
 		if o is DSLFloat:
 			return o.value
 		if o is DSLBool:
@@ -6435,6 +6866,9 @@ class DSLComplex extends DSLObject:
 	## 把 self 升格为 complex 后调用其对应算术/相等方法
 	static func delegate(method: String, self_obj: DSLObject, other: DSLObject) -> DSLObject:
 		var v = _num_part(self_obj)
+		if v == null:
+			# 大数左操作数转 double 越界: 错误已写在 self_obj 通道, 由常规抛错路径接手
+			return null
 		var cself = DSLComplex.new(float(v), 0.0)
 		var res = cself.call(method, [cself, other] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		# 委托产生的错误 (如除零) 写回原左操作数的错误通道, 由常规抛错路径接手
@@ -6493,6 +6927,11 @@ class DSLComplex extends DSLObject:
 		var self_obj = args[0] as DSLComplex
 		var other = DSLObject._unwrap_dsl(args[1])
 		var r2 = _num_part(other)
+		if r2 == null and other.last_error != "":
+			# 大数实参转 double 越界 (CPython OverflowError 同型)
+			self_obj.last_error = other.last_error
+			other.last_error = ""
+			return null
 		if r2 != null:
 			return DSLComplex.new(self_obj.real + float(r2), self_obj.imag)
 		if other is DSLComplex:
@@ -6503,6 +6942,10 @@ class DSLComplex extends DSLObject:
 		var self_obj = args[0] as DSLComplex
 		var other = DSLObject._unwrap_dsl(args[1])
 		var r2 = _num_part(other)
+		if r2 == null and other.last_error != "":
+			self_obj.last_error = other.last_error
+			other.last_error = ""
+			return null
 		if r2 != null:
 			return DSLComplex.new(self_obj.real - float(r2), self_obj.imag)
 		if other is DSLComplex:
@@ -6513,6 +6956,10 @@ class DSLComplex extends DSLObject:
 		var self_obj = args[0] as DSLComplex
 		var other = DSLObject._unwrap_dsl(args[1])
 		var r2 = _num_part(other)
+		if r2 == null and other.last_error != "":
+			self_obj.last_error = other.last_error
+			other.last_error = ""
+			return null
 		if r2 != null:
 			return DSLComplex.new(self_obj.real * float(r2), self_obj.imag * float(r2))
 		if other is DSLComplex:
@@ -6527,17 +6974,29 @@ class DSLComplex extends DSLObject:
 		var self_obj = args[0] as DSLComplex
 		var other = DSLObject._unwrap_dsl(args[1])
 		var r2 = _num_part(other)
+		if r2 == null and other.last_error != "":
+			self_obj.last_error = other.last_error
+			other.last_error = ""
+			return null
 		if r2 != null:
 			if float(r2) == 0.0:
 				last_error = "ZeroDivisionError: complex division by zero"
 				return null
 			return DSLComplex.new(self_obj.real / float(r2), self_obj.imag / float(r2))
 		if other is DSLComplex:
-			var den = other.real * other.real + other.imag * other.imag
-			if den == 0.0:
+			# Smith 缩放除法 (CPython _C 同型): 平方和公式在 1e300 / 1e200 类量级下中间量溢出
+			var b_real = other.real
+			var b_imag = other.imag
+			if b_real == 0.0 and b_imag == 0.0:
 				last_error = "ZeroDivisionError: complex division by zero"
 				return null
-			return DSLComplex.new((self_obj.real * other.real + self_obj.imag * other.imag) / den, (self_obj.imag * other.real - self_obj.real * other.imag) / den)
+			if absf(b_real) >= absf(b_imag):
+				var ratio = b_imag / b_real
+				var denom = b_real + b_imag * ratio
+				return DSLComplex.new((self_obj.real + self_obj.imag * ratio) / denom, (self_obj.imag - self_obj.real * ratio) / denom)
+			var ratio2 = b_real / b_imag
+			var denom2 = b_real * ratio2 + b_imag
+			return DSLComplex.new((self_obj.real * ratio2 + self_obj.imag) / denom2, (self_obj.imag * ratio2 - self_obj.real) / denom2)
 		return self_obj._binary_type_error_default(args, "/")
 
 	## 复数幂: 整数指数走重复乘法 (CPython c_powi), 其余走极坐标 (CPython c_pow)
@@ -6545,6 +7004,10 @@ class DSLComplex extends DSLObject:
 		var self_obj = args[0] as DSLComplex
 		var other = DSLObject._unwrap_dsl(args[1])
 		var r2 = _num_part(other)
+		if r2 == null and other.last_error != "":
+			self_obj.last_error = other.last_error
+			other.last_error = ""
+			return null
 		var exp_real: float
 		var exp_imag: float
 		var has_exp = true
@@ -6588,6 +7051,10 @@ class DSLComplex extends DSLObject:
 		var self_obj = args[0] as DSLComplex
 		var other = DSLObject._unwrap_dsl(args[1])
 		var r2 = _num_part(other)
+		if r2 == null and other.last_error != "":
+			self_obj.last_error = other.last_error
+			other.last_error = ""
+			return null
 		if r2 != null:
 			return DSLBool.new(self_obj.imag == 0.0 and self_obj.real == float(r2))
 		if other is DSLComplex:
@@ -6596,6 +7063,8 @@ class DSLComplex extends DSLObject:
 
 	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var eq = magic_eq(args, _kwargs)
+		if eq == null:
+			return null
 		return DSLBool.new(not eq.value)
 
 	func magic_lt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -6772,20 +7241,6 @@ class DSLString extends DSLObject:
 			values = other.items.duplicate()
 		else:
 			values = [other]
-		var specs = _percent_spec_count(fmt)
-		# 映射实参不参与个数校验 (CPython 只看键名)
-		if not _is_percent_mapping_arg(other, values) and not values.is_empty():
-			# 元组实参少于转换说明数: CPython 报 "not enough arguments"
-			if values.size() < specs:
-				self_obj.last_error = "TypeError: not enough arguments for format string"
-				return null
-			# 实参多于转换说明数: CPython 报 "not all arguments converted"
-			if values.size() > specs:
-				self_obj.last_error = "TypeError: not all arguments converted during string formatting"
-				return null
-		elif values.is_empty() and specs > 0:
-			self_obj.last_error = "TypeError: not enough arguments for format string"
-			return null
 		# CPython 快速路径: "%s" % 单个 str 返回该 str 自身 (身份语义)
 		if fmt == "%s" and values.size() == 1 and values[0] is DSLString:
 			return values[0]
@@ -6796,20 +7251,6 @@ class DSLString extends DSLObject:
 			return null
 		return DSLString.cached(formatted)
 
-	## 判断 % 的实参是否能按「映射」处理 [br]
-	## CPython 对非 str、非 tuple 且支持下标的实参不检查参数是否用尽 [br]
-	## (等价于 PyMapping_Check, 但显式排除 str) [br]
-	## [param other] 原始实参对象 [br]
-	## [param values] 已展开的实参列表 [br]
-	## [returns] 可作映射时返回 true
-	func _is_percent_mapping_arg(other: DSLObject, values: Array[DSLObject]) -> bool:
-		# 元组是「参数序列」而非映射, 始终参与参数个数校验 (空元组亦然)
-		if other is DSLTuple:
-			return false
-		if other is DSLString:
-			return false
-		return other is DSLDict or other is DSLList or other is DSLBytes or other is DSLRange
-
 	func _percent_format(fmt: String, values: Array[DSLObject]) -> String:
 		var out = ""
 		var vi = 0
@@ -6818,6 +7259,7 @@ class DSLString extends DSLObject:
 		var mapping = null
 		if values.size() == 1 and values[0] is DSLDict:
 			mapping = values[0]
+		var used_named = false
 		while i < fmt.length():
 			var ch = fmt[i]
 			if ch != '%':
@@ -6832,43 +7274,101 @@ class DSLString extends DSLObject:
 			# 命名字段: %(name)conv
 			var named = null
 			if i < fmt.length() and fmt[i] == '(':
+				# 映射检查先于闭括号检查 (CPython 扫描期顺序: 非映射实参先报 format requires a mapping)
+				if mapping == null:
+					last_error = "TypeError: format requires a mapping"
+					return ""
 				var close = fmt.find(")", i)
 				if close < 0:
-					break
+					# 未闭合的命名字段不再静默截断
+					last_error = "ValueError: incomplete format key"
+					return ""
 				var name = fmt.substr(i + 1, close - i - 1)
 				i = close + 1
-				if mapping == null:
-					break
 				var key = DSLString.new(name)
 				named = mapping._dsl_getitem(key)
 				if named == null:
-					break
+					# 缺键: 透传映射侧的 KeyError, 不再静默截断
+					if mapping.last_error != "":
+						last_error = mapping.last_error
+						mapping.last_error = ""
+					return ""
+				used_named = true
 			var flags = ""
 			while i < fmt.length() and fmt[i] in "-+ 0#":
 				flags += fmt[i]
 				i += 1
+			# 星号宽度 (*) 从实参取整数值 (bool 按 int, 大数越界报 OverflowError), 负宽=左对齐
 			var width = 0
+			if i < fmt.length() and fmt[i] == '*':
+				if vi >= values.size():
+					last_error = "TypeError: not enough arguments for format string"
+					return ""
+				var warg = DSLObject._unwrap_dsl(values[vi])
+				vi += 1
+				if not (warg is DSLInteger or warg is DSLBool):
+					last_error = "TypeError: * wants int"
+					return ""
+				if warg is DSLInteger and (warg as DSLInteger).is_big():
+					last_error = "OverflowError: Python int too large to convert to C ssize_t"
+					return ""
+				width = (1 if warg.value else 0) if warg is DSLBool else (warg as DSLInteger).value
+				i += 1
+				if width < 0:
+					width = - width
+					if flags.find("-") == -1:
+						flags += "-"
 			while i < fmt.length() and fmt[i].is_valid_int():
 				width = width * 10 + int(fmt[i])
 				i += 1
 			var precision = -1
 			if i < fmt.length() and fmt[i] == '.':
 				i += 1
-				precision = 0
-				while i < fmt.length() and fmt[i].is_valid_int():
-					precision = precision * 10 + int(fmt[i])
+				if i < fmt.length() and fmt[i] == '*':
+					if vi >= values.size():
+						last_error = "TypeError: not enough arguments for format string"
+						return ""
+					var parg = DSLObject._unwrap_dsl(values[vi])
+					vi += 1
+					if not (parg is DSLInteger or parg is DSLBool):
+						last_error = "TypeError: * wants int"
+						return ""
+					if parg is DSLInteger and (parg as DSLInteger).is_big():
+						last_error = "OverflowError: Python int too large to convert to C ssize_t"
+						return ""
+					precision = (1 if parg.value else 0) if parg is DSLBool else (parg as DSLInteger).value
 					i += 1
+				else:
+					precision = 0
+					while i < fmt.length() and fmt[i].is_valid_int():
+						precision = precision * 10 + int(fmt[i])
+						i += 1
 			if i >= fmt.length():
-				break
+				# 转换符缺失 (格式串以 % 结尾) 不再静默截断
+				last_error = "ValueError: incomplete format"
+				return ""
 			var conv = fmt[i]
 			i += 1
-			var val = named if named != null else (values[vi] if vi < values.size() else null)
+			# 未知转换符报 ValueError (CPython 扫描期)
+			if not "srdiuxXoeEfFgGac".contains(conv):
+				last_error = "ValueError: unsupported format character '%s' (0x%02x) at index %d" % [conv, conv.unicode_at(0), i - 1]
+				return ""
+			var val = named
 			if named == null:
+				# 位置实参不足: 在转换点报错 (CPython 扫描期顺序, 先于后续的截断检查)
+				if vi >= values.size():
+					last_error = "TypeError: not enough arguments for format string"
+					return ""
+				val = values[vi]
 				vi += 1
 			var one = _format_one(val, conv, width, precision, flags)
 			if last_error != "":
 				return out
 			out += one
+		# 实参未用完: 仅非命名字段形态校验 (命名字段不消费位置实参)
+		if not used_named and vi < values.size():
+			last_error = "TypeError: not all arguments converted during string formatting"
+			return ""
 		return out
 
 	## 数值格式化的浮点取值: 大数经 53 位舍入转 double, 越界报 OverflowError
@@ -6902,31 +7402,54 @@ class DSLString extends DSLObject:
 				s = r.value if r is DSLString else val._dsl_str()
 			'd', 'i', 'u':
 				is_numeric = true
-				# 大数按十进制串格式化 (带 int_max_str_digits 上限)
-				if val is DSLInteger and val.is_big():
+				if val is DSLFloat:
+					# %d 接受浮点 (截断取整), 但 NaN/inf 按 CPython 报错
+					var fvd = val.value
+					if is_nan(fvd):
+						last_error = "ValueError: cannot convert float NaN to integer"
+						return ""
+					if is_inf(fvd):
+						last_error = "OverflowError: cannot convert float infinity to integer"
+						return ""
+					s = str(int(fvd))
+				elif val is DSLInteger and val.is_big():
 					s = DSLInteger._dec_str_checked(val)
+				elif val is DSLInteger:
+					# 小整数精确十进制 (不经 float 往返, 2^53 上不失真)
+					s = str(val.value)
+				elif val is DSLBool:
+					s = str(1 if val.value else 0)
 				else:
-					s = str(int(_num(val)))
+					last_error = "TypeError: %%%s format: an integer is required, not %s" % [conv, val._type_name()]
+					return ""
 			'x', 'X':
 				is_numeric = true
 				if val is DSLInteger and val.is_big():
-					var bodyb = DSLBigInt.mag_to_base(val.big_limbs, 16)
-					s = ("-" if val.big_neg else "") + (bodyb.to_upper() if conv == 'X' else bodyb)
+					var bodyx = DSLBigInt.mag_to_base(val.big_limbs, 16)
+					s = ("-" if val.big_neg else "") + (bodyx.to_upper() if conv == 'X' else bodyx)
 					if flags.find("#") != -1:
-						s = ("-" if val.big_neg else "") + ("0X" if conv == 'X' else "0x") + bodyb
+						s = ("-" if val.big_neg else "") + ("0X" if conv == 'X' else "0x") + bodyx
+				elif val is DSLInteger or val is DSLBool:
+					var nx = val.value if val is DSLInteger else (1 if val.value else 0)
+					var bodyx2 = _int_to_base_str(abs(nx), 16)
+					s = ("-" if nx < 0 else "") + (bodyx2.to_upper() if conv == 'X' else bodyx2)
+					if flags.find("#") != -1:
+						s = ("-" if nx < 0 else "") + ("0X" if conv == 'X' else "0x") + bodyx2
 				else:
-					var n = int(_num(val))
-					var body = _int_to_base_str(abs(n), 16)
-					s = ("-" if n < 0 else "") + (body.to_upper() if conv == 'X' else body)
-					if flags.find("#") != -1:
-						s = ("-" if n < 0 else "") + ("0X" if conv == 'X' else "0x") + body
+					# %x/%X 拒绝浮点 (CPython 文案)
+					last_error = "TypeError: %%%s format: an integer is required, not %s" % [conv, val._type_name()]
+					return ""
 			'o':
 				is_numeric = true
 				if val is DSLInteger and val.is_big():
 					s = ("-" if val.big_neg else "") + ("0o" if flags.find("#") != -1 else "") + DSLBigInt.mag_to_base(val.big_limbs, 8)
+				elif val is DSLInteger or val is DSLBool:
+					var no = val.value if val is DSLInteger else (1 if val.value else 0)
+					s = ("-" if no < 0 else "") + ("0o" if flags.find("#") != -1 else "") + _int_to_base_str(abs(no), 8)
 				else:
-					var n2 = int(_num(val))
-					s = ("-" if n2 < 0 else "") + ("0o" if flags.find("#") != -1 else "") + _int_to_base_str(abs(n2), 8)
+					# %o 拒绝浮点 (CPython 文案)
+					last_error = "TypeError: %%%s format: an integer is required, not %s" % [conv, val._type_name()]
+					return ""
 			'c':
 				if val is DSLString:
 					# CPython: %c 接受长度为 1 的 str
@@ -6934,14 +7457,21 @@ class DSLString extends DSLObject:
 						last_error = "TypeError: %c requires int or char"
 						return ""
 					s = val.value
-				else:
-					var cp_c = int(_num(val))
-					if val is DSLInteger and val.is_big():
-						cp_c = -1
+				elif val is DSLInteger:
+					if val.is_big():
+						last_error = "OverflowError: %c arg not in range(0x110000)"
+						return ""
+					var cp_c = val.value
 					if cp_c < 0 or cp_c > 0x10FFFF:
 						last_error = "OverflowError: %c arg not in range(0x110000)"
 						return ""
 					s = char(cp_c)
+				elif val is DSLBool:
+					s = char(1 if val.value else 0)
+				else:
+					# %c 拒绝浮点 (CPython 文案)
+					last_error = "TypeError: %c requires int or char"
+					return ""
 			'f', 'F':
 				is_numeric = true
 				s = _fixed_float_str(_fmt_float_of(val), precision if precision >= 0 else 6)
@@ -7118,11 +7648,114 @@ class DSLString extends DSLObject:
 			i = close + 1
 		return out
 
+	## CPython complex.__format__: 说明符按 float 逐分量格式化后拼接, 宽度/对齐/填充作用于整体
+	func _format_complex_spec(value: DSLComplex, spec: String) -> String:
+		if spec == "":
+			return value._repr_text()
+		var i = 0
+		var fill = " "
+		var align = ""
+		var sign = ""
+		var alt = false
+		var zero_pad = false
+		var width = 0
+		var precision = -1
+		var type_c = ""
+		if i < spec.length() and spec[i] in "<>^=":
+			align = spec[i]
+			i += 1
+		elif i + 1 < spec.length() and spec[i + 1] in "<>^=":
+			fill = spec[i]
+			align = spec[i + 1]
+			i += 2
+		if i < spec.length() and spec[i] in "+- ":
+			sign = spec[i]
+			i += 1
+		if i < spec.length() and spec[i] == "#":
+			alt = true
+			i += 1
+		if i < spec.length() and spec[i] == "0":
+			zero_pad = true
+			i += 1
+		while i < spec.length() and spec[i].is_valid_int():
+			width = width * 10 + int(spec[i])
+			i += 1
+		if i < spec.length() and spec[i] == ".":
+			i += 1
+			precision = 0
+			while i < spec.length() and spec[i].is_valid_int():
+				precision = precision * 10 + int(spec[i])
+				i += 1
+		if i < spec.length():
+			type_c = spec[i]
+			i += 1
+		if type_c != "" and not (type_c in ["f", "F", "e", "E", "g", "G", "%"]):
+			last_error = "ValueError: Unknown format code '%s' for object of type 'complex'" % type_c
+			return ""
+		# 分量各自按 float 格式化: 实部带符号选项, 虚部用绝对值 (符号由分隔符承担); 宽度/对齐/填充留到整体
+		var real_cspec := ""
+		if sign != "":
+			real_cspec += sign
+		if alt:
+			real_cspec += "#"
+		if zero_pad:
+			real_cspec += "0"
+		if precision >= 0:
+			real_cspec += "." + str(precision)
+		real_cspec += type_c
+		var imag_cspec := ""
+		if alt:
+			imag_cspec += "#"
+		if zero_pad:
+			imag_cspec += "0"
+		if precision >= 0:
+			imag_cspec += "." + str(precision)
+		imag_cspec += type_c
+		var real_s = _format_spec_value(DSLFloat.new(value.real), real_cspec)
+		if last_error != "":
+			return ""
+		var imag_s = _format_spec_value(DSLFloat.new(absf(value.imag)), imag_cspec)
+		if last_error != "":
+			return ""
+		var neg_imag = value.imag < 0.0 or (value.imag == 0.0 and 1.0 / value.imag < 0.0)
+		var body = real_s + ("-" if neg_imag else "+") + imag_s + "j"
+		if width > body.length():
+			var pad = width - body.length()
+			if align == "<":
+				body = body + fill.repeat(pad)
+			elif align == "^":
+				var left = pad / 2
+				body = fill.repeat(left) + body + fill.repeat(pad - left)
+			else:
+				body = fill.repeat(pad) + body
+		return body
+
 	func _format_spec_value(value: DSLObject, spec: String, pre: String = "") -> String:
+		if pre != "" and spec == "":
+			return pre
+		# 非基本类型先走用户 __format__ 协议 / complex 分量格式, 其余按 CPython
+		if not (value is DSLInteger or value is DSLFloat or value is DSLBool or value is DSLString):
+			if value is DSLComplex:
+				return _format_complex_spec(value as DSLComplex, spec)
+			if value.klass != null:
+				var fmt_m = value.klass._lookup_method("__format__")
+				if fmt_m != null:
+					if fmt_m.has_method("__get__"):
+						fmt_m = fmt_m.__get__(value, value.klass)
+					var fmt_args: Array[DSLObject] = [DSLString.new(spec)]
+					var fmt_r = value.klass._invoke_func(fmt_m, fmt_args, {} as Dictionary[String, DSLObject])
+					if fmt_r == null:
+						return ""
+					if not (fmt_r is DSLString):
+						last_error = "TypeError: __format__ must return a str, not %s" % fmt_r._type_name()
+						return ""
+					return fmt_r.value
+			if spec == "":
+				return value._dsl_str()
+			last_error = "TypeError: unsupported format string passed to %s.__format__" % value._type_name()
+			return ""
 		var is_numeric = (value is DSLInteger) or (value is DSLFloat) or (value is DSLBool)
 		if spec == "":
-			if pre != "":
-				return pre
 			return value._dsl_str()
 		# 容器等非基本类型: 任何非空格式说明符报 TypeError (含仅宽度/对齐, CPython 同)
 		if not (value is DSLInteger or value is DSLFloat or value is DSLBool or value is DSLString):
@@ -7146,10 +7779,18 @@ class DSLString extends DSLObject:
 			fill = spec[i]
 			align = spec[i + 1]
 			i += 2
+		# '=' 对齐仅数值类型允许 (字符串报 ValueError, CPython 同)
+		if align == "=" and not is_numeric:
+			last_error = "ValueError: '=' alignment not allowed in string format specifier"
+			return ""
 		# [sign]
 		if i < spec.length() and spec[i] in "+- ":
 			sign = spec[i]
 			i += 1
+		# 字符串不允许 sign 说明符 (CPython 同)
+		if sign != "" and not is_numeric:
+			last_error = "ValueError: Sign not allowed in string format specifier"
+			return ""
 		# [#]
 		if i < spec.length() and spec[i] == "#":
 			alt = true
@@ -7205,16 +7846,20 @@ class DSLString extends DSLObject:
 				s = prefix + s
 			s = sign_head + s
 		# 零填充 (符号与 0x/0o/0b 前缀在填充之前: f"{255:#06x}" == "0x00ff")
+		# 数值左补 0, 字符串的 '0' 是填充字符并默认左对齐
 		if zero_pad and align == "" and width > s.length():
-			var pad = width - s.length()
-			var head := ""
-			if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
-				head = s[0]
-				s = s.substr(1)
-			if s.length() >= 2 and s[0] == "0" and s[1] in "xXob":
-				head += s.substr(0, 2)
-				s = s.substr(2)
-			s = head + "0".repeat(pad) + s
+			if is_numeric:
+				var pad = width - s.length()
+				var head := ""
+				if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
+					head = s[0]
+					s = s.substr(1)
+				if s.length() >= 2 and s[0] == "0" and s[1] in "xXob":
+					head += s.substr(0, 2)
+					s = s.substr(2)
+				s = head + "0".repeat(pad) + s
+			else:
+				fill = "0"
 		# 对齐与宽度
 		if width > s.length():
 			var pad = width - s.length()
@@ -7333,12 +7978,20 @@ class DSLString extends DSLObject:
 			if group_sep != "":
 				last_error = "ValueError: Cannot specify '%s' with 's'." % group_sep
 				return ""
-			return value._dsl_str()
+			var sv = value._dsl_str()
+			if precision >= 0:
+				# 字符串精度即截断 (CPython 对 str 的 .N 语义)
+				sv = sv.substr(0, mini(precision, sv.length()))
+			return sv
 		if type_c == "c":
 			if is_int and (value as DSLInteger).is_big():
 				last_error = "OverflowError: %c arg not in range(0x110000)"
 				return ""
 			var code = value.value if is_int else int(value._dsl_str())
+			# 越界值报 OverflowError
+			if code < 0 or code > 0x10FFFF:
+				last_error = "OverflowError: %c arg not in range(0x110000)"
+				return ""
 			return char(code)
 		if type_c in ["x", "X", "o", "b"]:
 			# CPython: ',' 不能与 x/X/o/b 同用, '_' 按 4 位分组
@@ -7407,6 +8060,9 @@ class DSLString extends DSLObject:
 		if group_sep != "":
 			last_error = "ValueError: Cannot specify '%s' with 's'." % group_sep
 			return ""
+		if value is DSLString and precision >= 0:
+			# 字符串无类型符时的精度同样截断 (format("hello", ".2") == "he")
+			return value._dsl_str().substr(0, mini(precision, value._dsl_str().length()))
 		return value._dsl_str()
 
 	## 解析单个 str.format 字段并格式化 [br]
@@ -7460,6 +8116,14 @@ class DSLString extends DSLObject:
 					spec = after.substr(c2 + 1)
 				else:
 					conv = after
+				# 转换符校验 (CPython str.format): 仅 s/r/a; 多字符报 expected ':',
+				# 单字符未知报 Unknown conversion specifier (f-string 词法层已有同族校验)
+				if conv != "s" and conv != "r" and conv != "a":
+					if conv.length() > 1:
+						last_error = "ValueError: expected ':' after conversion specifier"
+					else:
+						last_error = "ValueError: Unknown conversion specifier " + conv
+					return ""
 			else:
 				spec = field.substr(split_at + 1)
 		# 主字段: 到首个 . 或 [ 之前 (空 = 自动编号; 全数字 = 位置; 其余 = 关键字)
@@ -7469,7 +8133,7 @@ class DSLString extends DSLObject:
 		var primary = name_part.substr(0, p)
 		var val: DSLObject = null
 		if primary == "":
-			# I2-64: 自动编号与手动编号混用报 ValueError (CPython 文案按切换方向区分)
+			# 自动编号与手动编号混用报 ValueError (CPython 文案按切换方向区分)
 			if idx_box[1] == "manual":
 				last_error = "ValueError: cannot switch from manual field specification to automatic field numbering"
 				return ""
@@ -7681,6 +8345,9 @@ class DSLString extends DSLObject:
 		var item = args[1]
 		item = DSLObject._unwrap_dsl(item)
 		if item is DSLString:
+			# 空串是任何串的子串 (Godot find("") 返回 0, 判定天然成立; 显式短路对齐空源串形态)
+			if item.value.is_empty():
+				return DSLBool.new(true)
 			return DSLBool.new(self_obj.value.find(item.value) != -1)
 		return DSLBool.new(false)
 	
@@ -7741,31 +8408,77 @@ class DSLString extends DSLObject:
 			if start_idx > end_idx:
 				return DSLString.cached("")
 			return DSLString.cached(s.substr(start_idx, end_idx - start_idx + 1))
-		return DSLString.cached(s.strip_edges())
+		# 无实参剥离按 Python 空白全集 (含 NBSP 等 Unicode Zs/Zl/Zp)
+		var start_idx = 0
+		var end_idx = s.length() - 1
+		while start_idx < s.length() and _is_py_space(s[start_idx].unicode_at(0)):
+			start_idx += 1
+		while end_idx >= 0 and _is_py_space(s[end_idx].unicode_at(0)):
+			end_idx -= 1
+		if start_idx > end_idx:
+			return DSLString.cached("")
+		return DSLString.cached(s.substr(start_idx, end_idx - start_idx + 1))
 	
-	## Python 空白字符判定 (空格 / 制表 / 换行 / 回车 / 换页 / 垂直制表)
+	## Python 空白字符判定 (split/rsplit 家族与 strip 家族共用) [br]
+	## 委托 _is_py_space (isspace 全集): 含 \r 与扩展空白 (Zs/Zl/Zp 全集, 同步 strip 家族)
 	func _is_py_ws(ch: String) -> bool:
-		# 空白分割集 (CPython str.split/rsplit 默认分隔 = isspace 全集): 含 \r 与扩展空白
-		var cp = ch.unicode_at(0)
-		if cp == 0x20 or (cp >= 0x09 and cp <= 0x0d) or (cp >= 0x1c and cp <= 0x1f):
-			return true
-		if cp == 0x85 or cp == 0xa0 or cp == 0x1680 or cp == 0x202f or cp == 0x205f or cp == 0x3000:
-			return true
-		return false
+		return _is_py_space(ch.unicode_at(0))
+	
+	## 检索/切片的位置实参取值: bool 按 int, 大数按 ±∞ 钳制, 缺省用 fallback [br]
+	## [param args] 方法实参 [br]
+	## [param idx] 位置下标 (2 = start, 3 = end) [br]
+	## [param fallback] 缺省值 [br]
+	## [returns] 整数值
+	func _bound_arg(args: Array[DSLObject], idx: int, fallback: int) -> int:
+		if idx >= args.size():
+			return fallback
+		var a = DSLObject._unwrap_dsl(args[idx])
+		if a is DSLBool:
+			return 1 if a.value else 0
+		if a is DSLInteger:
+			var oi = a as DSLInteger
+			if oi.is_big():
+				return -9223372036854775808 if oi.big_neg else 9223372036854775807
+			return oi.value
+		return fallback
+
+	## 检索区间 [start, end) 的 CPython 归一化: 负值加长度, 下界钳 0 [br]
+	## [param args] 方法实参 [br]
+	## [param length] 字符串长度 [br]
+	## [returns] [si, ei] (ei 未上界钳制, 由调用方按需处理)
+	func _str_range(args: Array[DSLObject], length: int) -> Array:
+		var si = _bound_arg(args, 2, 0)
+		var ei = _bound_arg(args, 3, length)
+		if si < 0:
+			si = max(0, si + length)
+		if ei < 0:
+			ei = max(0, ei + length)
+		return [si, ei]
+
 	func builtin_split(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var sep = ""
 		var maxsplit = -1
 		var use_default = false
-		if args.size() >= 2 and not args[1] is DSLNone:
-			sep = args[1]._dsl_str()
+		var sep_arg = null
+		var maxsplit_arg = null
+		if args.size() >= 2:
+			sep_arg = args[1]
+		if args.size() >= 3:
+			maxsplit_arg = args[2]
+		# sep=/maxsplit= 关键字实参生效
+		if _kwargs.has("sep"):
+			sep_arg = _kwargs["sep"]
+		if _kwargs.has("maxsplit"):
+			maxsplit_arg = _kwargs["maxsplit"]
+		if sep_arg != null and not (DSLObject._unwrap_dsl(sep_arg) is DSLNone):
+			sep = DSLObject._unwrap_dsl(sep_arg)._dsl_str()
 		else:
 			use_default = true
-		if args.size() >= 3:
-			var maxsplit_arg = args[2]
-			if maxsplit_arg is DSLInteger:
-				maxsplit = maxsplit_arg.value
+		if maxsplit_arg != null:
+			# maxsplit 的 bool 按 int 参与
+			maxsplit = _bound_arg([maxsplit_arg], 0, -1)
 		var result = DSLList.new()
 		if use_default:
 			# 默认按空白分割 (跳过空项); maxsplit 后的余项原样保留内部空白 (CPython 语义)
@@ -7786,8 +8499,9 @@ class DSLString extends DSLObject:
 				result.items.append(DSLString.cached(s.substr(start, pos - start)))
 				splits_done += 1
 		elif sep == "":
-			for ch in raw.value:
-				result.items.append(DSLString.cached(ch))
+			# 空分隔符报错 (与 partition/rpartition 同族), 不再逐字符分割
+			last_error = "ValueError: empty separator"
+			return null
 		else:
 			var s = raw.value
 			if maxsplit == 0:
@@ -7820,17 +8534,32 @@ class DSLString extends DSLObject:
 		var it_raw = iterable
 		if it_raw._wrapped != null:
 			it_raw = it_raw._wrapped
-		var parts = []
+		var parts: Array[String] = []
+		var seq_idx = 0
 		if it_raw is DSLList or it_raw is DSLTuple:
 			for item in it_raw.items:
-				parts.append(item._dsl_str())
+				var u = DSLObject._unwrap_dsl(item)
+				if not (u is DSLString):
+					# join 校验元素类型
+					last_error = "TypeError: sequence item %d: expected str instance, %s found" % [seq_idx, u._type_name()]
+					return null
+				parts.append(u.value)
+				seq_idx += 1
 		else:
 			var it = it_raw._dsl_iter()
 			if it == null:
 				last_error = "TypeError: argument must be iterable"
 				return null
 			while it.has_next():
-				parts.append(it.next()._dsl_str())
+				var n = it.next()
+				if it.suspended:
+					break
+				var u2 = DSLObject._unwrap_dsl(n)
+				if not (u2 is DSLString):
+					last_error = "TypeError: sequence item %d: expected str instance, %s found" % [seq_idx, u2._type_name()]
+					return null
+				parts.append(u2.value)
+				seq_idx += 1
 		return DSLString.cached(raw.value.join(parts))
 	
 	func builtin_replace(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -7843,10 +8572,24 @@ class DSLString extends DSLObject:
 		var old = args[1]._dsl_str()
 		var new_s = args[2]._dsl_str()
 		var count = -1
-		if args.size() >= 4 and args[3] is DSLInteger:
-			count = args[3].value
+		if args.size() >= 4:
+			# count 的 bool 按 int 参与
+			count = _bound_arg(args, 3, -1)
 		if old == "":
-			return DSLString.cached(s)
+			# 空串替换展开: 在每个字符前插入新串, 无限/count>len 时末尾再补一次
+			if count == 0:
+				return DSLString.cached(s)
+			var insert_left = s.length() + 1 if count < 0 else count
+			var s2 = ""
+			var idx2 = 0
+			while idx2 < s.length() and idx2 < insert_left:
+				s2 += new_s
+				s2 += s[idx2]
+				idx2 += 1
+			s2 += s.substr(idx2)
+			if insert_left > s.length():
+				s2 += new_s
+			return DSLString.new(s2)
 		# CPython: 旧串与新串相同时返回原串自身 (身份语义)
 		if old == new_s:
 			return obj if obj is DSLString else DSLString.new(s)
@@ -7871,21 +8614,14 @@ class DSLString extends DSLObject:
 			return null
 		var s = raw.value
 		var sub = args[1]._dsl_str()
-		var si = 0
-		var ei = s.length()
-		if args.size() >= 3 and args[2] is DSLInteger:
-			si = args[2].value
-			if si < 0:
-				si = max(0, si + s.length())
-		if args.size() >= 4 and args[3] is DSLInteger:
-			ei = args[3].value
-			if ei < 0:
-				ei = max(0, ei + s.length())
+		var rng = _str_range(args, s.length())
+		var si: int = rng[0]
+		var ei: int = rng[1]
 		if sub == "":
-			# 空串: CPython 返回钳制到 [0, len] 的起始位置 (si 越界时为 -1)
-			if si > s.length():
+			# 空针 find 返回钳制后的起始位置, si > ei 时 -1
+			if si > ei:
 				return DSLInteger.pooled(-1)
-			return DSLInteger.pooled(si)
+			return DSLInteger.pooled(mini(si, s.length()))
 		if si >= s.length() or ei <= si:
 			return DSLInteger.pooled(-1)
 		var sliced = s.substr(si, ei - si)
@@ -7911,19 +8647,14 @@ class DSLString extends DSLObject:
 			return null
 		var s = raw.value
 		var sub = args[1]._dsl_str()
-		var si = 0
-		var ei = s.length()
-		if args.size() >= 3 and args[2] is DSLInteger:
-			si = args[2].value
-			if si < 0:
-				si = max(0, si + s.length())
-		if args.size() >= 4 and args[3] is DSLInteger:
-			ei = args[3].value
-			if ei < 0:
-				ei = max(0, ei + s.length())
-		ei = min(ei, s.length())
+		var rng = _str_range(args, s.length())
+		var si: int = rng[0]
+		var ei: int = rng[1]
 		if sub == "":
-			return DSLInteger.pooled(min(max(si, 0), ei))
+			# 空针 rfind 返回钳制后的 end, si > ei 时 -1
+			if si > ei:
+				return DSLInteger.pooled(-1)
+			return DSLInteger.pooled(mini(ei, s.length()))
 		var p = -1
 		if ei > si:
 			var idx = si
@@ -7954,11 +8685,12 @@ class DSLString extends DSLObject:
 		var start = 0
 		var i = 0
 		while i < raw.length():
-			if raw[i] == '\n' or raw[i] == '\r':
+			var cp = raw.unicode_at(i)
+			if _is_py_line_break(cp):
 				var line = raw.substr(start, i - start)
 				var term = raw[i]
 				var term_len = 1
-				if raw[i] == '\r' and i + 1 < raw.length() and raw[i + 1] == '\n':
+				if cp == 0x0d and i + 1 < raw.length() and raw.unicode_at(i + 1) == 0x0a:
 					term = "\r\n"
 					term_len = 2
 				if keepends:
@@ -7975,10 +8707,21 @@ class DSLString extends DSLObject:
 			lst.items.append(DSLString.cached(line))
 		return lst
 
+	## CPython str.splitlines 的行界码点: \n \r \v \f \x1c \x1d \x1e \x85 \u2028 \u2029 (\r\n 单独处理)
+	static func _is_py_line_break(code: int) -> bool:
+		return code == 0x0a or code == 0x0d or code == 0x0b or code == 0x0c \
+			or code == 0x1c or code == 0x1d or code == 0x1e or code == 0x85 \
+			or code == 0x2028 or code == 0x2029
+
 	## str.removeprefix(prefix)
 	func builtin_removeprefix(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
-		var prefix = args[1]._dsl_str()
+		var pref_obj = DSLObject._unwrap_dsl(args[1])
+		# 前缀必须为 str
+		if not (pref_obj is DSLString):
+			last_error = "TypeError: removeprefix() argument must be str, not %s" % pref_obj._type_name()
+			return null
+		var prefix = pref_obj.value
 		if raw.begins_with(prefix):
 			return DSLString.cached(raw.substr(prefix.length()))
 		return DSLString.cached(raw)
@@ -7986,7 +8729,12 @@ class DSLString extends DSLObject:
 	## str.removesuffix(suffix)
 	func builtin_removesuffix(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
-		var suffix = args[1]._dsl_str()
+		var suff_obj = DSLObject._unwrap_dsl(args[1])
+		# 后缀必须为 str
+		if not (suff_obj is DSLString):
+			last_error = "TypeError: removesuffix() argument must be str, not %s" % suff_obj._type_name()
+			return null
+		var suffix = suff_obj.value
 		if suffix != "" and raw.ends_with(suffix):
 			return DSLString.cached(raw.substr(0, raw.length() - suffix.length()))
 		return DSLString.cached(raw)
@@ -7995,8 +8743,12 @@ class DSLString extends DSLObject:
 	func builtin_partition(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var sep = args[1]._dsl_str()
+		# 空分隔符报错, 不再并入 "未找到" 分支
+		if sep == "":
+			last_error = "ValueError: empty separator"
+			return null
 		var p = raw.find(sep)
-		if p == -1 or sep == "":
+		if p == -1:
 			return DSLTuple.new([DSLString.cached(raw), DSLString.cached(""), DSLString.cached("")])
 		return DSLTuple.new([DSLString.cached(raw.substr(0, p)), DSLString.cached(sep), DSLString.cached(raw.substr(p + sep.length()))])
 
@@ -8004,8 +8756,11 @@ class DSLString extends DSLObject:
 	func builtin_rpartition(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var sep = args[1]._dsl_str()
+		if sep == "":
+			last_error = "ValueError: empty separator"
+			return null
 		var p = raw.rfind(sep)
-		if p == -1 or sep == "":
+		if p == -1:
 			return DSLTuple.new([DSLString.cached(""), DSLString.cached(""), DSLString.cached(raw)])
 		return DSLTuple.new([DSLString.cached(raw.substr(0, p)), DSLString.cached(sep), DSLString.cached(raw.substr(p + sep.length()))])
 
@@ -8019,7 +8774,7 @@ class DSLString extends DSLObject:
 				return DSLBool.new(false)
 		return DSLBool.new(true)
 
-	## str.isnumeric(): Nd + No + Nl 全集 (I2-74)
+	## str.isnumeric(): Nd + No + Nl 全集
 	func builtin_isnumeric(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
@@ -8083,35 +8838,59 @@ class DSLString extends DSLObject:
 			else:
 				result += ch
 				col += 1
-				if ch == '\n':
+				if ch == '\n' or ch == '\r':
+					# \r 同样重置列计数 (CPython expandtabs 语义)
 					col = 0
 		return DSLString.cached(result)
 
 	func builtin_startswith(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
-		if args.size() != 2:
-			last_error = "TypeError: startswith() takes exactly one argument"
+		if args.size() < 2:
+			last_error = "TypeError: startswith() takes at least one argument"
 			return null
-		if args[1] is DSLTuple:
-			for item in args[1].items:
-				if raw.value.begins_with(DSLObject._unwrap_dsl(item)._dsl_str()):
+		# start/end 实参 (bool 按 int) 限定前缀检索区间
+		var rng = _str_range(args, raw.value.length())
+		var s = raw.value.substr(rng[0], maxi(0, int(rng[1]) - int(rng[0])))
+		var u = DSLObject._unwrap_dsl(args[1])
+		if u is DSLTuple:
+			# 元组内每个前缀必须为 str
+			for item in u.items:
+				var item_un = DSLObject._unwrap_dsl(item)
+				if not (item_un is DSLString):
+					last_error = "TypeError: startswith first arg must be str or a tuple of str, not %s" % item_un._type_name()
+					return null
+				if s.begins_with(item_un._dsl_str()):
 					return DSLBool.new(true)
 			return DSLBool.new(false)
-		return DSLBool.new(raw.value.begins_with(args[1]._dsl_str()))
-	
+		if not (u is DSLString):
+			# 非 str 前缀报 TypeError (CPython 同)
+			last_error = "TypeError: startswith first arg must be str or a tuple of str, not %s" % u._type_name()
+			return null
+		return DSLBool.new(s.begins_with(u._dsl_str()))
+
 	func builtin_endswith(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
-		if args.size() != 2:
-			last_error = "TypeError: endswith() takes exactly one argument"
+		if args.size() < 2:
+			last_error = "TypeError: endswith() takes at least one argument"
 			return null
-		if args[1] is DSLTuple:
-			for item in args[1].items:
-				if raw.value.ends_with(DSLObject._unwrap_dsl(item)._dsl_str()):
+		var rng2 = _str_range(args, raw.value.length())
+		var s2 = raw.value.substr(rng2[0], maxi(0, int(rng2[1]) - int(rng2[0])))
+		var u2 = DSLObject._unwrap_dsl(args[1])
+		if u2 is DSLTuple:
+			for item in u2.items:
+				var item_un = DSLObject._unwrap_dsl(item)
+				if not (item_un is DSLString):
+					last_error = "TypeError: endswith first arg must be str or a tuple of str, not %s" % item_un._type_name()
+					return null
+				if s2.ends_with(item_un._dsl_str()):
 					return DSLBool.new(true)
 			return DSLBool.new(false)
-		return DSLBool.new(raw.value.ends_with(args[1]._dsl_str()))
+		if not (u2 is DSLString):
+			last_error = "TypeError: endswith first arg must be str or a tuple of str, not %s" % u2._type_name()
+			return null
+		return DSLBool.new(s2.ends_with(u2._dsl_str()))
 	
 	func builtin_lstrip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
@@ -8123,7 +8902,11 @@ class DSLString extends DSLObject:
 			while start < s.length() and chars.find(s[start]) != -1:
 				start += 1
 			return DSLString.cached(s.substr(start))
-		return DSLString.cached(s.lstrip(" \t\n\r"))
+		# 无实参按 Python 空白全集剥离 (含 NBSP 等 Unicode Zs/Zl/Zp)
+		var start = 0
+		while start < s.length() and _is_py_space(s[start].unicode_at(0)):
+			start += 1
+		return DSLString.cached(s.substr(start))
 	
 	func builtin_rstrip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
@@ -8135,7 +8918,11 @@ class DSLString extends DSLObject:
 			while end >= 0 and chars.find(s[end]) != -1:
 				end -= 1
 			return DSLString.cached(s.substr(0, end + 1))
-		return DSLString.cached(s.rstrip(" \t\n\r"))
+		# 无实参按 Python 空白全集剥离 (含 NBSP 等 Unicode Zs/Zl/Zp)
+		var end = s.length() - 1
+		while end >= 0 and _is_py_space(s[end].unicode_at(0)):
+			end -= 1
+		return DSLString.cached(s.substr(0, end + 1))
 	
 	func builtin_capitalize(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var s = DSLObject._unwrap_dsl(args[0]).value
@@ -8199,17 +8986,18 @@ class DSLString extends DSLObject:
 			return null
 		var sub = args[1]._dsl_str()
 		var sv = raw.value
-		var si = 0
-		var ei = sv.length()
-		if args.size() >= 3 and args[2] is DSLInteger:
-			si = args[2].value
-			if si < 0:
-				si = max(0, si + sv.length())
-		if args.size() >= 4 and args[3] is DSLInteger:
-			ei = args[3].value
-			if ei < 0:
-				ei = max(0, ei + sv.length())
-			ei = min(ei, sv.length())
+		var rng = _str_range(args, sv.length())
+		var si: int = rng[0]
+		var ei: int = rng[1]
+		si = mini(si, sv.length())
+		ei = mini(ei, sv.length())
+		if sub == "":
+			# 空针 count = 区间长度 + 1 (ei < si 时为 0)
+			if ei < si:
+				return DSLInteger.pooled(0)
+			return DSLInteger.pooled(ei - si + 1)
+		if ei <= si:
+			return DSLInteger.pooled(0)
 		sv = sv.substr(si, ei - si)
 		var cnt = 0
 		var pos = 0
@@ -8231,7 +9019,7 @@ class DSLString extends DSLObject:
 		return DSLBool.new(true)
 
 	## 码位区间表二分查找 (区间升序排列, 闭区间) [br]
-	## 用于 Nd / digit 附加 / No+Nl / Cf 的码位判定 (I2-74 扩展)
+	## 用于 Nd / digit 附加 / No+Nl / Cf 的码位判定
 	static func _cp_in_ranges(code: int, ranges: Array) -> bool:
 		var lo := 0
 		var hi := ranges.size() - 1
@@ -8247,7 +9035,7 @@ class DSLString extends DSLObject:
 		return false
 
 	## Nd 十进制数字全码段 (isdecimal 全集, 680 码位 / 64 区间) [br]
-	## Unicode 通用类别 Nd 是封闭稳定属性, 内置区间表实现全对齐 (I2-74)
+	## Unicode 通用类别 Nd 是封闭稳定属性, 内置区间表实现全对齐
 	static var _ND_RANGES: Array = [[0x30, 0x39], [0x660, 0x669], [0x6f0, 0x6f9], [0x7c0, 0x7c9], [0x966, 0x96f], [0x9e6, 0x9ef], [0xa66, 0xa6f], [0xae6, 0xaef], [0xb66, 0xb6f], [0xbe6, 0xbef], [0xc66, 0xc6f], [0xce6, 0xcef], [0xd66, 0xd6f], [0xde6, 0xdef], [0xe50, 0xe59], [0xed0, 0xed9], [0xf20, 0xf29], [0x1040, 0x1049], [0x1090, 0x1099], [0x17e0, 0x17e9], [0x1810, 0x1819], [0x1946, 0x194f], [0x19d0, 0x19d9], [0x1a80, 0x1a89], [0x1a90, 0x1a99], [0x1b50, 0x1b59], [0x1bb0, 0x1bb9], [0x1c40, 0x1c49], [0x1c50, 0x1c59], [0xa620, 0xa629], [0xa8d0, 0xa8d9], [0xa900, 0xa909], [0xa9d0, 0xa9d9], [0xa9f0, 0xa9f9], [0xaa50, 0xaa59], [0xabf0, 0xabf9], [0xff10, 0xff19], [0x104a0, 0x104a9], [0x10d30, 0x10d39], [0x11066, 0x1106f], [0x110f0, 0x110f9], [0x11136, 0x1113f], [0x111d0, 0x111d9], [0x112f0, 0x112f9], [0x11450, 0x11459], [0x114d0, 0x114d9], [0x11650, 0x11659], [0x116c0, 0x116c9], [0x11730, 0x11739], [0x118e0, 0x118e9], [0x11950, 0x11959], [0x11c50, 0x11c59], [0x11d50, 0x11d59], [0x11da0, 0x11da9], [0x11f50, 0x11f59], [0x16a60, 0x16a69], [0x16ac0, 0x16ac9], [0x16b50, 0x16b59], [0x1d7ce, 0x1d7ff], [0x1e140, 0x1e149], [0x1e2f0, 0x1e2f9], [0x1e4f0, 0x1e4f9], [0x1e950, 0x1e959], [0x1fbf0, 0x1fbf9]]
 
 	## isdigit 在 Nd 之外的 digit-type 码位 (上标/下标/圈数字等, 128 码位 / 20 区间)
@@ -8316,12 +9104,12 @@ class DSLString extends DSLObject:
 			return true
 		return code == 0x2028 or code == 0x2029
 
-	## Cf 格式符全码段 (isprintable 排除, 170 码位 / 21 区间, I2-74)
+	## Cf 格式符全码段 (isprintable 排除, 170 码位 / 21 区间)
 	static var _CF_RANGES: Array = [[0xad, 0xad], [0x600, 0x605], [0x61c, 0x61c], [0x6dd, 0x6dd], [0x70f, 0x70f], [0x890, 0x891], [0x8e2, 0x8e2], [0x180e, 0x180e], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x206f], [0xfeff, 0xfeff], [0xfff9, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd], [0x13430, 0x1343f], [0x1bca0, 0x1bca3], [0x1d173, 0x1d17a], [0xe0001, 0xe0001], [0xe0020, 0xe007f]]
 
 	## CPython str.isprintable 的可打印判定: Cc/Cf/Cs/Co/Cn 与分隔符 (Zs 除空格/Zl/Zp) 不可打印 [br]
-	## 覆盖 C0/C1 控制、Cf 格式符全码段、全部 Zs/Zl/Zp 码点与代理/私用区; [br]
-	## 未分配码点 (Cn) 的判定按可打印处理, 属引擎无 Unicode 数据库的平台限制 (I2-74)
+	## 覆盖 C0/C1 控制、Cf 格式符全码段、全部 Zs/Zl/Zp 码点与代理/私用区 [br]
+	## 未分配码点 (Cn) 的判定按可打印处理, 属引擎无 Unicode 数据库的平台限制
 	static func _is_py_printable(code: int) -> bool:
 		if code < 0x20 or (code >= 0x7f and code <= 0x9f):
 			return false
@@ -8394,7 +9182,10 @@ class DSLString extends DSLObject:
 				return null
 			width = args[1].value
 		var fill = " "
-		if args.size() >= 3 and args[2] is DSLString:
+		if args.size() >= 3:
+			if not (args[2] is DSLString):
+				raw.last_error = "TypeError: The fill character must be a unicode character, not %s" % args[2]._type_name()
+				return null
 			fill = args[2].value
 			if fill.length() != 1:
 				# CPython: 填充字符必须恰好一个字符 (空串也报错)
@@ -8429,10 +9220,16 @@ class DSLString extends DSLObject:
 				return null
 			width = args[1].value
 		var fill = " "
-		if args.size() >= 3 and args[2] is DSLString:
+		if args.size() >= 3:
+			if not (args[2] is DSLString):
+				# 非 str 填充报 TypeError
+				raw.last_error = "TypeError: The fill character must be a unicode character, not %s" % args[2]._type_name()
+				return null
 			fill = args[2].value
-			if fill.length() == 0:
-				fill = " "
+			if fill.length() != 1:
+				# 填充字符必须恰好一个 (空串 / 多字符均报错)
+				raw.last_error = "TypeError: The fill character must be exactly one character long"
+				return null
 		if s.length() >= width:
 			return obj if obj is DSLString else DSLString.new(s)
 		var r = s
@@ -8455,10 +9252,14 @@ class DSLString extends DSLObject:
 				return null
 			width = args[1].value
 		var fill = " "
-		if args.size() >= 3 and args[2] is DSLString:
+		if args.size() >= 3:
+			if not (args[2] is DSLString):
+				raw.last_error = "TypeError: The fill character must be a unicode character, not %s" % args[2]._type_name()
+				return null
 			fill = args[2].value
-			if fill.length() == 0:
-				fill = " "
+			if fill.length() != 1:
+				raw.last_error = "TypeError: The fill character must be exactly one character long"
+				return null
 		if s.length() >= width:
 			return obj if obj is DSLString else DSLString.new(s)
 		var r = s
@@ -8567,56 +9368,66 @@ class DSLString extends DSLObject:
 		var sep = ""
 		var maxsplit = -1
 		var use_default = false
-		if args.size() >= 2 and not args[1] is DSLNone:
-			sep = args[1]._dsl_str()
+		var sep_arg = null
+		var maxsplit_arg = null
+		if args.size() >= 2:
+			sep_arg = args[1]
+		if args.size() >= 3:
+			maxsplit_arg = args[2]
+		# sep=/maxsplit= 关键字实参生效
+		if _kwargs.has("sep"):
+			sep_arg = _kwargs["sep"]
+		if _kwargs.has("maxsplit"):
+			maxsplit_arg = _kwargs["maxsplit"]
+		if sep_arg != null and not (DSLObject._unwrap_dsl(sep_arg) is DSLNone):
+			sep = DSLObject._unwrap_dsl(sep_arg)._dsl_str()
 		else:
 			use_default = true
-		if args.size() >= 3 and args[2] is DSLInteger:
-			maxsplit = args[2].value
+		if maxsplit_arg != null:
+			# maxsplit 的 bool 按 int 参与
+			maxsplit = _bound_arg([maxsplit_arg], 0, -1)
+		if not use_default and sep == "":
+			# CPython: 空分隔符报 ValueError (split 同)
+			last_error = "ValueError: empty separator"
+			return null
 		var result = DSLList.new()
 		if use_default:
-			# 默认按空白分割 (与 split 同规则, 跳过空项), 结果保持从左到右顺序
-			# [start, end) 位置对
-			var words: Array = []
-			var pos = 0
-			while pos < s.length():
-				while pos < s.length() and _is_py_ws(s[pos]):
-					pos += 1
-				if pos >= s.length():
+			# 从右向左扫 (CPython rsplit_whitespace): 每次跳过尾部空白, 若未达 maxsplit 则
+			# 记录词并跳过其左侧分隔空白, 剩余前缀原样保留 (含内部空白), 结果保持从左到右
+			var maxcount = maxsplit if maxsplit >= 0 else 1 << 40
+			var i = s.length() - 1
+			var parts: Array[String] = []
+			while i >= 0:
+				while i >= 0 and _is_py_ws(s[i]):
+					i -= 1
+				if i < 0:
 					break
-				var wstart = pos
-				while pos < s.length() and not _is_py_ws(s[pos]):
-					pos += 1
-				words.append([wstart, pos])
-			if maxsplit < 0 or words.size() <= maxsplit + 1:
-				for w in words:
-					result.items.append(DSLString.cached(s.substr(w[0], w[1] - w[0])))
-			else:
-				# maxsplit: 前 (size-maxsplit) 词所在前缀原样保留 (剥离尾部空白), 其后各词独立
-				var split_idx = words.size() - maxsplit
-				if split_idx >= words.size():
-					result.items.append(DSLString.cached(s.strip_edges()))
-				else:
-					var left = s.substr(0, words[split_idx][0])
-					while left.length() > 0 and _is_py_ws(left[left.length() - 1]):
-						left = left.substr(0, left.length() - 1)
-					result.items.append(DSLString.cached(left))
-					for k in range(split_idx, words.size()):
-						result.items.append(DSLString.cached(s.substr(words[k][0], words[k][1] - words[k][0])))
+				if maxcount <= 0:
+					break
+				maxcount -= 1
+				var j = i + 1
+				while i >= 0 and not _is_py_ws(s[i]):
+					i -= 1
+				parts.append(s.substr(i + 1, j - i - 1))
+			if i >= 0:
+				parts.append(s.substr(0, i + 1))
+			parts.reverse()
+			for p in parts:
+				result.items.append(DSLString.cached(p))
 		else:
 			var parts = []
 			var remaining = s
 			var cnt = 0
-			while remaining.length() > 0:
+			while true:
 				if maxsplit >= 0 and cnt >= maxsplit:
 					parts.append(remaining)
 					break
-				var pos = remaining.rfind(sep)
-				if pos == -1:
+				var pos2 = remaining.rfind(sep)
+				if pos2 == -1:
 					parts.append(remaining)
 					break
-				parts.append(remaining.substr(pos + sep.length()))
-				remaining = remaining.substr(0, pos)
+				parts.append(remaining.substr(pos2 + sep.length()))
+				remaining = remaining.substr(0, pos2)
 				cnt += 1
 			parts.reverse()
 			for p in parts:
@@ -8631,6 +9442,11 @@ class DSLString extends DSLObject:
 		var errors = "strict"
 		if args.size() >= 3 and args[2] is DSLString:
 			errors = args[2].value
+		# encoding=/errors= 关键字实参生效
+		if _kwargs.has("encoding") and _kwargs["encoding"] is DSLString:
+			encoding = (_kwargs["encoding"] as DSLString).value
+		if _kwargs.has("errors") and _kwargs["errors"] is DSLString:
+			errors = (_kwargs["errors"] as DSLString).value
 		var s = raw.value
 		if encoding == "utf-8" or encoding == "utf8":
 			var buf = s.to_utf8_buffer()
@@ -8648,8 +9464,34 @@ class DSLString extends DSLObject:
 						bout.append(63)
 					elif errors == "ignore":
 						pass
+					elif errors == "backslashreplace":
+						var esc2 = ""
+						if cp < 0x100:
+							esc2 = "\\x%02x" % cp
+						elif cp < 0x10000:
+							esc2 = "\\u%04x" % cp
+						else:
+							esc2 = "\\U%08x" % cp
+						for eb in esc2.to_ascii_buffer():
+							bout.append(eb)
+					elif errors == "xmlcharrefreplace":
+						var ent = "&#%d;" % cp
+						for eb2 in ent.to_ascii_buffer():
+							bout.append(eb2)
+					elif errors == "strict":
+						# 错误文案的字符按 CPython 转义 (\xNN / \uNNNN / \UNNNNNNNN), 上界为 limit
+						var esc = ""
+						if cp < 0x100:
+							esc = "\\x%02x" % cp
+						elif cp < 0x10000:
+							esc = "\\u%04x" % cp
+						else:
+							esc = "\\U%08x" % cp
+						last_error = "UnicodeEncodeError: '%s' codec can't encode character '%s' in position %d: ordinal not in range(%d)" % [encoding, esc, i, limit]
+						return null
 					else:
-						last_error = "UnicodeEncodeError: '%s' codec can't encode character '%s' in position %d: ordinal not in range(%d)" % [encoding, s[i], i, limit - 1]
+						# 未知错误处理器名报 LookupError (CPython 编码出错时惰性查找)
+						last_error = "LookupError: unknown error handler name '%s'" % errors
 						return null
 				else:
 					bout.append(cp)
@@ -8678,7 +9520,7 @@ class DSLString extends DSLObject:
 		if template == "{}" and fmt_args.size() == 1 and fmt_args[0] is DSLString:
 			return fmt_args[0]
 		var result = ""
-		# idx_box[0] = 自动编号游标; idx_box[1] = 字段编号模式 ("" / "auto" / "manual", I2-64)
+		# idx_box[0] = 自动编号游标; idx_box[1] = 字段编号模式 ("" / "auto" / "manual")
 		var idx_box = [0, ""]
 		var i = 0
 		# 上一次格式化可能残留 proto 侧错误, 先清除避免误判
@@ -8909,6 +9751,26 @@ class DSLList extends DSLObject:
 	static func _seq_lex_compare(a_items: Array[DSLObject], b_items: Array[DSLObject], err_obj: DSLObject, op: String) -> int:
 		var n = mini(a_items.size(), b_items.size())
 		var interp = Interpreter.active
+		# 元素比较按外层运算符分派对应 magic (CPython 元素级报错跟随运算符)
+		# cmp_true_is_less: 元素比较为真表示「a < b」(返回 -1), ">"/">=" 系为「a > b」(返回 1)
+		var magic: String = "magic_lt"
+		var dunder: String = "__lt__"
+		var reflected_dunder: String = "__gt__"
+		var cmp_true_is_less: bool = true
+		if op == "<=":
+			magic = "magic_le"
+			dunder = "__le__"
+			reflected_dunder = "__ge__"
+		elif op == ">":
+			magic = "magic_gt"
+			dunder = "__gt__"
+			reflected_dunder = "__lt__"
+			cmp_true_is_less = false
+		elif op == ">=":
+			magic = "magic_ge"
+			dunder = "__ge__"
+			reflected_dunder = "__le__"
+			cmp_true_is_less = false
 		for i in range(n):
 			var av = a_items[i]
 			var bv = b_items[i]
@@ -8917,30 +9779,70 @@ class DSLList extends DSLObject:
 			var cmp: DSLObject = null
 			if interp != null:
 				av.last_error = ""
-				cmp = interp._sort_compare(av, bv, "__lt__", "__gt__", "magic_lt")
+				# 元素比较经协议分派 (用户 dunder) + 内置 magic; 比较失败 (含嵌套序列
+				# 递归, 如 [[1]] < [["a"]]) 会写入 av.last_error 须原样上抛 —— 不得经
+				# _sort_compare (它在反射尝试前清空 x.last_error, 嵌套错误被吞成 list-list 文案)
+				cmp = interp._call_magic_or_fallback(av, dunder, [bv] as Array[DSLObject], func() -> DSLObject:
+					return _seq_elem_compare(av, bv, magic))
 				if interp._suspended:
 					return -2
-				av.last_error = ""
+				if av.last_error != "":
+					err_obj.last_error = av.last_error
+					return -2
+				if cmp is DSLBool:
+					return _seq_cmp_sign(cmp.value, cmp_true_is_less)
 				if interp.report.has_error:
 					return -2
+				# 排序比较的互补反射: 元素无正向 dunder 时尝试 bv 的反向 dunder
+				if bv.klass != null and bv.klass._lookup_method(reflected_dunder) != null:
+					bv.last_error = ""
+					cmp = interp._call_magic_or_fallback(bv, reflected_dunder, [av] as Array[DSLObject], func() -> DSLObject: return null)
+					if interp._suspended:
+						return -2
+					if bv.last_error != "":
+						err_obj.last_error = bv.last_error
+						return -2
+					if cmp is DSLBool:
+						return _seq_cmp_sign(cmp.value, cmp_true_is_less)
+					if interp.report.has_error:
+						return -2
+				# 元素不可比: 写到序列对象上 (err_obj), 由消费方转异常传播
+				err_obj.last_error = "TypeError: '%s' not supported between instances of '%s' and '%s'" % [op, av._type_name(), bv._type_name()]
+				return -2
 			else:
 				var saved = av.last_error
 				av.last_error = ""
-				cmp = av.magic_lt([av, bv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				cmp = _seq_elem_compare(av, bv, magic)
 				if av.last_error == "" and cmp is DSLBool:
 					av.last_error = saved
-					return -1 if cmp.value else 1
-				av.last_error = "TypeError: '%s' not supported between instances of '%s' and '%s'" % [op, av._type_name(), bv._type_name()]
+					return _seq_cmp_sign(cmp.value, cmp_true_is_less)
+				# 元素比较失败写到序列对象上 (err_obj), 由消费方转异常传播
+				err_obj.last_error = "TypeError: '%s' not supported between instances of '%s' and '%s'" % [op, av._type_name(), bv._type_name()]
 				return -2
-			if cmp is DSLBool:
-				return -1 if cmp.value else 1
-			av.last_error = "TypeError: '%s' not supported between instances of '%s' and '%s'" % [op, av._type_name(), bv._type_name()]
-			return -2
 		if a_items.size() < b_items.size():
 			return -1
 		if a_items.size() > b_items.size():
 			return 1
 		return 0
+
+	## 元素比较结果转序列字典序符号 [br]
+	## [param cmp_val] 元素比较的真值 [br]
+	## [param cmp_true_is_less] 为真表示比较真值对应「a < b」[br]
+	## [returns] -1 / 1
+	static func _seq_cmp_sign(cmp_val: bool, cmp_true_is_less: bool) -> int:
+		if cmp_true_is_less:
+			return -1 if cmp_val else 1
+		return 1 if cmp_val else -1
+
+	## 序列元素级比较分派 (按外层运算符对应的 magic 方法)
+	static func _seq_elem_compare(av: DSLObject, bv: DSLObject, magic: String) -> DSLObject:
+		if magic == "magic_le":
+			return av.magic_le([av, bv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if magic == "magic_gt":
+			return av.magic_gt([av, bv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if magic == "magic_ge":
+			return av.magic_ge([av, bv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return av.magic_lt([av, bv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 
 	## 字典序比较: list 只与 list 比较, 与 tuple 互比报 TypeError (CPython 语义)
 	func magic_lt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -8950,6 +9852,8 @@ class DSLList extends DSLObject:
 		if other is DSLList:
 			var c = _seq_lex_compare(self_obj.items, other.items, self_obj, "<")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c < 0)
 		self_obj._comparison_type_error("<", other)
@@ -8962,6 +9866,8 @@ class DSLList extends DSLObject:
 		if other is DSLList:
 			var c = _seq_lex_compare(self_obj.items, other.items, self_obj, ">")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c > 0)
 		self_obj._comparison_type_error(">", other)
@@ -8974,6 +9880,8 @@ class DSLList extends DSLObject:
 		if other is DSLList:
 			var c = _seq_lex_compare(self_obj.items, other.items, self_obj, "<=")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c <= 0)
 		self_obj._comparison_type_error("<=", other)
@@ -8986,6 +9894,8 @@ class DSLList extends DSLObject:
 		if other is DSLList:
 			var c = _seq_lex_compare(self_obj.items, other.items, self_obj, ">=")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c >= 0)
 		self_obj._comparison_type_error(">=", other)
@@ -9052,6 +9962,13 @@ class DSLList extends DSLObject:
 		var self_obj = args[0]
 		var index = args[1]
 		var value = args[2]
+		# dunder 直调与语句路径共用切片赋值实现 (仅语句路径走 _dsl_setitem 时切片形态才生效)
+		if index is DSLSlice:
+			self_obj._dsl_setitem(index, value)
+			if self_obj.last_error != "":
+				# 错误留在接收者上: method-wrapper 调用点按 bound_self.last_error 转异常
+				return null
+			return DSLNone.new()
 		var idx_i = DSLObject._norm_seq_index(index, self_obj, "TypeError: %s indices must be integers or slices, not %%s" % self_obj._type_name())
 		if idx_i == null:
 			return null
@@ -9077,8 +9994,11 @@ class DSLList extends DSLObject:
 		var self_obj = args[0]
 		var item = args[1]
 		for i in range(self_obj.items.size()):
-			if self_obj.items[i]._dsl_eq(item):
+			var c = self_obj._seq_contains_eq(self_obj.items[i], item)
+			if c == 1:
 				return DSLBool.new(true)
+			if c == -1:
+				return null
 		return DSLBool.new(false)
 
 	## 相等判定: 列表间逐元素递归 _dsl_eq, 嵌套容器比较由此生效
@@ -9201,7 +10121,7 @@ class DSLList extends DSLObject:
 				raw.items.remove_at(ix)
 			return
 		# 未支持下标类型: 明确报错
-		last_error = "TypeError: '%s' object does not support item deletion" % _type_name()
+		last_error = "TypeError: '%s' object doesn't support item deletion" % _type_name()
 
 	## 统计切片选中的元素个数 (range(start, stop, step) 的长度)
 	static func _slice_span(start_i: int, stop_i: int, step_i: int) -> int:
@@ -9279,8 +10199,7 @@ class DSLList extends DSLObject:
 		var inst = args[0]
 		inst._dsl_delitem(args[1])
 		if inst.last_error != "":
-			last_error = inst.last_error
-			inst.last_error = ""
+			# 错误保留在实例上 (与 magic_getitem 同约定), 调用方据此转异常
 			return null
 		return DSLNone.new()
 
@@ -9325,13 +10244,38 @@ class DSLList extends DSLObject:
 				if it.suspended:
 					break
 		return DSLNone.new()
+
+	## list += 任意可迭代: 原地 extend (CPython list.__iadd__ 即 extend), 返回自身保持别名
+	func magic_iadd(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		var other = DSLObject._unwrap_dsl(args[1])
+		if other is DSLList or other is DSLTuple:
+			self_obj.items.append_array(other.items)
+			return self_obj
+		var it = other._dsl_iter()
+		if it == null:
+			self_obj.last_error = "TypeError: can only concatenate list (not \"%s\") to list" % other._type_name()
+			return null
+		while it.has_next():
+			self_obj.items.append(it.next())
+			if it.suspended:
+				break
+		return self_obj
 	
 	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
-		var idx = raw.items.size() - 1
-		if args.size() >= 2:
-			idx = args[1].value
+		# 下标实参 bool 按 int, 大数报 OverflowError
+		var idx = _seq_index_arg(args, 1, raw.items.size() - 1)
+		if idx == -9223372036854775808:
+			return null
+		# 空列表无论是否显式下标一律报 "pop from empty list" (CPython 先查空再查越界)
+		if raw.items.is_empty():
+			last_error = "IndexError: pop from empty list"
+			return null
+		# 负索引从尾部计数 (CPython pop 语义)
+		if idx < 0:
+			idx += raw.items.size()
 		if idx < 0 or idx >= raw.items.size():
 			last_error = "IndexError: pop index out of range"
 			return null
@@ -9359,7 +10303,10 @@ class DSLList extends DSLObject:
 		if args.size() != 3:
 			last_error = "TypeError: insert() takes exactly two arguments"
 			return null
-		var idx = args[1].value
+		# 下标实参 bool 按 int, 大数报 OverflowError
+		var idx = _seq_index_arg(args, 1, 0)
+		if idx == -9223372036854775808:
+			return null
 		var val = DSLObject._unwrap_dsl(args[2])
 		if idx < 0:
 			idx = max(0, raw.items.size() + idx)
@@ -9374,7 +10321,11 @@ class DSLList extends DSLObject:
 			last_error = "TypeError: index() takes at least one argument"
 			return null
 		var target = DSLObject._unwrap_dsl(args[1])
-		for i in range(raw.items.size()):
+		# start/end 实参限定检索区间 (负数从尾部计, 越界钳制; bool 按 int)
+		var n = raw.items.size()
+		var si = _bound_index_arg(args, 2, 0, n)
+		var ei = _bound_index_arg(args, 3, n, n)
+		for i in range(si, ei):
 			if raw.items[i]._dsl_eq(target):
 				return DSLInteger.pooled(i)
 		last_error = "ValueError: %s is not in list" % DSLObject._py_repr(target)
@@ -9398,6 +10349,11 @@ class DSLList extends DSLObject:
 			var rv = _kwargs["reverse"]
 			reverse_val = rv is DSLBool and rv.value
 		_cmp_error = ""
+		# 稳定归并比较器 (reverse 按「更大者在前」, 等价元素保持原相对顺序)
+		# 经解释器实例分派 (DSLObject 子类天然继承实例方法, 跨类新增 static 调用点
+		# 会触发引擎编译挂死, 见已知问题清单陷阱 #47)
+		var interp = Interpreter.active
+		var sort_arr: Array = raw.items
 		if _kwargs.has("key"):
 			var key_func = _kwargs["key"]
 			if key_func._dsl_is_callable():
@@ -9409,20 +10365,36 @@ class DSLList extends DSLObject:
 						# key 求值挂起或抛异常: 交回上层处理
 						return null
 					mapped.append({"item": item, "key": k})
+				sort_arr = mapped
 				if reverse_val:
-					mapped.sort_custom(func(a, b): return not _cmp_items(a["key"], b["key"]))
+					var less_desc := func(a, b): return _cmp_items(b["key"], a["key"])
+					if interp != null:
+						interp._stable_sort(mapped, less_desc)
+					else:
+						mapped.sort_custom(less_desc)
 				else:
-					mapped.sort_custom(func(a, b): return _cmp_items(a["key"], b["key"]))
+					var less_asc := func(a, b): return _cmp_items(a["key"], b["key"])
+					if interp != null:
+						interp._stable_sort(mapped, less_asc)
+					else:
+						mapped.sort_custom(less_asc)
 				raw.items.clear()
 				for m in mapped:
 					raw.items.append(m["item"])
-			else:
-				raw.items.sort_custom(Callable(self, "_cmp_items"))
-		else:
+				sort_arr = []
+		if sort_arr.size() > 0:
 			if reverse_val:
-				raw.items.sort_custom(func(a, b): return not _cmp_items(a, b))
+				var item_desc := func(a, b): return _cmp_items(b, a)
+				if interp != null:
+					interp._stable_sort(raw.items, item_desc)
+				else:
+					raw.items.sort_custom(item_desc)
 			else:
-				raw.items.sort_custom(Callable(self, "_cmp_items"))
+				var item_asc := func(a, b): return _cmp_items(a, b)
+				if interp != null:
+					interp._stable_sort(raw.items, item_asc)
+				else:
+					raw.items.sort_custom(item_asc)
 		if _cmp_error != "":
 			# 比较不可用: 转为 TypeError (由 _dispatch_call 检查接收者 last_error 抛出)
 			raw.last_error = _cmp_error
@@ -9562,6 +10534,8 @@ class DSLTuple extends DSLObject:
 		if other is DSLTuple:
 			var c = DSLList._seq_lex_compare(self_obj.items, other.items, self_obj, "<")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c < 0)
 		self_obj._comparison_type_error("<", other)
@@ -9574,6 +10548,8 @@ class DSLTuple extends DSLObject:
 		if other is DSLTuple:
 			var c = DSLList._seq_lex_compare(self_obj.items, other.items, self_obj, ">")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c > 0)
 		self_obj._comparison_type_error(">", other)
@@ -9586,6 +10562,8 @@ class DSLTuple extends DSLObject:
 		if other is DSLTuple:
 			var c = DSLList._seq_lex_compare(self_obj.items, other.items, self_obj, "<=")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c <= 0)
 		self_obj._comparison_type_error("<=", other)
@@ -9598,6 +10576,8 @@ class DSLTuple extends DSLObject:
 		if other is DSLTuple:
 			var c = DSLList._seq_lex_compare(self_obj.items, other.items, self_obj, ">=")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c >= 0)
 		self_obj._comparison_type_error(">=", other)
@@ -9673,8 +10653,11 @@ class DSLTuple extends DSLObject:
 		var self_obj = args[0]
 		var item = args[1]
 		for i in range(self_obj.items.size()):
-			if self_obj.items[i]._dsl_eq(item):
+			var c = self_obj._seq_contains_eq(self_obj.items[i], item)
+			if c == 1:
 				return DSLBool.new(true)
+			if c == -1:
+				return null
 		return DSLBool.new(false)
 
 	## 相等判定: 元组间逐元素递归 _dsl_eq, 嵌套容器比较由此生效
@@ -9791,10 +10774,14 @@ class DSLTuple extends DSLObject:
 		var target = args[1]
 		if target._wrapped != null:
 			target = target._wrapped
-		for i in range(raw.items.size()):
+		# start/end 实参限定检索区间 (负数从尾部计, 越界钳制, bool 按 int)
+		var n = raw.items.size()
+		var si = _bound_index_arg(args, 2, 0, n)
+		var ei = _bound_index_arg(args, 3, n, n)
+		for i in range(si, ei):
 			if raw.items[i]._dsl_eq(target):
 				return DSLInteger.pooled(i)
-		last_error = "ValueError: %s is not in tuple" % DSLObject._py_repr(target)
+		last_error = "ValueError: tuple.index(x): x not in tuple"
 		return null
 		
 	## 初始化魔法方法描述符字典 [br]
@@ -9817,8 +10804,8 @@ class DSLTuple extends DSLObject:
 		if not _tup_descriptors.is_empty():
 			return
 		var proto = DSLTuple.new([])
-		_tup_descriptors["count"] = DSLMethodDescriptor.new("count", Callable(proto, "_tup_count"))
-		_tup_descriptors["index"] = DSLMethodDescriptor.new("index", Callable(proto, "_tup_index"))
+		_tup_descriptors["count"] = DSLMethodDescriptor.new("count", Callable(proto, "builtin_count"))
+		_tup_descriptors["index"] = DSLMethodDescriptor.new("index", Callable(proto, "builtin_index"))
 
 ## DSL 字典类型, 对应 Python dict
 class DSLDict extends DSLObject:
@@ -9841,6 +10828,10 @@ class DSLDict extends DSLObject:
 	func _init(p_dict: Dictionary[Variant, DSLObject] = {}):
 		super._init()
 		dict = p_dict
+
+	## 活视图同步钩子 (sys.modules 覆写为 _ensure, 其余类型无操作)
+	func _view_ensure() -> void:
+		pass
 	
 	func _type_name() -> String:
 		return "dict"
@@ -9895,7 +10886,8 @@ class DSLDict extends DSLObject:
 	func magic_getitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var key = args[1]
-		var vkey = _key_to_variant(key)
+		# 键编码经 self_obj (proto 绑定调用时 self 是共享原型, 槽位状态须落实际字典)
+		var vkey = self_obj._key_to_variant(key)
 		if vkey == null:
 			return null
 		if self_obj.dict.has(vkey):
@@ -9908,7 +10900,8 @@ class DSLDict extends DSLObject:
 		var self_obj = args[0]
 		var key = args[1]
 		var value = args[2]
-		var vkey = _key_to_variant(key)
+		# 键编码经 self_obj (proto 绑定调用时 self 是共享原型, 槽位状态须落实际字典)
+		var vkey = self_obj._key_to_variant(key, true)
 		if vkey == null:
 			return null
 		self_obj.dict[vkey] = value
@@ -9926,7 +10919,7 @@ class DSLDict extends DSLObject:
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
 		var key = args[1]
-		var vkey = _key_to_variant(key)
+		var vkey = self_obj._key_to_variant(key)
 		if vkey == null:
 			return DSLBool.new(false)
 		return DSLBool.new(self_obj.dict.has(vkey))
@@ -9959,8 +10952,7 @@ class DSLDict extends DSLObject:
 		var inst = args[0]
 		inst._dsl_delitem(args[1])
 		if inst.last_error != "":
-			last_error = inst.last_error
-			inst.last_error = ""
+			# 错误保留在实例上 (与 magic_getitem 同约定), 调用方据此转异常
 			return null
 		return DSLNone.new()
 
@@ -9988,7 +10980,7 @@ class DSLDict extends DSLObject:
 		return "{" + s + "}"
 		
 	func _dsl_setitem(index: DSLObject, value: DSLObject):
-		var vkey = _key_to_variant(index)
+		var vkey = _key_to_variant(index, true)
 		if vkey == null:
 			return
 		dict[vkey] = value
@@ -10042,17 +11034,27 @@ class DSLDict extends DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var key = args[1]
-		var default = args[2] if args.size() >= 3 else DSLNone.new()
-		var vkey = _key_to_variant(key)
+		# 缺省值取 None 单例 (全新实例会让 get(x) is None 误判为 False)
+		var default = args[2] if args.size() >= 3 else _none_singleton()
+		# 激活视图 (sys.modules) 先同步再读
+		raw._view_ensure()
+		# 键编码经 raw (proto 绑定调用时 self 是共享原型, 槽位状态须落实际字典)
+		var vkey = raw._key_to_variant(key)
 		if vkey != null and raw.dict.has(vkey):
 			return raw.dict[vkey]
 		return default
-	
+
+	## None 单例 (跨类 static 调用点会触发引擎编译挂死, 以实例方法封装)
+	func _none_singleton() -> DSLNone:
+		if Interpreter._cached_none == null:
+			Interpreter._cached_none = DSLNone.new()
+		return Interpreter._cached_none
+
 	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var key = args[1]
-		var vkey = _key_to_variant(key)
+		var vkey = raw._key_to_variant(key)
 		if vkey == null:
 			return null
 		if not raw.dict.has(vkey):
@@ -10068,6 +11070,15 @@ class DSLDict extends DSLObject:
 	func builtin_update(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		var write_key = func(target: DSLDict, k: DSLObject, v: DSLObject) -> bool:
+			var vkey = target._key_to_variant(k, true)
+			if vkey == null:
+				if target.last_error != "":
+					last_error = target.last_error
+					target.last_error = ""
+				return false
+			target.dict[vkey] = v
+			return true
 		# Handle positional argument (dict)
 		if args.size() >= 2:
 			var other = args[1]
@@ -10079,23 +11090,55 @@ class DSLDict extends DSLObject:
 					raw.dict[k] = other_raw.dict[k]
 					if other_raw._complex_keys.has(k):
 						raw._complex_keys[k] = other_raw._complex_keys[k]
-			elif other_raw is DSLList:
-				# Support update([(key, value), ...])
-				for item in other_raw.items:
-					if item is DSLTuple and item.items.size() == 2:
-						var vkey = _key_to_variant(item.items[0])
-						if vkey != null:
-							raw.dict[vkey] = item.items[1]
-							if item is DSLDict and item._complex_keys.has(vkey):
-								raw._complex_keys[vkey] = item._complex_keys[vkey]
+			elif other_raw is DSLList or other_raw is DSLTuple:
+				# 成对序列: 元素须为二元序列 (list 对与 tuple 对均合法),
+				# 长度不为 2 报 ValueError, 非序列元素报 TypeError
+				for idx in range(other_raw.items.size()):
+					var item = other_raw.items[idx]
+					if item is DSLTuple or item is DSLList:
+						if item.items.size() != 2:
+							last_error = "ValueError: dictionary update sequence element #%d has length %d; 2 is required" % [idx, item.items.size()]
+							return null
+						if not write_key.call(raw, item.items[0], item.items[1]):
+							return null
+					else:
+						last_error = "TypeError: cannot convert dictionary update sequence element #%d to a sequence" % idx
+						return null
 			else:
-				last_error = "TypeError: update() argument must be a dict or iterable of pairs"
-				return null
+				var src_it = other._dsl_iter()
+				if src_it == null:
+					last_error = "TypeError: '%s' object is not iterable" % other._type_name()
+					return null
+				var idx2 = 0
+				while src_it.has_next():
+					var item = src_it.next()
+					if src_it.suspended:
+						break
+					var item_raw = DSLObject._unwrap_dsl(item)
+					if item_raw is DSLTuple or item_raw is DSLList:
+						if item_raw.items.size() != 2:
+							last_error = "ValueError: dictionary update sequence element #%d has length %d; 2 is required" % [idx2, item_raw.items.size()]
+							return null
+						if not write_key.call(raw, item_raw.items[0], item_raw.items[1]):
+							return null
+					else:
+						last_error = "TypeError: cannot convert dictionary update sequence element #%d to a sequence" % idx2
+						return null
+					idx2 += 1
 		# Handle keyword arguments
+		# kwargs 的键是裸字符串, 须经 _key_to_variant 走 "s:" 前缀编码,
+		# 否则写入键与读侧编码不一致, 下标/get/in 全部静默 KeyError
 		for k in _kwargs.keys():
-			var vkey = k
-			raw.dict[vkey] = _kwargs[k]
+			if not write_key.call(raw, DSLString.new(k), _kwargs[k]):
+				return null
 		return DSLNone.new()
+
+	## dict |= mapping: 原地 update (CPython dict.__ior__), 返回自身保持别名语义
+	func magic_ior(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		if self_obj.builtin_update(args, _kwargs) == null:
+			return null
+		return self_obj
 	
 	func builtin_clear(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
@@ -10121,12 +11164,13 @@ class DSLDict extends DSLObject:
 			raw.last_error = "TypeError: setdefault() takes at least 1 argument"
 			return null
 		var dsl_key = args[1]
-		var vkey = _key_to_variant(dsl_key)
+		var vkey = raw._key_to_variant(dsl_key, true)
 		if vkey == null:
 			return null
 		if raw.dict.has(vkey):
 			return raw.dict[vkey]
-		var default_val = DSLNone.new()
+		# 缺省值取 None 单例 (与 builtin_get 同由: 全新实例会让 is None 误判为 False)
+		var default_val = _none_singleton()
 		if args.size() >= 3:
 			default_val = args[2]
 		raw.dict[vkey] = default_val
@@ -10148,7 +11192,7 @@ class DSLDict extends DSLObject:
 	## DSL 键转换为 Variant 类型 [br]
 	## [param key] DSLObject [br]
 	## [returns] 对应的 Variant 值, 类型不可哈希时返回 null
-	func _key_to_variant(key: DSLObject) -> Variant:
+	func _key_to_variant(key: DSLObject, for_write: bool = false) -> Variant:
 		key = DSLObject._unwrap_dsl(key)
 		# 字符串键加 "s:" 前缀: 与 None 哨兵 "n" 及其它类型编码区分 (对齐 DSLSet._set_key)
 		if key is DSLString:
@@ -10159,37 +11203,59 @@ class DSLDict extends DSLObject:
 		# bool 必须优先于 int 判定, 且统一规范化为 int: Godot 的 Dictionary 把 true 与 1 当作不同的键,
 		# 而 CPython 中 True == 1 是同一个键, 故此处把布尔值转成整数
 		if key is DSLBool:
-			return 1 if key.value else 0
+			var bv = 1 if key.value else 0
+			# 首键对象入 _complex_keys, 外显路径还原 True/False 形态
+			if for_write and not _complex_keys.has(bv):
+				_complex_keys[bv] = key
+			return bv
 		if key is DSLInteger:
 			# 大数键编码为 "i:十进制串" (与 int64 整数键值域不重叠)
+			# 原始键对象入 _complex_keys (首个插入者保留), 外显路径还原原始 int/float 形态
 			if (key as DSLInteger).is_big():
-				return "i:" + DSLObject._int_dec_of(key)
+				var big_key = "i:" + DSLObject._int_dec_of(key)
+				if not _complex_keys.has(big_key):
+					_complex_keys[big_key] = key
+				return big_key
+			if for_write and not _complex_keys.has(key.value):
+				_complex_keys[key.value] = key
 			return key.value
 		# 同理, 整数值的浮点键也规范化为整数 (CPython 中 1.0 == 1 为同一个键)
 		if key is DSLFloat:
 			if not is_nan(key.value) and not is_inf(key.value) and key.value == floor(key.value):
 				if abs(key.value) >= 9223372036854775808.0:
-					# 超出 int64 的整值浮点与大数键同一编码 (等值同键)
-					return "i:" + DSLObject._int_dec_of(DSLObject._int_from_float_exact(key.value))
-				return int(key.value)
+					# 超出 int64 的整值浮点与大数键同一编码 (等值同键); 原始 float 对象入映射保留外显形态
+					var fbig_key = "i:" + DSLObject._int_dec_of(DSLObject._int_from_float_exact(key.value))
+					if not _complex_keys.has(fbig_key):
+						_complex_keys[fbig_key] = key
+					return fbig_key
+				var iv = int(key.value)
+				# 首键对象保留 (1.0 先插则外显 1.0)
+				if for_write and not _complex_keys.has(iv):
+					_complex_keys[iv] = key
+				return iv
 			return key.value
 		if key is DSLTuple:
-			# 元组可作键: 拼接各元素的键 (等值元组得到相同的键)
-			var parts = []
+			# 元组可作键: 各元素的键做长度前缀拼接 (等值元组得到相同的键) [br]
+			# 纯分隔符直拼会被带分隔符的元素构造碰撞 (如 ("a|1",) 与 ("a", 1) 同键静默覆盖)
+			var parts = ""
 			for it in key.items:
-				var part = _key_to_variant(it)
+				var part = _key_to_variant(it, for_write)
 				if part == null:
 					return null
-				parts.append(str(part))
-			var tuple_key = "tuple:" + "|" + "|".join(parts)
+				var ptext = str(part)
+				parts += str(ptext.length()) + ":" + ptext
+			var tuple_key = "tuple:" + parts
 			_complex_keys[tuple_key] = key
 			return tuple_key
 		if key is DSLFrozenSet:
-			var parts = []
+			var fparts: Array[String] = []
 			for k in key.items:
-				parts.append(k)
-			parts.sort()
-			var fs_key = "frozenset:" + "|" + "|".join(parts)
+				fparts.append(str(k))
+			fparts.sort()
+			var fjoined = ""
+			for fp in fparts:
+				fjoined += str(fp.length()) + ":" + fp
+			var fs_key = "frozenset:" + fjoined
 			_complex_keys[fs_key] = key
 			return fs_key
 		if key is DSLBytes and not (key is DSLByteArray):
@@ -10200,7 +11266,11 @@ class DSLDict extends DSLObject:
 		if key is DSLComplex:
 			# 复数可作键: 虚部为 0 时规范化为实部数值 (1+0j 与 1 同键, CPython 一致)
 			if key.imag == 0.0 and not is_nan(key.real) and not is_inf(key.real) and key.real == floor(key.real):
-				return int(key.real)
+				var cv = int(key.real)
+				# 首键对象保留 (1+0j 先插则外显 1+0j)
+				if for_write and not _complex_keys.has(cv):
+					_complex_keys[cv] = key
+				return cv
 			if key.imag == 0.0:
 				return key.real
 			var c_key = "c:" + DSLObject._py_float_repr(key.real) + "|" + DSLObject._py_float_repr(key.imag)
@@ -10225,9 +11295,22 @@ class DSLDict extends DSLObject:
 				return null
 			# 未定义 __eq__ 时按身份区分
 			if eq_method != null:
-				var ukey1 = "user:|" + str(hres.value)
-				_complex_keys[ukey1] = key
-				return ukey1
+				# CPython 以「哈希 + 相等」分桶: 同哈希槽位逐个 __eq__ 甄别, 不等者开新槽
+				# (纯哈希编键会让不等对象静默覆盖), 槽位序号编入键; __hash__ 返回大数时
+				# hres.value 恒 0, 同桶对象同样由相等甄别区分 [br]
+				# 读路径不登记探针键 (CPython 查找失败不落槽, 避免多余的 __eq__ 副作用)
+				var hkey = "user:h|" + str(hres.value)
+				var slot = 0
+				while true:
+					var cand_key = hkey + "#" + str(slot)
+					if not _complex_keys.has(cand_key):
+						if for_write:
+							_complex_keys[cand_key] = key
+						return cand_key
+					var cand = _complex_keys[cand_key]
+					if cand._object_id == key._object_id or cand._dsl_eq(key):
+						return cand_key
+					slot += 1
 			var ukey2 = "user:|" + str(hres.value) + "|" + str(key._object_id)
 			_complex_keys[ukey2] = key
 			return ukey2
@@ -10239,7 +11322,7 @@ class DSLDict extends DSLObject:
 	## [returns] 对应的 DSLObject
 	## 取内部 Variant 键的原始键对象 (复合键经 _complex_keys 映射, 其余按编码还原)
 	func _original_key_obj(raw) -> DSLObject:
-		if typeof(raw) == TYPE_STRING and _complex_keys.has(raw):
+		if _complex_keys.has(raw):
 			return _complex_keys[raw]
 		return _wrap_key(raw)
 
@@ -10250,6 +11333,11 @@ class DSLDict extends DSLObject:
 				return DSLNone.new()
 			if raw.begins_with("s:"):
 				return DSLString.new(raw.substr(2))
+			if raw.begins_with("i:"):
+				# 大数键还原: "i:十进制串" 经字面量池重构 DSLInteger
+				var dec = raw.substr(2)
+				var neg = dec.begins_with("-")
+				return DSLInteger.pooled_literal_big(dec.substr(1) if neg else dec, neg)
 			return DSLString.new(raw)
 		if typeof(raw) == TYPE_INT:
 			return DSLInteger.pooled(raw)
@@ -10310,7 +11398,7 @@ class DSLMappingProxy extends DSLDict:
 		last_error = "TypeError: 'mappingproxy' object does not support item assignment"
 	
 	func _dsl_delitem(_index: DSLObject):
-		last_error = "TypeError: 'mappingproxy' object does not support item deletion"
+		last_error = "TypeError: 'mappingproxy' object doesn't support item deletion"
 
 class DSLDictKeys extends DSLObject:
 	## 键列表 (源字典为 null 时的快照)
@@ -10760,11 +11848,21 @@ class DSLBytes extends DSLObject:
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var target = DSLObject._unwrap_dsl(args[1])
 		var self_data: Array[int] = (args[0] as DSLBytes).data
-		if target is DSLInteger:
+		if target is DSLInteger or target is DSLBool:
+			# int/bool 按单字节值 (0-255), 越界报 ValueError
+			var tv: int
+			if target is DSLBool:
+				tv = 1 if target.value else 0
+			else:
+				var oi = target as DSLInteger
+				if oi.is_big() or oi.value < 0 or oi.value > 255:
+					last_error = "ValueError: byte must be in range(0, 256)"
+					return null
+				tv = oi.value
 			for b in self_data:
-				if b == target.value:
+				if b == tv:
 					return DSLBool.new(true)
-				return DSLBool.new(false)
+			return DSLBool.new(false)
 		if target is DSLBytes:
 			var sub = target.data
 			if sub.is_empty():
@@ -10778,7 +11876,9 @@ class DSLBytes extends DSLObject:
 				if ok:
 					return DSLBool.new(true)
 			return DSLBool.new(false)
-		return DSLBool.new(false)
+		# str 等非 bytes-like 成员报 TypeError
+		last_error = "TypeError: a bytes-like object is required, not '%s'" % target._type_name()
+		return null
 
 	## 相等判定: 仅与 bytes 逐字节比较 (与 str 不相等)
 	func _dsl_eq(other: DSLObject) -> bool:
@@ -10885,18 +11985,30 @@ class DSLBytes extends DSLObject:
 		if args.size() < 1:
 			last_error = "TypeError: fromhex() takes at least 1 argument"
 			return null
-		var hex = DSLObject._unwrap_dsl(args[0])._dsl_str().replace(" ", "")
+		var hex = DSLObject._unwrap_dsl(args[0])._dsl_str()
+		# 跳过全部 ASCII 空白 (含 \t \n \v \f \r)
+		var stripped := ""
+		for c in hex:
+			if c == " " or c == "\t" or c == "\n" or c == "\v" or c == "\f" or c == "\r":
+				continue
+			stripped += c
 		var digits = "0123456789abcdef"
-		var lower = hex.to_lower()
+		var lower = stripped.to_lower()
 		if lower.length() % 2 != 0:
-			last_error = "ValueError: non-hexadecimal number found in a fromhex() arg at position %d" % (lower.length() - 1)
+			last_error = "ValueError: non-hexadecimal number found in fromhex() arg at position %d" % (lower.length() - 1)
 			return null
 		var out: Array[int] = []
 		for i in range(0, lower.length(), 2):
 			var hi = digits.find(lower[i])
 			var lo = digits.find(lower[i + 1])
 			if hi < 0 or lo < 0:
-				last_error = "ValueError: non-hexadecimal number found in a fromhex() arg at position %d" % i
+				# 错误位置为非法字符下标 (CPython 同, 空白已剔除)
+				var pos = i
+				if hi < 0:
+					pos = i
+				else:
+					pos = i + 1
+				last_error = "ValueError: non-hexadecimal number found in fromhex() arg at position %d" % pos
 				return null
 			out.append(hi * 16 + lo)
 		return _new_instance(out)
@@ -10961,6 +12073,11 @@ class DSLBytes extends DSLObject:
 			values = other.items.duplicate()
 		elif not is_mapping:
 			values = [other]
+		# 截断 / 映射要求形态先于个数校验 (CPython 扫描期顺序, 个数校验只对完整格式串有意义)
+		var scan_err = _percent_scan_error(fmt_chars, values, is_mapping_ish)
+		if scan_err != "":
+			last_error = scan_err
+			return null
 		var spec_count = DSLObject._percent_spec_count(fmt_chars)
 		if not is_mapping_ish:
 			# 元组 / 单实参参与个数校验 (文案对齐 CPython, bytes formatting 后缀)
@@ -10997,7 +12114,7 @@ class DSLBytes extends DSLObject:
 			if j < fmt_chars.length() and fmt_chars[j] == "(":
 				var close = fmt_chars.find(")", j + 1)
 				if close == -1:
-					last_error = "ValueError: incomplete format"
+					last_error = "ValueError: incomplete format key"
 					return null
 				key = fmt_chars.substr(j + 1, close - j - 1)
 				j = close + 1
@@ -11073,7 +12190,7 @@ class DSLBytes extends DSLObject:
 			if raw_c is DSLBool:
 				return DSLString.new(char(1 if raw_c.value else 0))
 			if raw_c is DSLInteger:
-				if raw_c.value < 0 or raw_c.value > 255:
+				if (raw_c as DSLInteger).is_big() or raw_c.value < 0 or raw_c.value > 255:
 					last_error = "OverflowError: %c arg not in range(256)"
 					return null
 				return DSLString.new(char(raw_c.value))
@@ -11152,22 +12269,71 @@ class DSLBytes extends DSLObject:
 		return out
 
 
-	## 把实参转为字节数组 (bytes / int 可迭代)
-	func _bytes_arg_to_data(obj: DSLObject) -> Array[int]:
+	## 把实参转为字节数组 (bytes / bytearray / memoryview) [br]
+	## 非 bytes-like 实参按 CPython 写 TypeError 并返回 null, 调用方须检查 null 后透传错误 [br]
+	## [param err_tmpl] 报错文案模板 (含 %s 时以实参类型名替换; 空串用默认 `a bytes-like object is required`),
+	## 供 find 族 / startswith 族 / join 族传入各自的 CPython 站点文案
+	func _bytes_arg_to_data(obj: DSLObject, err_tmpl: String = "") -> Variant:
 		var raw = DSLObject._unwrap_dsl(obj)
 		var out: Array[int] = []
 		if raw is DSLBytes:
 			out.assign(raw.data)
 			return out
-		if raw is DSLList or raw is DSLTuple:
-			for it in raw.items:
-				if it is DSLInteger and it.value >= 0 and it.value <= 255:
-					out.append(it.value)
+		if raw is DSLMemoryView:
+			if not (raw as DSLMemoryView)._check_released():
+				return null
+			out.assign((raw as DSLMemoryView)._snapshot().data)
 			return out
-		return out
+		if err_tmpl == "":
+			last_error = "TypeError: a bytes-like object is required, not '%s'" % raw._type_name()
+		else:
+			last_error = "TypeError: " + (err_tmpl % raw._type_name())
+		return null
+
+	## bytes 检索实参归一: int/bool 按单字节值 (0-255, 越界报 ValueError), [br]
+	## bytes-like 原样, 其余经 _bytes_arg_to_data 报 TypeError
+	func _bytes_arg_to_int_or_data(obj: DSLObject, err_tmpl: String = "") -> Variant:
+		var raw = DSLObject._unwrap_dsl(obj)
+		if raw is DSLBool:
+			var bv: Array[int] = [1 if raw.value else 0]
+			return bv
+		if raw is DSLInteger:
+			var oi = raw as DSLInteger
+			if oi.is_big() or oi.value < 0 or oi.value > 255:
+				last_error = "ValueError: byte must be in range(0, 256)"
+				return null
+			var ov: Array[int] = [oi.value]
+			return ov
+		return _bytes_arg_to_data(obj, err_tmpl)
+
+	## bytes 检索边界取值: bool 按 int, 大数按 ±∞ 钳制, 缺省 fallback
+	func _bytes_bound_arg(args: Array[DSLObject], idx: int, fallback: int) -> int:
+		if idx >= args.size():
+			return fallback
+		var a = DSLObject._unwrap_dsl(args[idx])
+		if a is DSLBool:
+			return 1 if a.value else 0
+		if a is DSLInteger:
+			var oi = a as DSLInteger
+			if oi.is_big():
+				return -9223372036854775808 if oi.big_neg else 9223372036854775807
+			return oi.value
+		return fallback
+
+	## 检索区间 [start, end) 归一: 负数从尾部计, 下界钳 0
+	func _bytes_range(args: Array[DSLObject], length: int) -> Array:
+		var si = _bytes_bound_arg(args, 2, 0)
+		var ei = _bytes_bound_arg(args, 3, length)
+		if si < 0:
+			si = max(0, si + length)
+		if ei < 0:
+			ei = max(0, ei + length)
+		return [si, ei]
 
 	## 在 data 中查找子序列, 返回首个下标 (找不到返回 -1)
 	func _bytes_find(hay: Array[int], needle: Array[int], start: int, end: int) -> int:
+		# end 超 haystack 长度时钳制, 否则内层下标越界会触发引擎级错误
+		end = mini(end, hay.size())
 		if needle.is_empty():
 			return maxi(start, 0)
 		var m = needle.size()
@@ -11276,6 +12442,10 @@ class DSLBytes extends DSLObject:
 			sep = _kwargs["sep"]._dsl_str()
 		elif args.size() >= 2 and args[1] is DSLString:
 			sep = args[1].value
+		if sep.length() > 1:
+			# sep 只能为单个字符
+			raw.last_error = "ValueError: sep must be length 1."
+			return null
 		var s = ""
 		for i in range(raw.data.size()):
 			if i > 0 and sep != "":
@@ -11317,6 +12487,10 @@ class DSLBytes extends DSLObject:
 		if args.size() >= 2 and args[1] is DSLBytes:
 			for b in args[1].data:
 				chars[b] = true
+		elif args.size() >= 2:
+			# 非 bytes 字符集实参 (如 str): CPython 报 a bytes-like object is required
+			last_error = "TypeError: a bytes-like object is required, not '%s'" % args[1]._type_name()
+			return chars
 		else:
 			for b in [32, 9, 10, 13, 11, 12]:
 				chars[b] = true
@@ -11328,6 +12502,8 @@ class DSLBytes extends DSLObject:
 	func builtin_strip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var chars = _strip_char_set(args)
+		if last_error != "":
+			return null
 		var lo = 0
 		var hi = raw.data.size()
 		while lo < hi and chars.has(raw.data[lo]):
@@ -11339,6 +12515,8 @@ class DSLBytes extends DSLObject:
 	func builtin_lstrip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var chars = _strip_char_set(args)
+		if last_error != "":
+			return null
 		var lo = 0
 		while lo < raw.data.size() and chars.has(raw.data[lo]):
 			lo += 1
@@ -11347,6 +12525,8 @@ class DSLBytes extends DSLObject:
 	func builtin_rstrip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var chars = _strip_char_set(args)
+		if last_error != "":
+			return null
 		var hi = raw.data.size()
 		while hi > 0 and chars.has(raw.data[hi - 1]):
 			hi -= 1
@@ -11359,6 +12539,10 @@ class DSLBytes extends DSLObject:
 		if args.size() >= 2 and args[1] is DSLBytes:
 			sep_data = args[1].data
 			has_sep = true
+		elif args.size() >= 2:
+			# 非 bytes 分隔实参 (如 str): CPython 报 a bytes-like object is required
+			last_error = "TypeError: a bytes-like object is required, not '%s'" % args[1]._type_name()
+			return null
 		var maxsplit = -1
 		if args.size() >= 3 and args[2] is DSLInteger:
 			maxsplit = args[2].value
@@ -11397,14 +12581,30 @@ class DSLBytes extends DSLObject:
 	func builtin_replace(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var old_data = _bytes_arg_to_data(args[1])
+		if old_data == null:
+			return null
 		var new_data = _bytes_arg_to_data(args[2])
+		if new_data == null:
+			return null
 		var count = -1
 		if args.size() >= 4 and args[3] is DSLInteger:
 			count = args[3].value
+		var done = 0
+		# 空 old: CPython 按逐位置插入展开 (b"abc".replace(b"", b"-") == b"-a-b-c-"),
+		# 主循环对空 old 不前进会挂死宿主进程, 此处前置快路径按展开语义构造
+		if old_data.is_empty():
+			var res: Array[int] = []
+			var cnt = raw.data.size() + 1 if count < 0 else mini(count, raw.data.size() + 1)
+			for pos in range(raw.data.size() + 1):
+				if done < cnt:
+					res.append_array(new_data)
+					done += 1
+				if pos < raw.data.size():
+					res.append(raw.data[pos])
+			return _new_instance(res)
 		var out: Array[int] = []
 		var i = 0
 		var n = raw.data.size()
-		var done = 0
 		while i < n:
 			if count >= 0 and done >= count:
 				break
@@ -11422,10 +12622,46 @@ class DSLBytes extends DSLObject:
 
 	func builtin_find(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var sub = _bytes_arg_to_data(args[1])
-		var start = args[2].value if args.size() >= 3 and args[2] is DSLInteger else 0
-		var end = args[3].value if args.size() >= 4 and args[3] is DSLInteger else raw.data.size()
-		return DSLInteger.pooled(_bytes_find(raw.data, sub, start, end))
+		var sub = _bytes_arg_to_int_or_data(args[1], "argument should be integer or bytes-like object, not '%s'")
+		if sub == null:
+			return null
+		# start/end 归一 (负数从尾部计, 大数按 ±∞), 空针与 str 侧同语义
+		var rng = _bytes_range(args, raw.data.size())
+		var si: int = rng[0]
+		var ei: int = rng[1]
+		if sub.is_empty():
+			if si > ei:
+				return DSLInteger.pooled(-1)
+			return DSLInteger.pooled(mini(si, raw.data.size()))
+		if si >= raw.data.size() or ei <= si:
+			return DSLInteger.pooled(-1)
+		return DSLInteger.pooled(_bytes_find(raw.data, sub, si, ei))
+
+	## bytes.rfind(sub[, start[, end]]) - 从右向左查找
+	func builtin_rfind(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var raw = DSLObject._unwrap_dsl(args[0])
+		var sub = _bytes_arg_to_int_or_data(args[1], "argument should be integer or bytes-like object, not '%s'")
+		if sub == null:
+			return null
+		var rng = _bytes_range(args, raw.data.size())
+		var si: int = rng[0]
+		var ei: int = rng[1]
+		if sub.is_empty():
+			if si > ei:
+				return DSLInteger.pooled(-1)
+			return DSLInteger.pooled(mini(ei, raw.data.size()))
+		if ei <= si:
+			return DSLInteger.pooled(-1)
+		var ei2 = mini(ei, raw.data.size())
+		var p = -1
+		var idx = si
+		while idx <= ei2 - sub.size():
+			var pos = _bytes_find(raw.data, sub, idx, ei2)
+			if pos < 0:
+				break
+			p = pos
+			idx = pos + 1
+		return DSLInteger.pooled(p)
 
 	func builtin_index(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var pos = builtin_find(args, _kwargs)
@@ -11434,13 +12670,32 @@ class DSLBytes extends DSLObject:
 			return null
 		return pos
 
+	func builtin_rindex(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var pos = builtin_rfind(args, _kwargs)
+		if pos is DSLInteger and pos.value < 0:
+			last_error = "ValueError: substring not found"
+			return null
+		return pos
+
 	func builtin_count(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var sub = _bytes_arg_to_data(args[1])
+		var sub = _bytes_arg_to_int_or_data(args[1], "argument should be integer or bytes-like object, not '%s'")
+		if sub == null:
+			return null
+		# start/end 归一; 空针 count = 区间长度 + 1
+		var rng = _bytes_range(args, raw.data.size())
+		var si = mini(int(rng[0]), raw.data.size())
+		var ei = mini(int(rng[1]), raw.data.size())
+		if sub.is_empty():
+			if ei < si:
+				return DSLInteger.pooled(0)
+			return DSLInteger.pooled(ei - si + 1)
+		if ei <= si:
+			return DSLInteger.pooled(0)
 		var total = 0
-		var i = 0
-		while i <= raw.data.size() - sub.size():
-			var pos = _bytes_find(raw.data, sub, i, raw.data.size())
+		var i = si
+		while i <= ei - sub.size():
+			var pos = _bytes_find(raw.data, sub, i, ei)
 			if pos < 0:
 				break
 			total += 1
@@ -11449,12 +12704,16 @@ class DSLBytes extends DSLObject:
 
 	func builtin_startswith(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var sub = _bytes_arg_to_data(args[1])
+		var sub = _bytes_arg_to_data(args[1], "startswith first arg must be bytes or a tuple of bytes, not %s")
+		if sub == null:
+			return null
 		return DSLBool.new(raw.data.size() >= sub.size() and _bytes_find(raw.data, sub, 0, sub.size()) == 0)
 
 	func builtin_endswith(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var sub = _bytes_arg_to_data(args[1])
+		var sub = _bytes_arg_to_data(args[1], "endswith first arg must be bytes or a tuple of bytes, not %s")
+		if sub == null:
+			return null
 		var off = raw.data.size() - sub.size()
 		return DSLBool.new(off >= 0 and _bytes_find(raw.data, sub, off, raw.data.size()) == off)
 
@@ -11466,37 +12725,48 @@ class DSLBytes extends DSLObject:
 			return null
 		var out: Array[int] = []
 		var first = true
+		var seq_idx = 0
 		while it.has_next():
 			var item = it.next()
 			if it.suspended:
 				break
-			var seg = _bytes_arg_to_data(item)
+			var seg = _bytes_arg_to_data(item, "sequence item " + str(seq_idx) + ": expected a bytes-like object, %s found")
+			if seg == null:
+				return null
 			if not first:
 				out.append_array(raw.data)
 			out.append_array(seg)
 			first = false
+			seq_idx += 1
 		return _new_instance(out)
 
 	func builtin_center(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var fill = _fill_bytes(args)
+		var fill = _fill_bytes(args, "center")
+		if fill.is_empty():
+			return null
 		if args[1] is DSLInteger and (args[1] as DSLInteger).is_big():
 			raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
 			return null
 		var width = args[1].value if args[1] is DSLInteger else raw.data.size()
 		var total = width - raw.data.size()
+		# 奇偶校正 (与 str 版一致): 左侧多出一位当 (total & width & 1) 成立
 		var left = total / 2
+		if total > 0:
+			left = total / 2 + (total & width & 1)
 		var res: Array[int] = []
 		for i in range(maxi(left, 0)):
-			res.append(fill[i % fill.size()])
+			res.append(fill[0])
 		res.append_array(raw.data)
 		for i in range(maxi(total - left, 0)):
-			res.append(fill[(i + left) % fill.size()])
+			res.append(fill[0])
 		return _new_instance(res)
 
 	func builtin_ljust(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var fill = _fill_bytes(args)
+		var fill = _fill_bytes(args, "ljust")
+		if fill.is_empty():
+			return null
 		if args[1] is DSLInteger and (args[1] as DSLInteger).is_big():
 			raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
 			return null
@@ -11504,25 +12774,35 @@ class DSLBytes extends DSLObject:
 		var res: Array[int] = []
 		res.append_array(raw.data)
 		for i in range(maxi(width - raw.data.size(), 0)):
-			res.append(fill[i % fill.size()])
+			res.append(fill[0])
 		return _new_instance(res)
 
 	func builtin_rjust(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var fill = _fill_bytes(args)
+		var fill = _fill_bytes(args, "rjust")
+		if fill.is_empty():
+			return null
 		if args[1] is DSLInteger and (args[1] as DSLInteger).is_big():
 			raw.last_error = "OverflowError: Python int too large to convert to C ssize_t"
 			return null
 		var width = args[1].value if args[1] is DSLInteger else raw.data.size()
 		var res: Array[int] = []
 		for i in range(maxi(width - raw.data.size(), 0)):
-			res.append(fill[i % fill.size()])
+			res.append(fill[0])
 		res.append_array(raw.data)
 		return _new_instance(res)
 
-	func _fill_bytes(args: Array[DSLObject]) -> Array[int]:
-		if args.size() >= 3 and args[2] is DSLBytes and args[2].data.size() > 0:
-			return args[2].data
+	## 取填充字节: fill 实参必须是单字节 bytes, 否则报 TypeError [br]
+	## [param args] 调用实参 [br]
+	## [param mname] 方法名 (报错文案) [br]
+	## [returns] 单元素数组 (填充字节), 非法返回空数组并置 raw.last_error
+	func _fill_bytes(args: Array[DSLObject], mname: String) -> Array[int]:
+		if args.size() >= 3:
+			var f = DSLObject._unwrap_dsl(args[2])
+			if not (f is DSLBytes) or f.data.size() != 1:
+				DSLObject._unwrap_dsl(args[0]).last_error = "TypeError: %s() argument 2 must be a byte string of length 1, not %s" % [mname, f._type_name()]
+				return []
+			return f.data
 		return [32]
 
 ## bytes 的迭代器 (产出整数)
@@ -11591,6 +12871,18 @@ class DSLByteArray extends DSLBytes:
 				return null
 			self_obj.data.append(it.value)
 		return DSLNone.new()
+
+	## bytearray += bytes-like: 原地 extend (CPython bytearray.__iadd__ 仅收 bytes-like) [br]
+	## 返回自身保持别名, list/tuple/range 等可迭代按 CPython 报 "can't concat X to bytearray"
+	func magic_iadd(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLByteArray
+		var src = DSLObject._unwrap_dsl(args[1])
+		if not (src is DSLBytes or src is DSLByteArray):
+			self_obj.last_error = "TypeError: can't concat %s to bytearray" % src._type_name()
+			return null
+		if self_obj.builtin_extend([self_obj, src] as Array[DSLObject], _kwargs) == null:
+			return null
+		return self_obj
 
 	## bytearray.insert(i, b)
 	func builtin_insert(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -11713,10 +13005,22 @@ class DSLByteArray extends DSLBytes:
 		if idx_i == null:
 			return
 		var idx = idx_i.value
+		# 负索引从尾部计数 (读路径已有归一)
+		if idx < 0:
+			idx = idx + data.size()
 		if idx < 0 or idx >= data.size():
 			last_error = "IndexError: bytearray index out of range"
 			return
 		data[idx] = val.value
+
+	## dunder 直调入口: 与语句路径共用 _dsl_setitem 的完整校验 (越界值/类型错不再静默)
+	func magic_setitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		self_obj._dsl_setitem(args[1], args[2])
+		if self_obj.last_error != "":
+			# 错误留在接收者上: method-wrapper 调用点按 bound_self.last_error 转异常
+			return null
+		return DSLNone.new()
 
 	## bytearray.delitem: 整数与切片
 	func _dsl_delitem(index: DSLObject):
@@ -11821,6 +13125,12 @@ class DSLMemoryView extends DSLObject:
 
 	## 把下标规范化为视图内偏移, 越界报 IndexError
 	func _resolve_index(index: DSLObject) -> int:
+		if index is DSLBool:
+			var bv: int = 1 if index.value else 0
+			if bv < _size:
+				return bv
+			last_error = "IndexError: index out of bounds on dimension 1"
+			return -2147483648
 		if not (index is DSLInteger):
 			last_error = "TypeError: memoryview index must be integer, not '%s'" % index._type_name()
 			return -2147483648
@@ -11861,7 +13171,23 @@ class DSLMemoryView extends DSLObject:
 			var res = _slice_range(index, _size)
 			if res == null:
 				return null
-			return DSLMemoryView.new(_obj, _offset + int(res[0]), int(res[2]) * (int(res[1]) - int(res[0])) if int(res[2]) > 0 else 0)
+			var si = int(res[0])
+			var st = int(res[2])
+			if st == 1:
+				return DSLMemoryView.new(_obj, _offset + si, maxi(int(res[1]) - si, 0))
+			# 非平凡步长 (含负步长): CPython 1-D 视图按步长取内容, 以快照为底的等长视图承载
+			var data: Array[int] = []
+			if st > 0:
+				var walk = si
+				while walk < int(res[1]):
+					data.append(_obj.data[_offset + walk])
+					walk += st
+			else:
+				var walk_rev = si
+				while walk_rev > int(res[1]):
+					data.append(_obj.data[_offset + walk_rev])
+					walk_rev += st
+			return DSLMemoryView.new(DSLBytes.new(data), 0, data.size())
 		var i = _resolve_index(index)
 		if i == -2147483648:
 			return null
@@ -11871,14 +13197,13 @@ class DSLMemoryView extends DSLObject:
 	func _slice_range(slice: DSLSlice, n: int):
 		var pstep = 1
 		if slice.step != null:
-			var pstep_i = DSLObject._seq_index_int(slice.step, self)
-			if pstep_i == DSLObject.INDEX_ERR:
+			pstep = DSLObject._seq_index_int(slice.step, self)
+			if pstep == DSLObject.INDEX_ERR:
 				DSLObject._seq_index_fail(slice.step, self, "TypeError: slice indices must be integers")
 				return null
-			pstep = pstep_i.value
-			if pstep == 0:
-				last_error = "ValueError: slice step cannot be zero"
-				return null
+		if pstep == 0:
+			last_error = "ValueError: slice step cannot be zero"
+			return null
 		var pstart = 0 if pstep > 0 else n - 1
 		var pstop = n if pstep > 0 else -1
 		if slice.start != null:
@@ -12240,24 +13565,25 @@ class DSLDeque extends DSLObject:
 				return false
 		return true
 
-	## 元素等值比较 (数值跨型相等)
+	## 元素等值比较 (统一经 _dsl_eq, 含身份短路与跨型数值, 大数 value 恒 0 不得直读)
 	func _items_eq(a: DSLObject, b: DSLObject) -> bool:
-		if a is DSLInteger and b is DSLInteger:
-			return a.value == b.value
-		if a is DSLFloat and b is DSLFloat:
-			return a.value == b.value
-		if a is DSLString and b is DSLString:
-			return a.value == b.value
-		return a == b
+		return a._dsl_eq(b)
 
 	func _dsl_getitem(index: DSLObject) -> DSLObject:
 		if index is DSLSlice:
 			last_error = "TypeError: sequence index must be integer, not 'slice'"
 			return null
-		if not (index is DSLInteger):
-			last_error = "TypeError: deque indices must be integers, not '%s'" % index._type_name()
+		var idx = DSLObject._unwrap_dsl(index)
+		if idx is DSLBool:
+			idx = DSLInteger.pooled(1 if idx.value else 0)
+		if not (idx is DSLInteger):
+			last_error = "TypeError: deque indices must be integers, not '%s'" % idx._type_name()
 			return null
-		var i = index.value
+		# 大数下标按 CPython 报 IndexError
+		if (idx as DSLInteger).is_big():
+			last_error = "IndexError: cannot fit 'int' into an index-sized integer"
+			return null
+		var i = (idx as DSLInteger).value
 		if i < 0:
 			i += items.size()
 		if i < 0 or i >= items.size():
@@ -12270,10 +13596,17 @@ class DSLDeque extends DSLObject:
 		if index is DSLSlice:
 			last_error = "TypeError: sequence index must be integer, not 'slice'"
 			return
-		if not (index is DSLInteger):
-			last_error = "TypeError: deque indices must be integers, not '%s'" % index._type_name()
+		var idx = DSLObject._unwrap_dsl(index)
+		if idx is DSLBool:
+			idx = DSLInteger.pooled(1 if idx.value else 0)
+		if not (idx is DSLInteger):
+			last_error = "TypeError: deque indices must be integers, not '%s'" % idx._type_name()
 			return
-		var i = index.value
+		# 大数下标按 CPython 报 IndexError
+		if (idx as DSLInteger).is_big():
+			last_error = "IndexError: cannot fit 'int' into an index-sized integer"
+			return
+		var i = (idx as DSLInteger).value
 		if i < 0:
 			i += items.size()
 		if i < 0 or i >= items.size():
@@ -12360,6 +13693,8 @@ class DSLDeque extends DSLObject:
 		if other is DSLDeque:
 			var c = DSLList._seq_lex_compare(self_obj.items, (other as DSLDeque).items, self_obj, "<")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c < 0)
 		self_obj._comparison_type_error("<", other)
@@ -12371,6 +13706,8 @@ class DSLDeque extends DSLObject:
 		if other is DSLDeque:
 			var c = DSLList._seq_lex_compare(self_obj.items, (other as DSLDeque).items, self_obj, ">")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c > 0)
 		self_obj._comparison_type_error(">", other)
@@ -12382,6 +13719,8 @@ class DSLDeque extends DSLObject:
 		if other is DSLDeque:
 			var c = DSLList._seq_lex_compare(self_obj.items, (other as DSLDeque).items, self_obj, "<=")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c <= 0)
 		self_obj._comparison_type_error("<=", other)
@@ -12393,6 +13732,8 @@ class DSLDeque extends DSLObject:
 		if other is DSLDeque:
 			var c = DSLList._seq_lex_compare(self_obj.items, (other as DSLDeque).items, self_obj, ">=")
 			if c == -2:
+				if self_obj.last_error != "":
+					return null
 				return DSLBool.new(false)
 			return DSLBool.new(c >= 0)
 		self_obj._comparison_type_error(">=", other)
@@ -12530,8 +13871,14 @@ class DSLDeque extends DSLObject:
 	func builtin_rotate(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLDeque
 		var n_obj = DSLObject._unwrap_dsl(args[1])
+		if n_obj is DSLBool:
+			n_obj = DSLInteger.pooled(1 if n_obj.value else 0)
 		if not (n_obj is DSLInteger):
 			last_error = "TypeError: an integer is required"
+			return null
+		# 大数 rotate 按 CPython 报 OverflowError
+		if (n_obj as DSLInteger).is_big():
+			last_error = "OverflowError: Python int too large to convert to C ssize_t"
 			return null
 		var n = n_obj.value
 		if self_obj.items.is_empty() or n == 0:
@@ -12582,19 +13929,25 @@ class DSLDeque extends DSLObject:
 		var end = self_obj.items.size()
 		if args.size() >= 3:
 			var s_obj = DSLObject._unwrap_dsl(args[2])
-			if not (s_obj is DSLInteger):
+			if s_obj is DSLBool:
+				start = 1 if s_obj.value else 0
+			elif s_obj is DSLInteger:
+				start = s_obj.value
+			else:
 				last_error = "TypeError: an integer is required"
 				return null
-			start = s_obj.value
 			if start < 0:
 				start += self_obj.items.size()
 			start = maxi(start, 0)
 		if args.size() >= 4:
 			var e_obj = DSLObject._unwrap_dsl(args[3])
-			if not (e_obj is DSLInteger):
+			if e_obj is DSLBool:
+				end = 1 if e_obj.value else 0
+			elif e_obj is DSLInteger:
+				end = e_obj.value
+			else:
 				last_error = "TypeError: an integer is required"
 				return null
-			end = e_obj.value
 			if end < 0:
 				end += self_obj.items.size()
 		var idx = self_obj._deque_index(target, start, end)
@@ -12699,13 +14052,83 @@ class DSLGeneratorContextManager extends DSLContextlibManager:
 	func _dsl_str() -> String:
 		return "<contextlib._GeneratorContextManager object at 0x%x>" % abs(get_instance_id())
 
+	## ContextDecorator: 可作装饰器调用 (magic_call 提供包装函数)
+	func _dsl_is_callable() -> bool:
+		return true
+
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
 
-	## 生成器耗尽判定: 耗尽以 StopIteration 表达 (迭代协议语义), [br]
+	## ContextDecorator: @cm() 作用于函数时返回包装函数, [br]
+	## 调用时进入本上下文管理器、执行被装饰函数、退出管理器 (CPython 语义) [br]
+	## [param args] [被装饰函数] [br]
+	## [returns] 包装后的可调用对象
+	func magic_call(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject] = {}) -> DSLObject:
+		if args.size() < 1:
+			Interpreter.active.raise_exception("TypeError", "context manager decorator expected a callable")
+			return null
+		var wrapped = args[0]
+		if not wrapped._dsl_is_callable():
+			Interpreter.active.raise_exception("TypeError", "'%s' object is not callable" % wrapped._type_name())
+			return null
+		var bf = DSLBuiltinFunction.new("_recreate_cm", Callable(self, "_cm_decorate_call"))
+		var empty_kw: Dictionary[String, DSLObject] = {}
+		return DSLPartial.new(bf, [wrapped] as Array[DSLObject], empty_kw)
+
+	## 装饰包装的调用体: 进入管理器 → 调用被装饰函数 → 退出管理器 [br]
+	## 被装饰函数抛异常时按 (类型, 实例, None) 传给 __exit__, 抑制则不传播 [br]
+	## [param args] [被装饰函数, 原调用实参...] [br]
+	## [returns] 被装饰函数的返回值
+	func _cm_decorate_call(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var interp = Interpreter.active
+		if args.size() < 1:
+			return null
+		var wrapped = args[0]
+		var call_args: Array[DSLObject] = []
+		for i in range(1, args.size()):
+			call_args.append(args[i])
+		# 每次调用重建上下文管理器 (fresh 生成器, 与 CPython _recreate_cm 同语义)
+		var fresh: DSLGeneratorContextManager = DSLGeneratorContextManager.new(func_obj.magic_call([] as Array[DSLObject], {} as Dictionary[String, DSLObject]), func_obj)
+		var enter = fresh.cm_invoke("__enter__", [])
+		if interp._suspended:
+			interp._needs_replay = true
+			return null
+		if interp.report.has_error:
+			return null
+		var result = wrapped.magic_call(call_args, {} as Dictionary[String, DSLObject])
+		if interp._suspended:
+			interp._needs_replay = true
+			return null
+		var exit_args: Array[DSLObject] = []
+		var has_exc = result == null and interp.report.has_error
+		if has_exc:
+			var exc = interp.last_exception
+			if exc != null:
+				exit_args.append(interp._exception_type_obj(exc))
+				exit_args.append(exc)
+				exit_args.append(interp.get_none())
+			else:
+				has_exc = false
+		if not has_exc:
+			exit_args = [interp.get_none(), interp.get_none(), interp.get_none()] as Array[DSLObject]
+		var exit_r = fresh.cm_invoke("__exit__", exit_args)
+		if interp._suspended:
+			interp._needs_replay = true
+			return null
+		if exit_r is DSLBool and exit_r.value:
+			# __exit__ 抑制了在途异常: 清错误通道并返回 None (CPython 语义)
+			if has_exc:
+				interp.report.clear_error()
+				interp.last_exception = null
+			return interp.get_none()
+		if interp.report.has_error:
+			return null
+		return result
+
+	## 生成器耗尽判定: 耗尽以 StopIteration (含其子类) 表达 (迭代协议语义), [br]
 	## 命中时清理错误通道与 last_exception 并返回 true
 	func _cm_exhausted() -> bool:
-		if gen._finished and Interpreter.active.last_exception != null and Interpreter.active.last_exception._type_name() == "StopIteration":
+		if gen._finished and Interpreter.active._is_stop_iteration(Interpreter.active.last_exception):
 			Interpreter.active.report.clear_error()
 			Interpreter.active.last_exception = null
 			return true
@@ -12824,8 +14247,12 @@ class DSLClosing extends DSLContextlibManager:
 			return null
 		# 用户方法经 _dsl_getattribute 已绑定接收者, 内建方法形态需显式传接收者
 		if close_fn is DSLMethod or close_fn is DSLFunction:
-			return close_fn.magic_call([] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-		return close_fn.magic_call([thing] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			close_fn.magic_call([] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		else:
+			close_fn.magic_call([thing] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		# close() 的返回值不得作为 __exit__ 抑制结果 (CPython closing.__exit__ 返回 None 不抑制),
+		# close() 自身抛异常时 report.has_error 已置位, 由调用方传播
+		return DSLBool.new(false)
 
 ## suppress(*exceptions): 异常类型命中时抑制
 class DSLSuppress extends DSLContextlibManager:
@@ -12869,10 +14296,10 @@ class DSLExitStack extends DSLContextlibManager:
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
 
-	## 方法分派: callback / enter_context / pop_all / close 经属性访问 [br]
+	## 方法分派: callback / push / enter_context / pop_all / close 经属性访问 [br]
 	## 返回绑定接收者的 method-wrapper (调用时自动前置 self)
 	func _dsl_getattribute(name: String) -> DSLObject:
-		var method_names = {"callback": true, "enter_context": true, "pop_all": true, "close": true}
+		var method_names = {"callback": true, "push": true, "enter_context": true, "pop_all": true, "close": true}
 		if method_names.has(name):
 			var desc = DSLWrappedDescriptor.new(name, Callable(self, "builtin_" + name))
 			return DSLMethodWrapper.new(desc, self)
@@ -12886,7 +14313,22 @@ class DSLExitStack extends DSLContextlibManager:
 		for i in range(2, args.size()):
 			cb_args.append(args[i])
 		entries.append({"kind": "cb", "cb": args[1], "args": cb_args})
-		return DSLNone.new()
+		# callback 返回回调函数
+		return args[1]
+
+	## push(cm_or_cb) - 压入上下文管理器或回调, 返回实参本身
+	func builtin_push(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			Interpreter.active.raise_exception("TypeError", "push() takes exactly one argument (%d given)" % (args.size() - 1))
+			return null
+		var item = args[1]
+		var entry: Dictionary = {}
+		if item._dsl_is_callable():
+			entry = {"kind": "cb", "cb": item, "args": [] as Array[DSLObject]}
+		else:
+			entry = {"kind": "cm", "mgr": item}
+		entries.append(entry)
+		return item
 
 	func builtin_enter_context(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 2:
@@ -12914,6 +14356,11 @@ class DSLExitStack extends DSLContextlibManager:
 	func _cm_exit(args: Array[DSLObject]) -> DSLObject:
 		var typ = args[0]
 		var exc = args[1]
+		# 收到异常且任一内层管理器抑制时整体抑制 (CPython ExitStack.__exit__ 语义),
+		# 抑制后后续条目按无异常形态接收, 返回值 = 原异常存在且被抑制
+		var orig_received = typ != null and not (typ is DSLNone)
+		var received_exc = orig_received
+		var suppressed = false
 		while entries.size() > 0:
 			var e = entries.pop_back()
 			if e["kind"] == "cb":
@@ -12925,7 +14372,7 @@ class DSLExitStack extends DSLContextlibManager:
 					return null
 			else:
 				var exit_args: Array[DSLObject] = []
-				if typ != null and not (typ is DSLNone):
+				if received_exc:
 					exit_args.append(typ)
 					exit_args.append(exc)
 					exit_args.append(Interpreter.active.get_none())
@@ -12939,7 +14386,10 @@ class DSLExitStack extends DSLContextlibManager:
 					return null
 				if r2 == null and Interpreter.active.report.has_error:
 					return null
-		return DSLBool.new(false)
+				if orig_received and r2 is DSLBool and r2.value:
+					suppressed = true
+					received_exc = false
+		return DSLBool.new(orig_received and suppressed)
 
 ## nullcontext(enter_result=None): 原样返回的空管理器
 class DSLNullContext extends DSLContextlibManager:
@@ -13007,6 +14457,34 @@ class DSLSysModulesView extends DSLDict:
 		super._init()
 		sys_mod = p_mod
 
+	func _view_ensure() -> void:
+		_ensure()
+
+	func _dsl_delitem(key: DSLObject):
+		var target = DSLObject._unwrap_dsl(key)
+		if not (target is DSLString):
+			last_error = "KeyError: %s" % DSLObject._py_repr(key)
+			return
+		var name = (target as DSLString).value
+		# del sys.modules["x"] 驱逐模块缓存 (可借此强制重载)
+		if Interpreter.active.modules.has(name):
+			Interpreter.active.modules.erase(name)
+			_ensure()
+			return
+		last_error = "KeyError: %s" % DSLObject._py_repr(key)
+
+	func _dsl_setitem(key: DSLObject, value: DSLObject):
+		var target = DSLObject._unwrap_dsl(key)
+		if not (target is DSLString):
+			last_error = "KeyError: %s" % DSLObject._py_repr(key)
+			return
+		var name = (target as DSLString).value
+		if value is DSLModule:
+			Interpreter.active.modules[name] = value
+			_ensure()
+			return
+		last_error = "TypeError: module must be a module, not '%s'" % value._type_name()
+
 	func _ensure() -> void:
 		dict.clear()
 		var ip = Interpreter.active
@@ -13049,6 +14527,8 @@ class DSLSysModulesView extends DSLDict:
 class DSLGlobalsView extends DSLDict:
 	## 代理的全局环境
 	var env: DSLEnvironment = null
+	## 非 str 键侧表: globals() 为真 dict 可承载任意可哈希键, 非 str 键不入环境
+	var extra: Dictionary = {}
 
 	func _init(p_env: DSLEnvironment):
 		super._init()
@@ -13060,60 +14540,82 @@ class DSLGlobalsView extends DSLDict:
 			# 键按 DSLDict 的字符串编码约定 (与 _key_to_variant 的 "s:" 前缀一致)
 			var kv: Variant = "s:" + k
 			dict[kv] = env.values[k]
+		# 非 str 键并入 (globals 为真 dict 可承载任意可哈希键)
+		for k in extra:
+			dict[k] = extra[k]
 
 	func _dsl_getitem(index: DSLObject) -> DSLObject:
 		var target = DSLObject._unwrap_dsl(index)
-		if not (target is DSLString):
+		if target is DSLString:
+			var k = (target as DSLString).value
+			if not env.values.has(k):
+				last_error = "KeyError: %s" % DSLObject._py_repr(index)
+				return null
+			return env.values[k]
+		# 非 str 键从侧表取
+		var kv = _key_to_variant(index)
+		if not extra.has(kv):
 			last_error = "KeyError: %s" % DSLObject._py_repr(index)
 			return null
-		var k = (target as DSLString).value
-		if not env.values.has(k):
-			last_error = "KeyError: %s" % DSLObject._py_repr(index)
-			return null
-		return env.values[k]
+		return extra[kv]
 
 	func _dsl_setitem(index: DSLObject, value: DSLObject) -> void:
-		if not (index is DSLString):
-			last_error = "TypeError: keys must be str, not '%s'" % index._type_name()
+		var target = DSLObject._unwrap_dsl(index)
+		if target is DSLString:
+			env.values[(target as DSLString).value] = value
 			return
-		env.values[(index as DSLString).value] = value
+		# 非 str 键写入侧表
+		extra[_key_to_variant(index, true)] = value
 
 	func _dsl_delitem(index: DSLObject) -> void:
-		var k = index._key_to_string()
-		if not env.values.has(k):
+		# 键判定改用字符串直判
+		var target = DSLObject._unwrap_dsl(index)
+		if target is DSLString:
+			var k = (target as DSLString).value
+			if not env.values.has(k):
+				last_error = "KeyError: %s" % DSLObject._py_repr(index)
+				return
+			env.values.erase(k)
+			return
+		# 非 str 键从侧表删
+		var kv = _key_to_variant(index)
+		if not extra.has(kv):
 			last_error = "KeyError: %s" % DSLObject._py_repr(index)
 			return
-		env.values.erase(k)
+		extra.erase(kv)
 
 	func magic_len(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(env.values.size())
+		return DSLInteger.pooled(env.values.size() + extra.size())
 
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var target = DSLObject._unwrap_dsl(args[1])
 		if target is DSLString:
 			return DSLBool.new(env.values.has((target as DSLString).value))
-		return DSLBool.new(false)
+		return DSLBool.new(extra.has(_key_to_variant(args[1])))
 
 	func _dsl_iter() -> DSLIterator:
 		_sync_in()
 		return DSLDictKeyIterator.new(self)
 
 	func magic_keys(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		_sync_in()
 		var keys: Array[DSLObject] = []
-		for k in env.values:
-			keys.append(DSLString.new(k))
+		for kv in dict:
+			keys.append(_original_key_obj(kv))
 		return DSLDictKeys.new(keys)
 
 	func magic_values(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		_sync_in()
 		var vals: Array[DSLObject] = []
-		for k in env.values:
-			vals.append(env.values[k])
+		for kv in dict:
+			vals.append(dict[kv])
 		return DSLDictValues.new(vals)
 
 	func magic_items(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		_sync_in()
 		var items: Array[DSLObject] = []
-		for k in env.values:
-			items.append(DSLTuple.new([DSLString.new(k), env.values[k]] as Array[DSLObject]))
+		for kv in dict:
+			items.append(DSLTuple.new([_original_key_obj(kv), dict[kv]] as Array[DSLObject]))
 		return DSLDictItems.new(items)
 
 	func _dsl_str() -> String:
@@ -13128,6 +14630,127 @@ class DSLGlobalsView extends DSLDict:
 		_sync_in()
 		return super.magic_eq(args, _kwargs)
 
+	## get/pop/setdefault/update 四个方法直写活环境
+	## 描述符回调绑定在 DSLDict 原型上, 子类覆写 builtin_* 不生效,
+	## 故在此拦截并返回环境路由函数
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "get" or name == "pop" or name == "setdefault" or name == "update":
+			var bf = DSLBuiltinFunction.new(name, Callable(self, "_globals_" + name))
+			bf.__self__ = self
+			return bf
+		return super._dsl_getattribute(name)
+
+	func _globals_get(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var key = DSLObject._unwrap_dsl(args[1])
+		var k = (key as DSLString).value if key is DSLString else ""
+		if key is DSLString:
+			if env.values.has(k):
+				return env.values[k]
+		elif extra.has(_key_to_variant(args[1])):
+			return extra[_key_to_variant(args[1])]
+		if args.size() >= 3:
+			return args[2]
+		return _none_singleton()
+
+	func _globals_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var key = DSLObject._unwrap_dsl(args[1])
+		var k = (key as DSLString).value if key is DSLString else ""
+		if key is DSLString:
+			if env.values.has(k):
+				var val = env.values[k]
+				env.values.erase(k)
+				return val
+		else:
+			var kv = _key_to_variant(args[1])
+			if extra.has(kv):
+				var val = extra[kv]
+				extra.erase(kv)
+				return val
+		if args.size() >= 3:
+			return args[2]
+		last_error = "KeyError: %s" % DSLObject._py_repr(args[1])
+		last_error_args = [args[1]] as Array[DSLObject]
+		return null
+
+	func _globals_setdefault(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2:
+			last_error = "TypeError: setdefault() takes at least 1 argument"
+			return null
+		var key = DSLObject._unwrap_dsl(args[1])
+		var default_val = _none_singleton()
+		if args.size() >= 3:
+			default_val = args[2]
+		# 非 str 键走侧表 (CPython globals 真 dict 可承载任意可哈希键)
+		if not (key is DSLString):
+			var kv = _key_to_variant(args[1], true)
+			if extra.has(kv):
+				return extra[kv]
+			extra[kv] = default_val
+			return default_val
+		var k = (key as DSLString).value
+		if env.values.has(k):
+			return env.values[k]
+		env.values[k] = default_val
+		return default_val
+
+	func _globals_update(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() >= 2:
+			var other = args[1]
+			var other_raw = other
+			if other._wrapped != null:
+				other_raw = other._wrapped
+			if other_raw is DSLDict:
+				for k in other_raw.dict.keys():
+					var orig = other_raw._original_key_obj(k)
+					if not _globals_write_key(orig, other_raw.dict[k]):
+						return null
+			elif other_raw is DSLList or other_raw is DSLTuple:
+				for idx in range(other_raw.items.size()):
+					var item = other_raw.items[idx]
+					if item is DSLTuple or item is DSLList:
+						if item.items.size() != 2:
+							last_error = "ValueError: dictionary update sequence element #%d has length %d; 2 is required" % [idx, item.items.size()]
+							return null
+						if not _globals_write_key(item.items[0], item.items[1]):
+							return null
+					else:
+						last_error = "TypeError: cannot convert dictionary update sequence element #%d to a sequence" % idx
+						return null
+			else:
+				var src_it = other._dsl_iter()
+				if src_it == null:
+					last_error = "TypeError: '%s' object is not iterable" % other._type_name()
+					return null
+				var idx2 = 0
+				while src_it.has_next():
+					var item = src_it.next()
+					if src_it.suspended:
+						break
+					var item_raw = DSLObject._unwrap_dsl(item)
+					if item_raw is DSLTuple or item_raw is DSLList:
+						if item_raw.items.size() != 2:
+							last_error = "ValueError: dictionary update sequence element #%d has length %d; 2 is required" % [idx2, item_raw.items.size()]
+							return null
+						if not _globals_write_key(item_raw.items[0], item_raw.items[1]):
+							return null
+					else:
+						last_error = "TypeError: cannot convert dictionary update sequence element #%d to a sequence" % idx2
+						return null
+					idx2 += 1
+		for k in _kwargs.keys():
+			if not _globals_write_key(DSLString.new(k), _kwargs[k]):
+				return null
+		return DSLNone.new()
+
+	func _globals_write_key(k: DSLObject, v: DSLObject) -> bool:
+		var kk = DSLObject._unwrap_dsl(k)
+		# 非 str 键写入侧表 (CPython globals 真 dict 可承载任意可哈希键)
+		if not (kk is DSLString):
+			extra[_key_to_variant(k, true)] = v
+			return true
+		env.values[(kk as DSLString).value] = v
+		return true
+
 
 ## DSL 文件对象, 对应 Python open() 的返回值 [br]
 ## 文本/二进制两态; 路径语义随宿主 FileAccess (相对路径按工程根解析); [br]
@@ -13141,6 +14764,10 @@ class DSLFile extends DSLObject:
 	var fmode: String = "r"
 	## 二进制标记
 	var binary: bool = false
+	## 可读标记 (r 系 / +)
+	var _readable_flag: bool = true
+	## 可写标记 (w/a/x 系 / +)
+	var _writable_flag: bool = false
 	## 是否已关闭
 	var is_closed: bool = false
 	## 文本读缓冲 (惰性加载) 与读游标
@@ -13151,13 +14778,18 @@ class DSLFile extends DSLObject:
 	## 构造文件对象
 	## [param p_fa] 已打开的 FileAccess [br]
 	## [param p_path] 路径 [br]
-	## [param p_mode] 模式
-	func _init(p_fa: FileAccess, p_path: String, p_mode: String):
+	## [param p_mode] 模式 [br]
+	## [param p_info] _parse_file_mode 的解析结果 (可空)
+	func _init(p_fa: FileAccess, p_path: String, p_mode: String, p_info: Dictionary = {}):
 		super._init()
 		_fa = p_fa
 		fpath = p_path
 		fmode = p_mode
 		binary = fmode.ends_with("b")
+		if p_info.size() > 0:
+			binary = p_info["binary"]
+			_readable_flag = p_info["readable"]
+			_writable_flag = p_info["writable"]
 
 	func _type_name() -> String:
 		return "BufferedReader" if binary else "TextIOWrapper"
@@ -13167,13 +14799,13 @@ class DSLFile extends DSLObject:
 		if Interpreter.active != null:
 			Interpreter.active.raise_exception_from_last_error(err)
 
-	## 是否处于可读模式 (r 系)
+	## 是否处于可读模式 (r 系 / +)
 	func _is_readable() -> bool:
-		return fmode.begins_with("r")
+		return _readable_flag
 
-	## 是否处于可写模式 (w/a 系)
+	## 是否处于可写模式 (w/a/x 系 / +)
 	func _is_writable() -> bool:
-		return fmode.begins_with("w") or fmode.begins_with("a")
+		return _writable_flag
 
 	## 已关闭/读写权限统一校验, 失败时报错并返回 false
 	func _check(need_read: bool, need_write: bool) -> bool:
@@ -13184,14 +14816,15 @@ class DSLFile extends DSLObject:
 			_raise("UnsupportedOperation: not readable")
 			return false
 		if need_write and not _is_writable():
-			_raise("UnsupportedOperation: write")
+			_raise("UnsupportedOperation: not writable")
 			return false
 		return true
 
-	## 惰性加载文本读缓冲
+	## 惰性加载文本读缓冲 (只写模式不读, 避免对只写 FileAccess 发起读)
 	func _ensure_text_buf() -> void:
 		if not _text_buf_loaded:
-			_text_buf = _fa.get_as_text()
+			if _is_readable():
+				_text_buf = _fa.get_as_text()
 			_text_buf_loaded = true
 
 	## 文本读: 读缓冲按游标取剩余/定长
@@ -13263,6 +14896,9 @@ class DSLFile extends DSLObject:
 			"flush": DSLWrappedDescriptor.new("flush", Callable(self, "builtin_fflush")),
 			"readable": DSLWrappedDescriptor.new("readable", Callable(self, "builtin_freadable")),
 			"writable": DSLWrappedDescriptor.new("writable", Callable(self, "builtin_fwritable")),
+			"seekable": DSLWrappedDescriptor.new("seekable", Callable(self, "builtin_fseekable")),
+			"isatty": DSLWrappedDescriptor.new("isatty", Callable(self, "builtin_fisatty")),
+			"truncate": DSLWrappedDescriptor.new("truncate", Callable(self, "builtin_ftruncate")),
 			"__enter__": DSLWrappedDescriptor.new("__enter__", Callable(self, "builtin_fenter")),
 			"__exit__": DSLWrappedDescriptor.new("__exit__", Callable(self, "builtin_fexit")),
 		}
@@ -13281,6 +14917,10 @@ class DSLFile extends DSLObject:
 			if not (s_obj is DSLInteger):
 				self_obj._raise("TypeError: an integer is required")
 				return null
+			# 超出 ssize_t 的大数 size 报 OverflowError
+			if (s_obj as DSLInteger).is_big():
+				self_obj._raise("OverflowError: cannot fit 'int' into an index-sized integer")
+				return null
 			size = s_obj.value
 		if size == 0:
 			return DSLString.new("") if not self_obj.binary else DSLBytes.new([])
@@ -13291,11 +14931,19 @@ class DSLFile extends DSLObject:
 			return DSLBytes.new(data)
 		return DSLString.new(self_obj._read_text(size))
 
-	## readline(): 读一行 (含行尾), 文件尾返回空
+	## readline(): 读一行 (含行尾), 文件尾返回空, 二进制读至换行返回 bytes
 	func builtin_freadline(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLFile
 		if not self_obj._check(true, false):
 			return null
+		if self_obj.binary:
+			var out: Array[int] = []
+			while self_obj._fa.get_position() < self_obj._fa.get_length():
+				var b = self_obj._fa.get_8()
+				out.append(b)
+				if b == 10:
+					break
+			return DSLBytes.new(out)
 		self_obj._ensure_text_buf()
 		var rest = self_obj._text_buf.substr(self_obj._text_pos)
 		if rest == "":
@@ -13337,40 +14985,92 @@ class DSLFile extends DSLObject:
 		self_obj._fa.flush()
 		return DSLInteger.pooled(val.value.length())
 
-	## writelines(list): 逐项写入 (不加分隔)
+	## writelines(lines): 逐项写入任意可迭代, 返回 None
 	func builtin_fwritelines(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLFile
 		if not self_obj._check(false, true):
 			return null
 		var seq = DSLObject._unwrap_dsl(args[1])
-		if not (seq is DSLList or seq is DSLTuple):
+		var it: DSLIterator = null
+		if seq is DSLList or seq is DSLTuple:
+			it = DSLListIterator.new(seq.items)
+		else:
+			it = seq._dsl_iter()
+		if it == null:
 			self_obj._raise("TypeError: '%s' object is not iterable" % seq._type_name())
 			return null
-		var count = 0
-		for it in seq.items:
-			var v = DSLObject._unwrap_dsl(it)
+		while it.has_next():
+			var v = DSLObject._unwrap_dsl(it.next())
 			if self_obj.binary:
 				if not (v is DSLBytes):
 					self_obj._raise("TypeError: a bytes-like object is required, not '%s'" % v._type_name())
 					return null
 				for b in v.data:
 					self_obj._fa.store_8(b)
-				count += v.data.size()
 			else:
 				if not (v is DSLString):
 					self_obj._raise("TypeError: write() argument must be str, not %s" % v._type_name())
 					return null
 				self_obj._fa.store_string(v.value)
-				count += v.value.length()
 		self_obj._fa.flush()
-		return DSLInteger.pooled(count)
+		return DSLNone.new()
 
-	## readable()/writable()
+	## readable()/writable(): 已关闭文件 readable 报 ValueError, writable 返回 False
 	func builtin_freadable(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLBool.new((args[0] as DSLFile)._is_readable())
+		var self_obj = args[0] as DSLFile
+		if self_obj.is_closed:
+			self_obj._raise("ValueError: I/O operation on closed file")
+			return null
+		return DSLBool.new(self_obj._is_readable())
 
 	func builtin_fwritable(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLBool.new((args[0] as DSLFile)._is_writable())
+		var self_obj = args[0] as DSLFile
+		if self_obj.is_closed:
+			# CPython: 已关闭文件的 writable() 返回 False (不抛错), 与 readable() 不同
+			return DSLBool.new(false)
+		return DSLBool.new(self_obj._is_writable())
+
+	## seekable(): 恒真
+	func builtin_fseekable(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLFile
+		if self_obj.is_closed:
+			self_obj._raise("ValueError: I/O operation on closed file")
+			return null
+		return DSLBool.new(true)
+
+	## isatty(): 恒假 (常规文件非终端)
+	func builtin_fisatty(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLFile
+		if self_obj.is_closed:
+			self_obj._raise("ValueError: I/O operation on closed file.")
+			return null
+		return DSLBool.new(false)
+
+	## truncate(size=None): 截断到当前或指定长度
+	func builtin_ftruncate(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLFile
+		if not self_obj._check(false, true):
+			return null
+		var size = -1
+		if args.size() >= 2:
+			var s_obj = DSLObject._unwrap_dsl(args[1])
+			if not (s_obj is DSLInteger):
+				self_obj._raise("TypeError: an integer is required")
+				return null
+			size = s_obj.value
+		if size < 0:
+			# CPython: 无实参截断到当前位置
+			if self_obj.binary:
+				size = self_obj._fa.get_position()
+			else:
+				self_obj._ensure_text_buf()
+				size = self_obj._text_pos
+		# 宿主 FileAccess 无截断 API: 只支持截短 (目标小于当前长度时截断数据)
+		var cur_len = self_obj._fa.get_length()
+		if size < cur_len:
+			self_obj._fa.resize(size)
+		# CPython: truncate 返回新的文件大小
+		return DSLInteger.pooled(mini(size, cur_len) if size < cur_len else size)
 
 	## close(): 幂等
 	func builtin_fclose(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -13394,9 +15094,10 @@ class DSLFile extends DSLObject:
 		return DSLNone.new()
 
 	## seek(offset, whence=0): 文本模式基于缓冲游标, 二进制基于 FileAccess
+	## (只写/读写文件均可 seek/tell, 文本模式仅允许 0 偏移的相对/末尾定位)
 	func builtin_fseek(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLFile
-		if not self_obj._check(true, false):
+		if not self_obj._check(false, false):
 			return null
 		var off = DSLObject._unwrap_dsl(args[1])
 		if not (off is DSLInteger):
@@ -13417,6 +15118,19 @@ class DSLFile extends DSLObject:
 				target = self_obj._fa.get_length() + off.value
 			self_obj._fa.seek(target)
 			return DSLInteger.pooled(self_obj._fa.get_position())
+		if not self_obj._is_readable():
+			# 只写文本: 直接操作 FileAccess 位置 (后续写入从新位置覆盖)
+			var target = off.value
+			if whence == 1:
+				target = self_obj._fa.get_position() + off.value
+			elif whence == 2:
+				target = self_obj._fa.get_length() + off.value
+			self_obj._fa.seek(maxi(target, 0))
+			return DSLInteger.pooled(self_obj._fa.get_position())
+		# 可读文本模式: 非零偏移的相对/末尾定位被拒 (CPython 同)
+		if (whence == 1 or whence == 2) and off.value != 0:
+			self_obj._raise("UnsupportedOperation: can't do nonzero cur-relative seeks")
+			return null
 		self_obj._ensure_text_buf()
 		var pos = off.value
 		if whence == 1:
@@ -13429,9 +15143,10 @@ class DSLFile extends DSLObject:
 	## tell()
 	func builtin_ftell(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLFile
-		if not self_obj._check(true, false):
+		if not self_obj._check(false, false):
 			return null
-		if self_obj.binary:
+		if self_obj.binary or not self_obj._is_readable():
+			# 二进制或只写文本: 用宿主 FileAccess 位置
 			return DSLInteger.pooled(self_obj._fa.get_position())
 		self_obj._ensure_text_buf()
 		return DSLInteger.pooled(self_obj._text_pos)
@@ -13507,19 +15222,23 @@ class DSLSet extends DSLObject:
 		if obj is DSLString:
 			return "s:" + obj.value
 		if obj is DSLTuple:
-			var parts = []
+			# 各元素的键做长度前缀拼接 (纯分隔符直拼会被带分隔符的元素构造碰撞)
+			var parts = ""
 			for it in obj.items:
 				var k = _set_key(it)
 				if k == "":
 					return ""
-				parts.append(k)
-			return "t:(" + ",".join(parts) + ")"
+				parts += str(k.length()) + ":" + k
+			return "t:(" + parts + ")"
 		if obj is DSLFrozenSet:
-			var parts = []
+			var fparts: Array[String] = []
 			for k in obj.items:
-				parts.append(k)
-			parts.sort()
-			return "fs:[" + ",".join(parts) + "]"
+				fparts.append(k)
+			fparts.sort()
+			var fjoined = ""
+			for fp in fparts:
+				fjoined += str(fp.length()) + ":" + fp
+			return "fs:[" + fjoined + "]"
 		if obj.klass != null:
 			# 用户类实例: __hash__ = None 显式置空或定义了 __eq__ 而未定义 __hash__ 时
 			# 不可哈希 (CPython 同规则); 两者都未定义时按默认身份哈希
@@ -13535,7 +15254,15 @@ class DSLSet extends DSLObject:
 			# CPython 的集合以「哈希 + 相等」判定: 未定义 __eq__ 时退化为身份比较,
 			# 故键 = 哈希值 + (定义了 __eq__ 则留空, 否则取对象身份)
 			if obj.klass._lookup_method("__eq__") != null:
-				return "u:" + str(hres.value)
+				# 同哈希槽位逐个 __eq__ 甄别, 不等者开新槽 (纯哈希编键会让不等对象静默去重)
+				var hkey = "u:" + str(hres.value) + "#"
+				var slot = 0
+				while items.has(hkey + str(slot)):
+					var cand = items[hkey + str(slot)]
+					if cand._object_id == obj._object_id or cand._dsl_eq(obj):
+						return hkey + str(slot)
+					slot += 1
+				return hkey + str(slot)
 			return "u:" + str(hres.value) + ":" + str(obj._object_id)
 		return ""
 
@@ -13545,7 +15272,9 @@ class DSLSet extends DSLObject:
 		if k == "":
 			last_error = "TypeError: unhashable type: '%s'" % obj._type_name()
 			return null
-		items[k] = obj
+		# 相等元素保留首个插入对象 (CPython 首元素胜出, `{1, True}` 迭代出 1 而非 True)
+		if not items.has(k):
+			items[k] = obj
 		return DSLNone.new()
 
 	## 移除元素, 不存在时抛 KeyError
@@ -13631,6 +15360,29 @@ class DSLSet extends DSLObject:
 	func _dsl_issuperset(other) -> bool:
 		return other._dsl_issubset(self)
 
+	## 集合比较的对端归一 : set / frozenset / dict keys|items 视图 -> DSLSet, [br]
+	## 其余类型返回 null (调用方按 CPython 报 TypeError)
+	func _set_compare_operand(other) -> DSLSet:
+		var o = DSLObject._unwrap_dsl(other)
+		if o is DSLSet:
+			return o
+		if o is DSLFrozenSet:
+			var fs = DSLSet.new()
+			for k in (o as DSLFrozenSet).items:
+				fs.items[k] = (o as DSLFrozenSet).items[k]
+			return fs
+		if o is DSLDictKeys:
+			var vs = DSLSet.new()
+			for k in (o as DSLDictKeys)._live_keys():
+				vs._dsl_add(k)
+			return vs
+		if o is DSLDictItems:
+			var vs2 = DSLSet.new()
+			for k in (o as DSLDictItems)._live_items():
+				vs2._dsl_add(k)
+			return vs2
+		return null
+
 	func _dsl_isdisjoint(other) -> bool:
 		for k in items:
 			if other.items.has(k):
@@ -13678,14 +15430,16 @@ class DSLSet extends DSLObject:
 
 	func _dsl_eq(other: DSLObject) -> bool:
 		other = DSLObject._unwrap_dsl(other)
-		if other is DSLSet:
-			if items.size() != other.items.size():
+		# set 与 frozenset / dict 键项视图按集合相等比较
+		var o_set = _set_compare_operand(other)
+		if o_set == null:
+			return false
+		if items.size() != o_set.items.size():
+			return false
+		for k in items:
+			if not o_set.items.has(k):
 				return false
-			for k in items:
-				if not other.items.has(k):
-					return false
-			return true
-		return false
+		return true
 
 	func magic_iter(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLSeqIterator:
 		return DSLSeqIterator.new(args[0], "set_iterator")
@@ -13770,31 +15524,47 @@ class DSLSet extends DSLObject:
 
 	## 真子集 <
 	func magic_lt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var self_obj = args[0]
 		var other = DSLObject._unwrap_dsl(args[1]) if len(args) > 1 else null
-		if other is DSLSet:
-			return DSLBool.new(args[0].items.size() < other.items.size() and args[0]._dsl_issubset(other))
-		return DSLBool.new(false)
+		var o_set = _set_compare_operand(other)
+		if o_set == null:
+			if other != null:
+				self_obj._comparison_type_error("<", other)
+			return null
+		return DSLBool.new(self_obj.items.size() < o_set.items.size() and self_obj._dsl_issubset(o_set))
 
 	## 子集 <=
 	func magic_le(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var self_obj = args[0]
 		var other = DSLObject._unwrap_dsl(args[1]) if len(args) > 1 else null
-		if other is DSLSet:
-			return DSLBool.new(args[0]._dsl_issubset(other))
-		return DSLBool.new(false)
+		var o_set = _set_compare_operand(other)
+		if o_set == null:
+			if other != null:
+				self_obj._comparison_type_error("<=", other)
+			return null
+		return DSLBool.new(self_obj._dsl_issubset(o_set))
 
 	## 真超集 >
 	func magic_gt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var self_obj = args[0]
 		var other = DSLObject._unwrap_dsl(args[1]) if len(args) > 1 else null
-		if other is DSLSet:
-			return DSLBool.new(args[0].items.size() > other.items.size() and other._dsl_issubset(args[0]))
-		return DSLBool.new(false)
+		var o_set = _set_compare_operand(other)
+		if o_set == null:
+			if other != null:
+				self_obj._comparison_type_error(">", other)
+			return null
+		return DSLBool.new(self_obj.items.size() > o_set.items.size() and o_set._dsl_issubset(self_obj))
 
 	## 超集 >=
 	func magic_ge(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var self_obj = args[0]
 		var other = DSLObject._unwrap_dsl(args[1]) if len(args) > 1 else null
-		if other is DSLSet:
-			return DSLBool.new(args[0]._dsl_issuperset(other))
-		return DSLBool.new(false)
+		var o_set = _set_compare_operand(other)
+		if o_set == null:
+			if other != null:
+				self_obj._comparison_type_error(">=", other)
+			return null
+		return DSLBool.new(self_obj._dsl_issuperset(o_set))
 
 	## 方法回调 (args[0] = 实际实例)
 	func builtin_add(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -13835,25 +15605,49 @@ class DSLSet extends DSLObject:
 		return out
 
 	func builtin_union(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var other = _set_arg_to_set(args[1])
-		if other != null:
-			return args[0]._dsl_union(other)
-		args[0].last_error = "TypeError: '%s' object is not iterable" % args[1]._type_name()
-		return null
+		# CPython: union(*others) 合并全部实参, 每个实参可为任意可迭代
+		var acc = args[0]._dsl_union(_set_arg_to_set(args[1]))
+		if acc == null:
+			return null
+		for ai in range(2, args.size()):
+			var more = _set_arg_to_set(args[ai])
+			if more == null:
+				args[0].last_error = "TypeError: '%s' object is not iterable" % args[ai]._type_name()
+				return null
+			acc = acc._dsl_union(more)
+			if acc == null:
+				return null
+		return acc
 
 	func builtin_intersection(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var other = _set_arg_to_set(args[1])
-		if other != null:
-			return args[0]._dsl_intersection(other)
-		args[0].last_error = "TypeError: '%s' object is not iterable" % args[1]._type_name()
-		return null
+		# CPython: intersection(*others) 依次与每个实参求交
+		var acc = args[0]._dsl_intersection(_set_arg_to_set(args[1]))
+		if acc == null:
+			return null
+		for ai in range(2, args.size()):
+			var more = _set_arg_to_set(args[ai])
+			if more == null:
+				args[0].last_error = "TypeError: '%s' object is not iterable" % args[ai]._type_name()
+				return null
+			acc = acc._dsl_intersection(more)
+			if acc == null:
+				return null
+		return acc
 
 	func builtin_difference(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var other = _set_arg_to_set(args[1])
-		if other != null:
-			return args[0]._dsl_difference(other)
-		args[0].last_error = "TypeError: '%s' object is not iterable" % args[1]._type_name()
-		return null
+		# CPython: difference(*others) 依次减去每个实参
+		var acc = args[0]._dsl_difference(_set_arg_to_set(args[1]))
+		if acc == null:
+			return null
+		for ai in range(2, args.size()):
+			var more = _set_arg_to_set(args[ai])
+			if more == null:
+				args[0].last_error = "TypeError: '%s' object is not iterable" % args[ai]._type_name()
+				return null
+			acc = acc._dsl_difference(more)
+			if acc == null:
+				return null
+		return acc
 
 	func builtin_symmetric_difference(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var other = _set_arg_to_set(args[1])
@@ -13895,6 +15689,13 @@ class DSLSet extends DSLObject:
 			for k in other.items.keys():
 				self_obj._dsl_add(other.items[k])
 		return DSLNone.new()
+
+	## set |= iterable: 原地 update (CPython set.__ior__), 返回自身保持别名语义
+	func magic_ior(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		if self_obj.builtin_update(args, _kwargs) == null:
+			return null
+		return self_obj
 
 	func builtin_intersection_update(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
@@ -13961,12 +15762,31 @@ class DSLDefaultDict extends DSLObject:
 
 	func _dsl_str() -> String:
 		if is_counter:
+			# 空 Counter 的 repr 为 Counter() (CPython 同)
+			if inner.dict.is_empty():
+				return "Counter()"
 			return "Counter(%s)" % inner._dsl_str()
 		var factory_repr = "None" if factory == null else factory._dsl_str()
 		return "defaultdict(%s, %s)" % [factory_repr, inner._dsl_str()]
-	
+
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
+
+	## 相等判定: Counter/defaultdict 按底层映射比较
+	func _dsl_eq(other: DSLObject) -> bool:
+		var rhs = other
+		if rhs != null:
+			rhs = DSLObject._unwrap_dsl(rhs)
+		if rhs is DSLDefaultDict:
+			return inner._dsl_eq(rhs.inner)
+		if rhs is DSLDict:
+			return inner._dsl_eq(rhs)
+		return false
+
+	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		if args.size() == 2:
+			return DSLBool.new(_dsl_eq(args[1]))
+		return DSLBool.new(self == args[0])
 
 	func _dsl_bool() -> bool:
 		return inner._dsl_bool()
@@ -13975,7 +15795,7 @@ class DSLDefaultDict extends DSLObject:
 	## [param index] 键 [br]
 	## [returns] 值, 出错时返回 null
 	func _dsl_getitem(index: DSLObject) -> DSLObject:
-		var vkey = inner._key_to_variant(index)
+		var vkey = inner._key_to_variant(index, true)
 		if vkey == null:
 			last_error = inner.last_error
 			return null
@@ -13986,6 +15806,10 @@ class DSLDefaultDict extends DSLObject:
 			if created != null:
 				inner.dict[vkey] = created
 				return created
+			# 工厂调用抛出异常时 (report 错误通道已置位), 在途异常必须原样传播,
+			# 不得顶替为 KeyError (否则 except ValueError 等捕获失效)
+			if Interpreter.active != null and Interpreter.active.report.has_error:
+				return null
 		last_error = "KeyError: %s" % DSLObject._py_repr(index)
 		last_error_args = [index] as Array[DSLObject]
 		return null
@@ -14086,6 +15910,20 @@ class DSLDefaultDict extends DSLObject:
 	func magic_or(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return _counter_arith(args[1], "|")
 
+	## 计数对象的浮点排序分数 (int/float/大数统一; 大数越界按符号取 double 极值)
+	func _count_sort_score(v: DSLObject) -> float:
+		if v is DSLFloat:
+			return v.value
+		if v is DSLInteger:
+			var vi = v as DSLInteger
+			if vi.is_big():
+				var cf = vi._to_float_checked()
+				if cf == null:
+					return -1.7976931348623157e308 if vi.big_neg else 1.7976931348623157e308
+				return cf
+			return float(vi.value)
+		return 0.0
+
 	## Counter.most_common(n=None) - 按出现次数降序返回 [(元素, 次数)] 列表 [br]
 	## 同次数按首次插入顺序排列 (与 Python 3.7+ 一致) [br]
 	## 采用 __self__ 绑定模式: args[0] 为 self, 之后才是参数
@@ -14100,6 +15938,9 @@ class DSLDefaultDict extends DSLObject:
 				n = a.value
 			elif a is DSLFloat:
 				n = int(a.value)
+			elif a is DSLBool:
+				# bool 是 int 子类
+				n = 1 if a.value else 0
 			else:
 				last_error = "TypeError: most_common() argument must be an integer"
 				return null
@@ -14107,19 +15948,18 @@ class DSLDefaultDict extends DSLObject:
 		var order = 0
 		for k in self_obj.inner.dict.keys():
 			var count = self_obj.inner.dict[k]
-			var count_val = count.value if (count is DSLInteger or count is DSLFloat) else 0
-			var obj_key: DSLObject = self_obj.inner._wrap_key(k)
-			pairs.append({"key": obj_key, "count": int(count_val), "order": order})
+			var obj_key: DSLObject = self_obj.inner._original_key_obj(k)
+			pairs.append({"key": obj_key, "count": count, "score": _count_sort_score(count), "order": order})
 			order += 1
 		pairs.sort_custom(func(a, b):
-			if a["count"] != b["count"]:
-				return a["count"] > b["count"]
+			if a["score"] != b["score"]:
+				return a["score"] > b["score"]
 			return a["order"] < b["order"])
 		var result = DSLList.new()
 		for p in pairs:
 			if n >= 0 and result.items.size() >= n:
 				break
-			result.items.append(DSLTuple.new([p["key"], DSLInteger.pooled(p["count"])]))
+			result.items.append(DSLTuple.new([p["key"], p["count"]]))
 		return result
 
 	func _dsl_iter() -> DSLIterator:
@@ -14234,35 +16074,64 @@ class DSLFrozenSet extends DSLSet:
 
 	## union (返回 frozenset)
 	func builtin_union(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var other = DSLObject._unwrap_dsl(args[1])
-		if other is DSLSet:
-			return _from_set(args[0]._dsl_union(other))
-		args[0].last_error = "TypeError: union() argument must be a set"
-		return null
+		# union 接受任意可迭代 (与 DSLSet 侧一致)
+		var acc = args[0]._dsl_union(_set_arg_to_set(args[1]))
+		if acc == null:
+			return null
+		for ai in range(2, args.size()):
+			var more = _set_arg_to_set(args[ai])
+			if more == null:
+				args[0].last_error = "TypeError: '%s' object is not iterable" % args[ai]._type_name()
+				return null
+			acc = acc._dsl_union(more)
+			if acc == null:
+				return null
+		return _from_set(acc)
 
 	## intersection (返回 frozenset)
 	func builtin_intersection(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var other = DSLObject._unwrap_dsl(args[1])
-		if other is DSLSet:
-			return _from_set(args[0]._dsl_intersection(other))
-		args[0].last_error = "TypeError: intersection() argument must be a set"
-		return null
+		var acc = args[0]._dsl_intersection(_set_arg_to_set(args[1]))
+		if acc == null:
+			return null
+		for ai in range(2, args.size()):
+			var more = _set_arg_to_set(args[ai])
+			if more == null:
+				args[0].last_error = "TypeError: '%s' object is not iterable" % args[ai]._type_name()
+				return null
+			acc = acc._dsl_intersection(more)
+			if acc == null:
+				return null
+		return _from_set(acc)
 
 	## difference (返回 frozenset)
 	func builtin_difference(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var other = DSLObject._unwrap_dsl(args[1])
-		if other is DSLSet:
-			return _from_set(args[0]._dsl_difference(other))
-		args[0].last_error = "TypeError: difference() argument must be a set"
-		return null
+		var acc = args[0]._dsl_difference(_set_arg_to_set(args[1]))
+		if acc == null:
+			return null
+		for ai in range(2, args.size()):
+			var more = _set_arg_to_set(args[ai])
+			if more == null:
+				args[0].last_error = "TypeError: '%s' object is not iterable" % args[ai]._type_name()
+				return null
+			acc = acc._dsl_difference(more)
+			if acc == null:
+				return null
+		return _from_set(acc)
 
 	## symmetric_difference (返回 frozenset)
 	func builtin_symmetric_difference(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var other = DSLObject._unwrap_dsl(args[1])
-		if other is DSLSet:
-			return _from_set(args[0]._dsl_symmetric_difference(other))
-		args[0].last_error = "TypeError: symmetric_difference() argument must be a set"
-		return null
+		var acc = args[0]._dsl_symmetric_difference(_set_arg_to_set(args[1]))
+		if acc == null:
+			return null
+		for ai in range(2, args.size()):
+			var more = _set_arg_to_set(args[ai])
+			if more == null:
+				args[0].last_error = "TypeError: '%s' object is not iterable" % args[ai]._type_name()
+				return null
+			acc = acc._dsl_symmetric_difference(more)
+			if acc == null:
+				return null
+		return _from_set(acc)
 
 	## 集合运算/比较委托: eq/ne/lt/le/gt/ge/contains/len 沿用 DSLSet 实现, 但以 args[0] 为实例
 	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -14319,7 +16188,14 @@ class DSLSetIterator extends DSLIterator:
 		set_obj = s
 		keys = s.items.keys()
 
+	## 迭代期间集合增删元素时迭代器即刻失效, 按运行时错误上报 [br]
+	## 仅比对尺寸 (集合无值替换形态, 尺寸即结构)
 	func has_next() -> bool:
+		if set_obj.items.size() != keys.size():
+			done = true
+			if Interpreter.active != null:
+				Interpreter.active.raise_exception("RuntimeError", "Set changed size during iteration")
+			return false
 		return index < keys.size()
 
 	func next() -> DSLObject:
@@ -14364,10 +16240,21 @@ class DSLProperty extends DSLObject:
 		# 函数式 property 的 accessor 方法: setter/getter/deleter 返回新属性副本
 		if name == "setter" or name == "getter" or name == "deleter":
 			return DSLWrappedDescriptor.new(name, Callable(self, "builtin_" + name)).__get__(self, null)
-		# CPython 内省属性: fget / fset / fdel (未设置时为 None)
+		# CPython 内省属性: fget / fset / fdel (未设置时为 None 单例, 身份比较 `is None` 依赖单一实例)
 		if name == "fget" or name == "fset" or name == "fdel":
 			var fval = fget if name == "fget" else (fset if name == "fset" else fdel)
-			return fval if fval != null else DSLNone.new()
+			if fval != null:
+				return fval
+			var ip = _cls_interp
+			if ip == null:
+				ip = Interpreter.active
+			return ip.get_none() if ip != null else DSLNone.new()
+		if name == "__doc__":
+			# property 的 docstring (未写 docstring 时为 None)
+			var ip2 = _cls_interp
+			if ip2 == null:
+				ip2 = Interpreter.active
+			return ip2.get_none() if ip2 != null else DSLNone.new()
 		return super._dsl_getattribute(name)
 
 	## property.getter(fget) - 返回替换 getter 的新属性副本 (CPython 同语义)
@@ -14413,7 +16300,10 @@ class DSLProperty extends DSLObject:
 		if instance == null:
 			return self
 		if fget == null:
-			return DSLNone.new()
+			var ip = _cls_interp
+			if ip == null:
+				ip = Interpreter.active
+			return ip.get_none() if ip != null else DSLNone.new()
 		return _cls_interp.call_user_function(fget, [instance] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 	
 	## 描述符协议 __set__ [br]
@@ -14421,7 +16311,7 @@ class DSLProperty extends DSLObject:
 	## [param value] 要设置的值
 	func __set__(instance, value):
 		if fset == null:
-			instance.last_error = "AttributeError: can't set attribute"
+			instance.last_error = "AttributeError: property '%s' of '%s' object has no setter" % [prop_name, instance._type_name()]
 			return
 		_cls_interp.call_user_function(fset, [instance, value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 	
@@ -14429,7 +16319,7 @@ class DSLProperty extends DSLObject:
 	## [param instance] 实例
 	func __delete__(instance):
 		if fdel == null:
-			instance.last_error = "AttributeError: can't delete attribute"
+			instance.last_error = "AttributeError: property '%s' of '%s' object has no deleter" % [prop_name, instance._type_name()]
 			return
 		_cls_interp.call_user_function(fdel, [instance] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 	
@@ -14548,21 +16438,34 @@ class DSLFunction extends DSLObject:
 		closure = clos
 		annotations = DSLDict.new()
 		method_type = decl.method_type
+		# 函数对象支持自定义属性 (CPython function.__dict__)
+		fields = {}
 	
 	func _type_name() -> String:
 		return "function"
 	
 	func _dsl_getattribute(attr_name: String) -> DSLObject:
 		if attr_name == "__name__":
+			# wraps 覆写的名字优先 (functools.wraps 复制 wrapped 的元数据)
+			if fields != null and fields.has("__wrapped_name__"):
+				return DSLString.new(fields["__wrapped_name__"])
 			return DSLString.new(declaration.name)
 		if attr_name == "__qualname__":
 			return DSLString.new(qualname if qualname != "" else declaration.name)
 		if attr_name == "__annotations__":
 			return annotations
 		if attr_name == "__doc__":
+			if fields != null and fields.has("__wrapped_doc__"):
+				var wd = fields["__wrapped_doc__"]
+				return DSLString.new(wd) if wd != null and wd != "" else DSLNone.new()
 			return DSLString.new(declaration.doc) if declaration.doc != "" else DSLNone.new()
 		if attr_name == "__module__":
 			return DSLString.new(_module_name)
+		if attr_name == "__wrapped__":
+			if fields != null and fields.has("__wrapped__"):
+				return fields["__wrapped__"]
+			last_error = "AttributeError: 'function' object has no attribute '__wrapped__'"
+			return DSLNone.new()
 		if attr_name == "__defaults__":
 			# CPython: 仅位置参数的默认值元组 (kw-only 默认在 __kwdefaults__), 无默认为 None
 			var defaults: Array[DSLObject] = []
@@ -14576,6 +16479,21 @@ class DSLFunction extends DSLObject:
 			if defaults.is_empty():
 				return DSLNone.new()
 			return DSLTuple.new(defaults)
+		if attr_name == "__kwdefaults__":
+			# kw-only 参数的默认值字典 (无任何 kw-only 默认时为 None)
+			var kwd: DSLDict = DSLDict.new()
+			var kwd_filled = false
+			if declaration != null:
+				for i in range(declaration.params.size()):
+					var prm = declaration.params[i]
+					if not prm.is_keyword_only or prm.is_args or prm.is_kwargs:
+						continue
+					if i < default_values.size() and default_values[i] != null:
+						kwd._dsl_setitem(DSLString.new(prm.name), default_values[i])
+						kwd_filled = true
+			if not kwd_filled:
+				return DSLNone.new()
+			return kwd
 		return super._dsl_getattribute(attr_name)
 
 	func _dsl_str() -> String:
@@ -14741,6 +16659,19 @@ class DSLPartial extends DSLObject:
 			return null
 		return target_func.magic_call(full_args, full_kwargs)
 
+	## partial 内省属性: func / args / keywords
+	func _dsl_getattribute(attr_name: String) -> DSLObject:
+		if attr_name == "func":
+			return target_func
+		if attr_name == "args":
+			return DSLTuple.new(bound_args)
+		if attr_name == "keywords":
+			var kd = DSLDict.new()
+			for k in bound_kwargs:
+				kd._dsl_setitem(DSLString.new(k), bound_kwargs[k])
+			return kd
+		return super._dsl_getattribute(attr_name)
+
 ## functools.cmp_to_key 的 key 对象, 对应 CPython functools.KeyWrapper [br]
 ## 两种形态: 未包装值时为 key 工厂 (调用它以包装元素), 已包装值时按 cmp(a, b) 的符号比较
 class DSLCmpKey extends DSLObject:
@@ -14781,14 +16712,19 @@ class DSLCmpKey extends DSLObject:
 	func _cmp(other: DSLCmpKey) -> int:
 		var r = cmp_func.magic_call([value, other.value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if r == null:
+			# 比较函数内异常 (ZeroDivisionError 等): report.has_error 已置, 由 sort 收尾检查传播
 			return 0
-		var n = 0.0
-		if r is DSLInteger or r is DSLFloat:
-			n = float(r.value)
-		if n < 0:
-			return -1
-		if n > 0:
-			return 1
+		if r is DSLInteger or r is DSLFloat or r is DSLBool:
+			var f = float(r.value)
+			return -1 if f < 0 else (1 if f > 0 else 0)
+		# 非数值结果按 CPython 与 0 做序比较 (混合类型报 TypeError)
+		var ip = Interpreter.active
+		if ip != null:
+			var zero = DSLInteger.pooled(0)
+			if ip._dsl_lt_checked(r, zero):
+				return -1
+			if not ip.report.has_error and ip._dsl_lt_checked(zero, r):
+				return 1
 		return 0
 
 	func magic_lt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -14808,6 +16744,291 @@ class DSLCmpKey extends DSLObject:
 
 	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		return DSLBool.new(_cmp(args[1]) != 0)
+
+## functools.lru_cache 的缓存函数包装 [br]
+## 按 (args, kwargs) 的规范化字符串作缓存键, 命中直接返回缓存值 [br]
+## maxsize: null 为无限缓存, 0 为不缓存, 正整数为上限 (超限简单清空)
+class DSLLruFunc extends DSLObject:
+	var target: DSLObject = null
+	var _interp: Interpreter = null
+	var cache: Dictionary = {}
+	var maxsize: Variant = 128
+	var typed: bool = false
+	var hits: int = 0
+	var misses: int = 0
+
+	func _init(p_target, p_interp, p_maxsize):
+		super._init()
+		target = p_target
+		_interp = p_interp
+		maxsize = p_maxsize
+
+	func _type_name() -> String:
+		return "function"
+
+	func _dsl_is_callable() -> bool:
+		return true
+
+	## 缓存键: 各实参的 repr 拼接 (bool 按 0/1 归一, typed=False 时与 int 同键)
+	func _cache_key(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> String:
+		var key = ""
+		for a in args:
+			var av = DSLObject._unwrap_dsl(a)
+			if av is DSLBool:
+				key += "|" + ("1" if av.value else "0")
+			else:
+				key += "|" + DSLObject._py_repr(av)
+		for k in kwargs.keys():
+			key += "|K:" + k + "=" + DSLObject._py_repr(kwargs[k])
+		return key
+
+	func magic_call(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject] = {}) -> DSLObject:
+		# maxsize == 0: 不缓存 (CPython 语义)
+		if maxsize != null and maxsize is int and int(maxsize) == 0:
+			return target.magic_call(args, kwargs)
+		var key = _cache_key(args, kwargs)
+		if typed:
+			# typed=True 时区分 bool/int/float (实参类型标签)
+			for a in args:
+				key += "|T:" + a._type_name()
+		if cache.has(key):
+			hits += 1
+			return cache[key]
+		misses += 1
+		var res = target.magic_call(args, kwargs)
+		if res == null:
+			return null
+		cache[key] = res
+		if maxsize != null and maxsize is int and int(maxsize) > 0 and cache.size() > int(maxsize):
+			cache.clear()
+		return res
+
+	func _cache_info(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLCacheInfo.new(hits, misses, maxsize, cache.size())
+
+	func _cache_clear(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		cache.clear()
+		hits = 0
+		misses = 0
+		return DSLNone.new()
+
+	func _dsl_getattribute(attr_name: String) -> DSLObject:
+		if attr_name == "cache_info":
+			return DSLBuiltinFunction.new("cache_info", Callable(self, "_cache_info"))
+		if attr_name == "cache_clear":
+			return DSLBuiltinFunction.new("cache_clear", Callable(self, "_cache_clear"))
+		if attr_name == "__wrapped__":
+			return target
+		if attr_name == "__name__":
+			var nm = target._dsl_getattribute("__name__")
+			target.last_error = ""
+			if nm is DSLString:
+				return nm
+			return DSLString.new("lru_cache")
+		return super._dsl_getattribute(attr_name)
+
+## lru_cache.cache_info() 的返回对象 (CPython collections.namedtuple CacheInfo) [br]
+## repr 形态 CacheInfo(hits=..., misses=..., maxsize=..., currsize=...)
+class DSLCacheInfo extends DSLObject:
+	var hits: int
+	var misses: int
+	var maxsize: Variant
+	var currsize: int
+
+	func _init(h: int, m: int, ms, c: int):
+		super._init()
+		hits = h
+		misses = m
+		maxsize = ms
+		currsize = c
+
+	func _type_name() -> String:
+		return "CacheInfo"
+
+	func _dsl_str() -> String:
+		var ms = "None" if maxsize == null else str(maxsize)
+		return "CacheInfo(hits=%d, misses=%d, maxsize=%s, currsize=%d)" % [hits, misses, ms, currsize]
+
+	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
+
+## random.Random 的独立 PRNG 实例 [br]
+## 持有一份 MT19937 状态, 与模块级全局 PRNG 相互独立 (CPython random.Random 语义)
+class DSLRandomInstance extends DSLObject:
+	static var _type_class: DSLClass = null
+	var _st: Array[int] = []
+	var _idx: int = 624
+	var _gauss_next := 0.0
+	var _has_gauss: bool = false
+	var _ip: Interpreter = null
+
+	func _type_name() -> String:
+		return "Random"
+
+	func _dsl_str() -> String:
+		return "<random.Random object>"
+
+	func _inst_ensure() -> void:
+		if _st.is_empty():
+			_st.resize(624)
+
+	func _inst_genrand() -> int:
+		_inst_ensure()
+		if _idx >= 624:
+			_inst_twist()
+		var y = _st[_idx]
+		y = y ^ (y >> 11)
+		y = y ^ ((y << 7) & 0x9D2C5680)
+		y = y ^ ((y << 15) & 0xEFC60000)
+		y = y ^ (y >> 18)
+		_idx += 1
+		return y & 0xFFFFFFFF
+
+	func _inst_twist() -> void:
+		for i in range(624):
+			var y = (_st[i] & 0x80000000) + (_st[(i + 1) % 624] & 0x7FFFFFFF)
+			var nxt = y >> 1
+			if y % 2 == 1:
+				nxt = nxt ^ 0x9908B0DF
+			_st[i] = _st[(i + 397) % 624] ^ nxt
+		_idx = 0
+
+	func _inst_init_genrand(s: int) -> void:
+		_inst_ensure()
+		s = s & 0xFFFFFFFF
+		_st[0] = s
+		for i in range(1, 624):
+			s = (1812433253 * (s ^ (s >> 30)) + i) & 0xFFFFFFFF
+			_st[i] = s
+		_idx = 624
+
+	func _inst_init_by_array(key: Array) -> void:
+		_inst_init_genrand(19650218)
+		var i = 1
+		var j = 0
+		var n = maxi(key.size(), 624)
+		for _loop in range(n):
+			var kj = key[j] & 0xFFFFFFFF
+			_st[i] = ((_st[i] ^ ((_st[i - 1] ^ (_st[i - 1] >> 30)) * 1664525)) + kj + j) & 0xFFFFFFFF
+			i += 1
+			j += 1
+			if i >= 624:
+				_st[0] = _st[623]
+				i = 1
+			if j >= key.size():
+				j = 0
+		for _loop in range(623):
+			_st[i] = ((_st[i] ^ ((_st[i - 1] ^ (_st[i - 1] >> 30)) * 1566083941)) - i) & 0xFFFFFFFF
+			i += 1
+			if i >= 624:
+				_st[0] = _st[623]
+				i = 1
+		_st[0] = 0x80000000
+		_idx = 624
+
+	func _inst_getrandbits(k: int) -> int:
+		if k <= 0:
+			return 0
+		var words = (k - 1) >> 5
+		var result = 0
+		for w in range(words + 1):
+			var r = _inst_genrand()
+			if w == words:
+				var shift = (words << 5) + 32 - k
+				r = r >> shift if shift < 32 else 0
+			result |= r << (w << 5)
+		return result
+
+	func _inst_float() -> float:
+		var a = _inst_genrand() >> 5
+		var b = _inst_genrand() >> 6
+		return (a * 67108864.0 + b) / 9007199254740992.0
+
+	func _inst_randbelow(n: int) -> int:
+		if n <= 0:
+			return 0
+		var k = 0
+		var t = n
+		while t > 0:
+			k += 1
+			t = t >> 1
+		var r = _inst_getrandbits(k)
+		while r >= n:
+			r = _inst_getrandbits(k)
+		return r
+
+	## 按种子值播种 (int / float / str / bytes; None 走 OS 随机源)
+	func _inst_seed_auto(v) -> void:
+		if v == null:
+			_inst_init_by_array([randi() & 0xFFFFFFFF])
+			_has_gauss = false
+			return
+		var raw = DSLObject._unwrap_dsl(v)
+		if raw is DSLBool:
+			_inst_init_by_array([1 if raw.value else 0])
+		elif raw is DSLInteger:
+			if (raw as DSLInteger).is_big():
+				_inst_init_by_array((raw as DSLInteger).big_limbs.duplicate())
+			else:
+				var n0 = absi((raw as DSLInteger).value)
+				var key: Array = []
+				if n0 == 0:
+					key.append(0)
+				else:
+					while n0 > 0:
+						key.append(n0 & 0xFFFFFFFF)
+						n0 = n0 >> 32
+				_inst_init_by_array(key)
+		elif raw is DSLFloat:
+			# 浮点种子按 CPython float hash 语义 (模块级同款)
+			if _ip != null:
+				var h = _ip._py_float_hash((raw as DSLFloat).value)
+				var n1 = absi(h)
+				var key2: Array = []
+				if n1 == 0:
+					key2.append(0)
+				else:
+					while n1 > 0:
+						key2.append(n1 & 0xFFFFFFFF)
+						n1 = n1 >> 32
+				_inst_init_by_array(key2)
+		elif raw is DSLString:
+			var h = raw.value.hash()
+			var key3: Array = []
+			for _w in range(4):
+				key3.append(h & 0xFFFFFFFF)
+				h = (h >> 32) | (h << 32) & 0xFFFFFFFF
+			_inst_init_by_array(key3)
+		elif raw is DSLBytes:
+			var key4: Array = []
+			var acc := 0
+			var cnt := 0
+			for b in raw.data:
+				acc = acc | (int(b) << (8 * cnt))
+				cnt += 1
+				if cnt == 4:
+					key4.append(acc & 0xFFFFFFFF)
+					acc = 0
+					cnt = 0
+			if cnt > 0:
+				key4.append(acc & 0xFFFFFFFF)
+			if key4.size() == 0:
+				key4.append(0)
+			_inst_init_by_array(key4)
+		_has_gauss = false
+
+	func _dsl_getattribute(attr_name: String) -> DSLObject:
+		var m = DSLRandomInstance._type_class
+		if m != null:
+			var f = m._dsl_getattribute(attr_name)
+			if m.last_error != "":
+				m.last_error = ""
+			if f != null and not (f is DSLNone):
+				if f.has_method("__get__"):
+					return f.__get__(self, m)
+				return f
+		last_error = "AttributeError: 'Random' object has no attribute '%s'" % attr_name
+		return DSLNone.new()
 
 ## operator.itemgetter 返回的可调用对象 [br]
 ## 单键取值, 多键返回由各键取值组成的元组
@@ -14909,7 +17130,7 @@ class DSLAttrGetter extends DSLObject:
 			out.append(v)
 		return DSLTuple.new(out)
 
-## operator.methodcaller 对象 (I1-81): 按名字调用对象方法, CPython 同形 [br]
+## operator.methodcaller 对象: 按名字调用对象方法, CPython 同形 [br]
 ## methodcaller(name, /, *args, **kwargs) 产出可调用对象, 调用时等价 [br]
 ## getattr(obj, name)(*args, **kwargs); 调用恰好接受一个实参 (目标对象)
 class DSLMethodCaller extends DSLObject:
@@ -14966,7 +17187,7 @@ class DSLMethodCaller extends DSLObject:
 			return null
 		var merged: Array[DSLObject] = []
 		merged.append_array(call_args)
-		merged.append_array(args)
+		# 目标对象已在属性访问时绑定
 		var merged_kw := kwargs
 		if not call_kwargs.is_empty():
 			merged_kw = {}
@@ -14982,7 +17203,7 @@ class DSLMethodDescriptor extends DSLObject:
 	var name: String
 	## 回调 Callable
 	var callback: Callable
-	## 归属类名 (I2-72: repr 的 of '<owner>' objects; 空时经回调绑定对象推导)
+	## 归属类名 (repr 的 of '<owner>' objects, 空时经回调绑定对象推导)
 	var owner_name: String = ""
 
 	## 构造方法描述符 [br]
@@ -14996,7 +17217,7 @@ class DSLMethodDescriptor extends DSLObject:
 	func _type_name() -> String:
 		return "method_descriptor"
 
-	## 归属类名: 显式 owner_name 优先, 否则取回调绑定对象的类型名 (I2-72)
+	## 归属类名: 显式 owner_name 优先, 否则取回调绑定对象的类型名
 	func _owner_type_name() -> String:
 		if owner_name != "":
 			return owner_name
@@ -15010,7 +17231,7 @@ class DSLMethodDescriptor extends DSLObject:
 	func _dsl_str() -> String:
 		return "<method '%s' of '%s' objects>" % [name, _owner_type_name()]
 
-	## repr 与 str 同为描述符形态 (I2-72)
+	## repr 与 str 同为描述符形态
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
 
@@ -15077,7 +17298,7 @@ class DSLWrappedDescriptor extends DSLObject:
 	var name: String
 	## 回调 Callable
 	var callback: Callable
-	## 归属类名 (I2-72: repr 的 of '<owner>' objects; 空时经回调绑定对象推导)
+	## 归属类名 (repr 的 of '<owner>' objects; 空时经回调绑定对象推导)
 	var owner_name: String = ""
 	
 	## 构造魔法方法描述符 [br]
@@ -15091,7 +17312,7 @@ class DSLWrappedDescriptor extends DSLObject:
 	func _type_name() -> String:
 		return "wrapper_descriptor"
 	
-	## 归属类名: 显式 owner_name 优先, 否则取回调绑定对象的类型名 (I2-72)
+	## 归属类名: 显式 owner_name 优先, 否则取回调绑定对象的类型名
 	func _owner_type_name() -> String:
 		if owner_name != "":
 			return owner_name
@@ -15105,7 +17326,7 @@ class DSLWrappedDescriptor extends DSLObject:
 	func _dsl_str() -> String:
 		return "<slot wrapper '%s' of '%s' objects>" % [name, _owner_type_name()]
 
-	## repr 与 str 同为描述符形态 (I2-72)
+	## repr 与 str 同为描述符形态
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
 
@@ -15200,7 +17421,31 @@ class DSLMethod extends DSLObject:
 			return function._dsl_getattribute("__qualname__")
 		if name == "__defaults__":
 			return function._dsl_getattribute("__defaults__")
+		if name == "__self__":
+			# 绑定方法暴露 __self__
+			return instance
+		if name == "__func__":
+			# 绑定方法暴露底层函数 (普通方法 / classmethod 同源)
+			return function
 		return super._dsl_getattribute(name)
+
+	## 绑定方法相等性: 按 (函数, 所属实例) 判定 (CPython method 同形)
+	func _dsl_eq(other: DSLObject) -> bool:
+		var rhs = DSLObject._unwrap_dsl(other)
+		if not (rhs is DSLMethod):
+			return false
+		var om = rhs as DSLMethod
+		return om.function == function and om.instance == instance
+
+	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		if args.size() == 2:
+			return DSLBool.new(_dsl_eq(args[1]))
+		return DSLBool.new(_dsl_eq(args[0]))
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		if args.size() == 2:
+			return DSLBool.new(not _dsl_eq(args[1]))
+		return DSLBool.new(not _dsl_eq(args[0]))
 		
 	## 调用绑定方法 [br]
 	## [param kwargs] 关键字参数 [br]
@@ -15227,6 +17472,8 @@ class DSLClass extends DSLObject:
 	var methods: Dictionary
 	## 定义所在模块名 (CPython __module__)
 	var _module_name: String = "__main__"
+	## 限定名 (CPython __qualname__): 局部类为 outer.<locals>.Item 链, 顶层类为空串 (repr 用)
+	var qualname: String = ""
 	## 文档字符串 (体首纯字符串字面量, CPython __doc__)
 	var _doc: String = ""
 	## 类属性
@@ -15258,7 +17505,7 @@ class DSLClass extends DSLObject:
 		mro = result
 		return true
 
-	## __hash__ 显式置 None 检查 (CPython: __hash__ = None 的类不可哈希, I2-67) [br]
+	## __hash__ 显式置 None 检查 (CPython: __hash__ = None 的类不可哈希) [br]
 	## 沿 MRO 找首个在 class_attrs 定义 __hash__ 的类, 其值为 None 时返回 true [br]
 	## [param cls] 待检查的类 [br]
 	## [returns] __hash__ 被显式置 None 时返回 true
@@ -15298,6 +17545,15 @@ class DSLClass extends DSLObject:
 					chosen = head
 					break
 			if chosen == null:
+				# 冲突时记录当前所有非空序列头部 (去重) 作为真正冲突基类
+				_mro_conflict_names = []
+				var seen_names: Dictionary = {}
+				for s in seqs:
+					if s.size() > 0:
+						var h = s[0]
+						if h is DSLClass and not seen_names.has((h as DSLClass).name):
+							seen_names[(h as DSLClass).name] = true
+							_mro_conflict_names.append((h as DSLClass).name)
 				return null
 			result.append(chosen)
 			var next_seqs: Array = []
@@ -15313,8 +17569,11 @@ class DSLClass extends DSLObject:
 	
 	## 类的模块前缀 (用户类为 "__main__.", 内建类为空), 仅影响 repr
 	var module_prefix: String = ""
+	## C3 线性化冲突时记录的冲突基类名 (报真正冲突对而非直接基类)
+	var _mro_conflict_names: Array[String] = []
 	
-	func _dsl_str(): return "<class '%s%s'>" % [module_prefix, name]
+	# 局部类 repr 用限定名 (__main__._mk_local.<locals>.Item), 顶层类退化为类名
+	func _dsl_str(): return "<class '%s%s'>" % [module_prefix, qualname if qualname != "" else name]
 
 	## 类对象 repr: 与 str 同为 <class 'X'> 形态 (CPython 对齐)
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -15350,7 +17609,7 @@ class DSLClass extends DSLObject:
 				interp._suspended_ctor_cls = null
 				interp._suspended_ctor_args.clear()
 				if pending_ret != null and not (pending_ret is DSLNone) and not interp.report.has_error:
-					# I2-63: 挂起重放完成的 __init__ 同样必须返回 None
+					# 挂起重放完成的 __init__ 同样必须返回 None
 					interp.raise_exception("TypeError", "__init__() should return None, not '%s'" % pending_ret._type_name())
 			return pending
 		var new_func = _lookup_method("__new__")
@@ -15392,7 +17651,7 @@ class DSLClass extends DSLObject:
 				interp._suspended_ctor_args = args.duplicate()
 				interp._suspended_ctor_key = interp._sleep_root_key
 			elif init_ret != null and not (init_ret is DSLNone) and not interp.report.has_error:
-				# I2-63: __init__ 必须返回 None, 否则按 CPython 报 TypeError
+				# __init__ 必须返回 None, 否则按 CPython 报 TypeError
 				interp.raise_exception("TypeError", "__init__() should return None, not '%s'" % init_ret._type_name())
 		return instance
 	
@@ -15424,7 +17683,7 @@ class DSLClass extends DSLObject:
 
 	## 类下标: 泛性别名 / 用户 __class_getitem__ 协议 [br]
 	## 内建泛型容器返回 GenericAlias; 用户类定义 __class_getitem__ 时经协议调用; [br]
-	## 其余报 CPython 同文案 TypeError: type 'X' is not subscriptable [br]
+	## 其余报 TypeError: type 'X' is not subscriptable [br]
 	## [param key] 下标对象 (多参为 DSLTuple) [br]
 	## [returns] 别名对象或协议结果, 出错返回 null
 	## PEP 604 联合类型: 类型对象间的 | 运算 (扁平化已有联合成员)
@@ -15488,10 +17747,15 @@ class DSLClass extends DSLObject:
 	## [param attr_name] 属性名 [br]
 	## [returns] 方法 (经__get__ 描述符处理), 类属性, 或 MRO 上游类的成员
 	func _dsl_getattribute(attr_name: String, include_meta: bool = true) -> DSLObject:
+		# 类对象自身的 __name__/__qualname__/__module__/__doc__ 覆写优先
+		# (CPython: 设置后存于类自身 __dict__, 子类不继承父类覆写)
+		if (attr_name == "__name__" or attr_name == "__qualname__" or attr_name == "__module__" or attr_name == "__doc__") and class_attrs.has(attr_name):
+			return class_attrs[attr_name]
 		if attr_name == "__name__":
 			return DSLString.new(name)
 		if attr_name == "__qualname__":
-			return DSLString.new(name)
+			# 局部类返回 outer.<locals>.Item 限定链 (顶层类退化为类名)
+			return DSLString.new(qualname if qualname != "" else name)
 		if attr_name == "__module__":
 			return DSLString.new(_module_name)
 		if attr_name == "__doc__":
@@ -15667,36 +17931,13 @@ class DSLSuper extends DSLObject:
 		return sup_cls
 
 	## 属性写入: 对应 CPython super 代理的 __setattr__ [br]
-	## 先经 __get__ 取出候选值, 仅当候选值自身可写 (__set__) 时写入, 否则报 AttributeError; [br]
-	## 未找到成员时回退到实例的普通属性写入
+	## CPython 的 super 对象无实例字典, 属性写入一律 AttributeError [br]
+	## (即使目标 MRO 中定义可写数据描述符, 其 __set__ 亦不触发)
 	func _dsl_setattr(name: String, value: DSLObject):
 		if sup_cls == null:
 			last_error = "RuntimeError: super(): no class"
 			return
-		var owner_cls = _mro_owner()
-		var mro: Array = owner_cls.mro
-		var start = mro.find(sup_cls)
-		var found = null
-		for idx in range(start + 1, mro.size()):
-			var k: DSLClass = mro[idx]
-			if k.methods.has(name):
-				found = k.methods[name]
-				break
-			if k.class_attrs.has(name):
-				found = k.class_attrs[name]
-				break
-		if found == null:
-			if sup_instance != null:
-				sup_instance._dsl_setattr(name, value)
-				return
-			last_error = "AttributeError: 'super' object has no attribute '%s'" % name
-			return
-		var candidate = found
-		if candidate.has_method("__get__"):
-			candidate = candidate.__get__(sup_instance, owner_cls)
-		if candidate != null and candidate.has_method("__set__"):
-			candidate.__set__(sup_instance, value)
-			return
+		# 一律 AttributeError, 不得穿透写底层实例
 		last_error = "AttributeError: 'super' object has no attribute '%s'" % name
 	
 	## 属性访问: 沿目标 MRO 从定义类的下一项查找并绑定到实例 [br]
@@ -15706,6 +17947,13 @@ class DSLSuper extends DSLObject:
 		if sup_cls == null:
 			last_error = "RuntimeError: super(): no class"
 			return DSLNone.new()
+		# super 内省属性
+		if name == "__thisclass__":
+			return sup_cls
+		if name == "__self__":
+			return sup_instance
+		if name == "__self_class__":
+			return _mro_owner()
 		var owner_cls = _mro_owner()
 		var mro: Array = owner_cls.mro
 		var start = mro.find(sup_cls)
@@ -15735,9 +17983,9 @@ class DSLModule extends DSLObject:
 	var members: Dictionary[String, DSLObject] = {}
 	## 模块体执行中标记: 循环导入的部分初始化模块属性访问按 CPython 文案报错
 	var initializing: bool = false
-	## 是否内置模块 (I2-68: repr 为 <module 'x' (built-in)>)
+	## 是否内置模块 (repr 为 <module 'x' (built-in)>)
 	var is_builtin: bool = false
-	## 用户模块源文件路径 (脚本可见形态, I2-68: repr 为 <module 'x' from 'path'>)
+	## 用户模块源文件路径 (脚本可见形态, repr 为 <module 'x' from 'path'>)
 	var source_path: String = ""
 
 	## 构造模块 [br]
@@ -15756,7 +18004,7 @@ class DSLModule extends DSLObject:
 			return "<module '%s' from '%s'>" % [mod_name, source_path]
 		return "<module '%s'>" % mod_name
 
-	## repr 与 str 同为模块 repr 形态 (I2-68)
+	## repr 与 str 同为模块 repr 形态
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
 
@@ -15846,6 +18094,10 @@ class DSLIterator:
 	func _init():
 		Interpreter._track(self)
 
+	## 剩余元素数的长度提示 (CPython __length_hint__); 未知返回 -1
+	func _length_hint() -> int:
+		return -1
+
 	## 把迭代器层面的挂起转为解释器层面的挂起 [br]
 	## 使消费方 (list/sum/推导式等原生循环) 无需感知挂起: [br]
 	## 它们按 has_next() 返回 false 退出, 而语句会整体重放并重新消费 [br]
@@ -15915,10 +18167,23 @@ class DSLRange extends DSLObject:
 	## [param s] 步长
 	static func make(a: DSLInteger, b: DSLInteger, s: DSLInteger) -> DSLRange:
 		if not a.is_big() and not b.is_big() and not s.is_big():
+			var av = a.value
+			var bv = b.value
+			var sv = s.value
+			# stop-start 跨度超过 int64 时快路径相减回绕 (len 变负数),
+			# 升格大数模式经精确端点计算 (如 range(-2**62, 2**62, 2**61))
+			var d = bv - av
+			if (bv > av and d < 0) or (bv < av and d > 0):
+				var r2 = DSLRange.new(0)
+				r2.big = true
+				r2.start_b = a
+				r2.stop_b = b
+				r2.step_b = s
+				return r2
 			var r0 = DSLRange.new(0)
-			r0.start = a.value
-			r0.stop = b.value
-			r0.step = s.value
+			r0.start = av
+			r0.stop = bv
+			r0.step = sv
 			return r0
 		var r1 = DSLRange.new(0)
 		r1.big = true
@@ -15937,7 +18202,8 @@ class DSLRange extends DSLObject:
 		if diff[1].is_empty() or tp[0] != diff[0]:
 			return DSLInteger.pooled(0)
 		var one: Array[int] = [1]
-		var num: Array[int] = DSLBigInt.mag_sub(DSLBigInt.mag_add(diff[1], one), one)
+		# 长度 = ceil(|diff| / |step|) = (|diff| + |step| - 1) // |step|
+		var num: Array[int] = DSLBigInt.mag_add(diff[1], DSLBigInt.mag_sub(tp[1], one))
 		var dm: Array = DSLBigInt.mag_divmod(num, tp[1])
 		return DSLInteger.from_big(false, dm[0])
 
@@ -16215,14 +18481,26 @@ class DSLRange extends DSLObject:
 	## 成员判定 (按等差数列求解, 支持任意 step; 大数模式走大整数算术)
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var target = args[1]
-		if not (target is DSLInteger):
+		# bool 按 int (True=1), 整值浮点按 int (1.0 in range 为 True), 非整浮点/非数值为 False
+		var raw = DSLObject._unwrap_dsl(target)
+		if raw is DSLBool:
+			raw = DSLInteger.pooled(1 if raw.value else 0)
+		elif raw is DSLFloat:
+			var fv = raw.value
+			if is_nan(fv) or is_inf(fv) or fv != floor(fv):
+				return DSLBool.new(false)
+			if abs(fv) >= 9223372036854775808.0:
+				raw = DSLObject._int_from_float_exact(fv)
+			else:
+				raw = DSLInteger.pooled(int(fv))
+		if not (raw is DSLInteger):
 			return DSLBool.new(false)
+		var t0: DSLInteger = raw
 		if big:
-			var t: DSLInteger = target
 			var sp: Array = start_b._pair()
 			var ep: Array = stop_b._pair()
 			var tp: Array = step_b._pair()
-			var vp: Array = t._pair()
+			var vp: Array = t0._pair()
 			var dir: int = 1 if not tp[0] else -1
 			if DSLBigInt.cmp(vp[0], vp[1], sp[0], sp[1]) * dir < 0:
 				return DSLBool.new(false)
@@ -16231,7 +18509,10 @@ class DSLRange extends DSLObject:
 			var diff: Array = DSLBigInt.sub(vp[0], vp[1], sp[0], sp[1])
 			var dm: Array = DSLBigInt.mag_divmod(diff[1], tp[1])
 			return DSLBool.new(dm[1].is_empty())
-		var v = target.value
+		# 快路径 range 端点都在 int64 内, 大数目标必然越界 (CPython 同)
+		if t0.is_big():
+			return DSLBool.new(false)
+		var v = t0.value
 		if step > 0:
 			if v < start or v >= stop:
 				return DSLBool.new(false)
@@ -16245,20 +18526,22 @@ class DSLRange extends DSLObject:
 		other = DSLObject._unwrap_dsl(other)
 		if other is DSLRange:
 			var o: DSLRange = other
-			if big or o.big:
-				var empty_self: bool = _length_obj().value == 0 if big else _length() == 0
-				var empty_other: bool = o._length_obj().value == 0 if o.big else o._length() == 0
-				if empty_self or empty_other:
-					return empty_self and empty_other
-				if big != o.big:
-					return false
-				var c1: int = DSLBigInt.cmp(start_b._pair()[0], start_b._pair()[1], o.start_b._pair()[0], o.start_b._pair()[1])
-				var c2: int = DSLBigInt.cmp(stop_b._pair()[0], stop_b._pair()[1], o.stop_b._pair()[0], o.stop_b._pair()[1])
-				var c3: int = DSLBigInt.cmp(step_b._pair()[0], step_b._pair()[1], o.step_b._pair()[0], o.step_b._pair()[1])
-				return c1 == 0 and c2 == 0 and c3 == 0
-			if _length() == 0 and o._length() == 0:
+			# range 相等按元素序列 (CPython: 长度相同, 非空时起点/步长相同即序列相同)
+			var self_len = _length_obj() if big else DSLInteger.pooled(_length())
+			var o_len = o._length_obj() if o.big else DSLInteger.pooled(o._length())
+			if DSLBigInt.cmp(self_len._pair()[0], self_len._pair()[1], o_len._pair()[0], o_len._pair()[1]) != 0:
+				return false
+			if not self_len._dsl_bool():
 				return true
-			return start == o.start and stop == o.stop and step == o.step
+			var self_start = start_b if big else DSLInteger.pooled(start)
+			var o_start = o.start_b if o.big else DSLInteger.pooled(o.start)
+			var self_step = step_b if big else DSLInteger.pooled(step)
+			var o_step = o.step_b if o.big else DSLInteger.pooled(o.step)
+			if DSLBigInt.cmp(self_start._pair()[0], self_start._pair()[1], o_start._pair()[0], o_start._pair()[1]) != 0:
+				return false
+			if DSLBigInt.cmp(self_step._pair()[0], self_step._pair()[1], o_step._pair()[0], o_step._pair()[1]) != 0:
+				return false
+			return true
 		if other is DSLList:
 			# 列表逐元素比较 (CPython: range(3) == [0,1,2] 为 False, 因类型不同)
 			return false
@@ -16514,9 +18797,9 @@ class DSLUserIterator extends DSLIterator:
 		if ip != null:
 			ip._protocol_call_depth -= 1
 		if ip != null and ip.report.has_error:
-			# StopIteration 视为正常耗尽并清除错误标记, 其余异常 (ValueError 等)
+			# StopIteration (含其子类) 视为正常耗尽并清除错误标记, 其余异常 (ValueError 等)
 			# 必须保留错误状态交消费方传播, 否则异常被当作耗尽吞掉
-			if ip.last_exception != null and ip.last_exception._type_name() == "StopIteration":
+			if ip._is_stop_iteration(ip.last_exception):
 				ip.report.clear_error()
 				ip.last_exception = null
 				done = true
@@ -16580,6 +18863,19 @@ class DSLSeqIterator extends DSLObject:
 
 	func _dsl_iter() -> DSLIterator:
 		return _ensure_driver()
+
+	## __length_hint__ 返回剩余元素数 (未知返回 -1)
+	func _dsl_getattribute(attr_name: String) -> DSLObject:
+		if attr_name == "__length_hint__":
+			var bf = DSLBuiltinFunction.new("__length_hint__", Callable(self, "builtin_seq_len_hint"))
+			return bf
+		return super._dsl_getattribute(attr_name)
+
+	func builtin_seq_len_hint(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var d = _ensure_driver()
+		if d == null:
+			return DSLInteger.pooled(0)
+		return DSLInteger.pooled(d._length_hint())
 
 ## iter(callable, sentinel) 两参形式的可迭代对象 (CPython callable_iterator) [br]
 ## 状态 (游标与产出日志) 保存在对象上, _dsl_iter 返回复用同一状态的内部迭代器
@@ -16681,6 +18977,10 @@ class DSLListIterator extends DSLIterator:
 		index += 1
 		return res
 
+	## 剩余元素数 (CPython list_iterator.__length_hint__)
+	func _length_hint() -> int:
+		return items.size() - index
+
 ## 旧式迭代协议驱动器, 按 0, 1, 2 ... 连续下标调用目标的 __getitem__ [br]
 ## 目标方法抛出 IndexError 时结束迭代, 其余错误经解释器异常通道上报
 class DSLGetItemIterator extends DSLIterator:
@@ -16737,8 +19037,8 @@ class DSLGetItemIterator extends DSLIterator:
 			if ip != null and ip._suspended and not ip.report.has_error and target.last_error == "":
 				suspended = true
 				return
-			# 用户方法内 raise 的 IndexError 经 report / last_exception 通道传播
-			if ip != null and ip.report.has_error and ip.last_exception != null and ip.last_exception._type_name() == "IndexError":
+			# 用户方法内 raise 的 IndexError (含其子类) 经 report / last_exception 通道传播
+			if ip != null and ip.report.has_error and ip._is_exception_kind(ip.last_exception, "IndexError"):
 				ip.report.clear_error()
 				ip.last_exception = null
 				finished = true
@@ -16896,6 +19196,8 @@ class DSLInfiniteIterator extends DSLIterator:
 		return true
 
 ## 无限重复同一个值 (itertools.repeat(obj))
+## 共享驱动一次性迭代器 (count/cycle/repeat 三者的驱动同型) —— 对象缓存
+## 驱动跨语句共享进度, 产出记入日志供语句重放轮重读 (与 groupby grouper 同协议)
 class DSLRepeatIterator extends DSLInfiniteIterator:
 	## 被重复的值
 	var value: DSLObject
@@ -16904,7 +19206,24 @@ class DSLRepeatIterator extends DSLInfiniteIterator:
 	func _init(v):
 		super._init()
 		value = v
+		once = true
+	func has_next() -> bool:
+		_begin_use(Interpreter.active)
+		suspended = false
+		return true
 	func next() -> DSLObject:
+		_begin_use(Interpreter.active)
+		suspended = false
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
+			return buffered
+		_log.append(value)
+		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
 		return value
 
 ## 无限循环序列迭代器 (itertools.cycle(iterable))
@@ -16918,27 +19237,62 @@ class DSLCycleIterator extends DSLInfiniteIterator:
 	func _init(it):
 		super._init()
 		items = it
+		once = true
+	func has_next() -> bool:
+		_begin_use(Interpreter.active)
+		suspended = false
+		return true
 	func next() -> DSLObject:
+		_begin_use(Interpreter.active)
+		suspended = false
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
+			return buffered
 		var res = items[index]
 		index = (index + 1) % items.size()
+		_log.append(res)
+		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
 		return res
 
 ## 无限递增计数迭代器 (itertools.count(start, step))
 class DSLCountIterator extends DSLInfiniteIterator:
-	## 当前值
-	var current: int
-	## 步长
-	var step: int
+	## 当前值 (DSLInteger/DSLFloat, 浮点保型, 大数任意精度)
+	var current: DSLObject
+	## 步长 (DSLInteger/DSLFloat)
+	var step: DSLObject
 	## 构造计数迭代器 [br]
 	## [param s] 起始值 [br]
 	## [param st] 步长
-	func _init(s, st):
+	func _init(s: DSLObject, st: DSLObject):
 		super._init()
 		current = s
 		step = st
+		once = true
+	func has_next() -> bool:
+		_begin_use(Interpreter.active)
+		suspended = false
+		return true
 	func next() -> DSLObject:
-		var res = DSLInteger.pooled(current)
-		current += step
+		_begin_use(Interpreter.active)
+		suspended = false
+		if _read_pos < _log.size():
+			var buffered = _log[_read_pos]
+			_read_pos += 1
+			if _read_pos > _hi_pos:
+				_hi_pos = _read_pos
+			return buffered
+		var res = current
+		# 大数起始/步长经 DSL 算术任意精度累加 (快路径 int/float 经 magic_add 分派)
+		current = current.magic_add([current, step] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		_log.append(res)
+		_read_pos += 1
+		if _read_pos > _hi_pos:
+			_hi_pos = _read_pos
 		return res
 
 ## itertools.repeat 无限对象 (未指定次数时返回, 由 _dsl_iter 惰性产生序列)
@@ -17458,13 +19812,18 @@ class DSLZipDriver extends DSLLazyDriver:
 class DSLEnumerateObject extends DSLLazyIterable:
 	## 源迭代器 (构造时获取)
 	var source_it: DSLIterator = null
-	## 起始编号
+	## 起始编号 (快路径)
 	var start: int = 0
+	## 大数起始编号: CPython 3.12 的 enumerate 计数随步进任意精度增长, 不受 int64 约束
+	var start_obj: DSLInteger = null
 
-	func _init(p_it: DSLIterator, p_start: int, ip: Interpreter):
+	func _init(p_it: DSLIterator, p_start, ip: Interpreter):
 		super._init(ip)
 		source_it = p_it
-		start = p_start
+		if p_start is DSLInteger:
+			start_obj = p_start
+		else:
+			start = p_start
 
 	func _lazy_type() -> String:
 		return "enumerate"
@@ -17486,7 +19845,12 @@ class DSLEnumerateDriver extends DSLLazyDriver:
 		var v = owner.source_it.next()
 		if owner.source_it.suspended:
 			return 2
-		produced = DSLTuple.new([DSLInteger.pooled(owner.start + idx), v] as Array[DSLObject])
+		var cnt: DSLInteger = null
+		if owner.start_obj != null:
+			cnt = owner.start_obj._binop_big(DSLInteger.pooled(idx), "+")
+		else:
+			cnt = DSLInteger.pooled(owner.start + idx)
+		produced = DSLTuple.new([cnt, v] as Array[DSLObject])
 		idx += 1
 		return 1
 
@@ -17546,6 +19910,636 @@ class DSLFilterDriver extends DSLLazyDriver:
 				produced = v
 				return 1
 		return 0
+
+## itertools 惰性迭代器通用基类: 对象自持迭代状态, 子类实现 _it_produce [br]
+## _it_produce 返回 0=耗尽/出错 (report.has_error 置位), 1=已产出 (值在 _it_out), 2=挂起
+class DSLItLazyBase extends DSLLazyIterable:
+	## 本次推进产出的值
+	var _it_out: DSLObject = null
+
+	func _it_produce() -> int:
+		return 0
+
+	func _make_driver() -> DSLIterator:
+		return DSLItLazyDriver.new(self)
+
+## 通用 itertools 惰性驱动器: 每步委托对象的 _it_produce
+class DSLItLazyDriver extends DSLLazyDriver:
+	func _produce_step() -> int:
+		var o = owner as DSLItLazyBase
+		var r = o._it_produce()
+		if r == 1:
+			produced = o._it_out
+		return r
+
+## chain(*iterables) 惰性对象: 依次遍历各源迭代器
+class DSLItChainObject extends DSLItLazyBase:
+	var its: Array = []
+	var _ci: int = 0
+
+	func _init(p_its: Array, ip: Interpreter):
+		super._init(ip)
+		its = p_its
+
+	func _lazy_type() -> String:
+		return "chain"
+
+	func _it_produce() -> int:
+		while _ci < its.size():
+			var it = its[_ci] as DSLIterator
+			var more = it.has_next()
+			if it.suspended:
+				return 2
+			if more:
+				_it_out = it.next()
+				if it.suspended:
+					return 2
+				return 1
+			_ci += 1
+		return 0
+
+## chain.from_iterable(iterable) 惰性对象: 逐内层遍历
+class DSLItChainFromIterableObject extends DSLItLazyBase:
+	var outer: DSLIterator = null
+	var cur: DSLIterator = null
+
+	func _init(p_outer: DSLIterator, ip: Interpreter):
+		super._init(ip)
+		outer = p_outer
+
+	func _lazy_type() -> String:
+		return "chain"
+
+	func _it_produce() -> int:
+		while true:
+			if cur == null:
+				var more = outer.has_next()
+				if outer.suspended:
+					return 2
+				if not more:
+					return 0
+				var item = outer.next()
+				if outer.suspended:
+					return 2
+				cur = item._dsl_iter()
+				if cur == null:
+					var ip = interp if interp != null else Interpreter.active
+					if ip != null:
+						ip.raise_exception("TypeError", "from_iterable() arguments must be iterable")
+					return 0
+			var im = cur.has_next()
+			if cur.suspended:
+				return 2
+			if im:
+				_it_out = cur.next()
+				if cur.suspended:
+					return 2
+				return 1
+			cur = null
+		return 0
+
+## product(*iterables, repeat=1) 惰性对象: 各池构造期物化, 组合行惰性产出, 空池立即结束
+class DSLItProductObject extends DSLItLazyBase:
+	var pools: Array = []
+	var _idx: Array = []
+	var _started: bool = false
+	var _done: bool = false
+
+	func _init(p_pools: Array, ip: Interpreter):
+		super._init(ip)
+		pools = p_pools
+
+	func _lazy_type() -> String:
+		return "product"
+
+	func _it_produce() -> int:
+		if _done:
+			return 0
+		if not _started:
+			_started = true
+			if pools.size() == 0:
+				# 无实参: 产出单个空元组后结束 (CPython)
+				_it_out = DSLTuple.new([])
+				_done = true
+				return 1
+			for p in pools:
+				if (p as Array).size() == 0:
+					_done = true
+					return 0
+			for i in range(pools.size()):
+				_idx.append(0)
+		var row: Array[DSLObject] = []
+		for i in range(pools.size()):
+			row.append((pools[i] as Array)[_idx[i]])
+		_it_out = DSLTuple.new(row)
+		var carry = pools.size() - 1
+		while carry >= 0:
+			_idx[carry] = int(_idx[carry]) + 1
+			if _idx[carry] < (pools[carry] as Array).size():
+				break
+			_idx[carry] = 0
+			carry -= 1
+		if carry < 0:
+			_done = true
+		return 1
+
+## combinations(iterable, r) 惰性对象
+class DSLItCombinationsObject extends DSLItLazyBase:
+	var items: Array = []
+	var r: int = 0
+	var _idx: Array = []
+	var _started: bool = false
+	var _after_last: bool = false
+
+	func _init(p_items: Array, p_r: int, ip: Interpreter):
+		super._init(ip)
+		items = p_items
+		r = p_r
+
+	func _lazy_type() -> String:
+		return "combinations"
+
+	func _it_produce() -> int:
+		if _after_last:
+			return 0
+		if r == 0:
+			if not _started:
+				_started = true
+				_it_out = DSLTuple.new([])
+				_after_last = true
+				return 1
+			return 0
+		if not _started:
+			_started = true
+			if r > items.size():
+				return 0
+			for i in range(r):
+				_idx.append(i)
+		var row: Array[DSLObject] = []
+		for i in range(r):
+			row.append(items[_idx[i]])
+		_it_out = DSLTuple.new(row)
+		var k = r - 1
+		while k >= 0 and int(_idx[k]) == k + items.size() - r:
+			k -= 1
+		if k < 0:
+			_after_last = true
+		else:
+			_idx[k] = int(_idx[k]) + 1
+			for j in range(k + 1, r):
+				_idx[j] = int(_idx[j - 1]) + 1
+		return 1
+
+## permutations(iterable[, r]) 惰性对象 (CPython 的 cycles 算法)
+class DSLItPermutationsObject extends DSLItLazyBase:
+	var items: Array = []
+	var r: int = 0
+	var indices: Array = []
+	var cycles: Array = []
+	var _started: bool = false
+	var _after_last: bool = false
+
+	func _init(p_items: Array, p_r: int, ip: Interpreter):
+		super._init(ip)
+		items = p_items
+		r = p_r
+
+	func _lazy_type() -> String:
+		return "permutations"
+
+	func _build_row() -> DSLObject:
+		var row: Array[DSLObject] = []
+		for i in range(r):
+			row.append(items[indices[i]])
+		return DSLTuple.new(row)
+
+	func _it_produce() -> int:
+		if _after_last:
+			return 0
+		if not _started:
+			_started = true
+			if r > items.size():
+				return 0
+			for i in range(items.size()):
+				indices.append(i)
+			for i in range(r):
+				cycles.append(items.size() - i)
+			_it_out = _build_row()
+			return 1
+		for i in range(r - 1, -1, -1):
+			cycles[i] = int(cycles[i]) - 1
+			if int(cycles[i]) == 0:
+				# 旋转 indices[i:] = indices[i+1:] + [indices[i]]
+				var elem = indices[i]
+				var before = indices.slice(0, i)
+				var after = indices.slice(i + 1)
+				indices = before
+				indices.append_array(after)
+				indices.append(elem)
+				cycles[i] = items.size() - i
+				continue
+			var j = int(cycles[i])
+			var tmp = indices[i]
+			indices[i] = indices[items.size() - j]
+			indices[items.size() - j] = tmp
+			_it_out = _build_row()
+			return 1
+		_after_last = true
+		return 0
+
+## zip_longest(*iterables, fillvalue=None) 惰性对象
+class DSLItZipLongestObject extends DSLItLazyBase:
+	var its: Array = []
+	var fillvalue: DSLObject = null
+
+	func _init(p_its: Array, p_fill: DSLObject, ip: Interpreter):
+		super._init(ip)
+		its = p_its
+		fillvalue = p_fill
+
+	func _lazy_type() -> String:
+		return "zip_longest"
+
+	func _it_produce() -> int:
+		var row: Array[DSLObject] = []
+		var any_alive = false
+		for it in its:
+			var it2 = it as DSLIterator
+			var more = it2.has_next()
+			if it2.suspended:
+				return 2
+			if more:
+				row.append(it2.next())
+				if it2.suspended:
+					return 2
+				any_alive = true
+			else:
+				row.append(fillvalue)
+		if not any_alive:
+			return 0
+		_it_out = DSLTuple.new(row)
+		return 1
+
+## takewhile(predicate, iterable) 惰性对象
+class DSLItTakewhileObject extends DSLItLazyBase:
+	var pred: DSLObject = null
+	var it: DSLIterator = null
+	var _done: bool = false
+
+	func _init(p_pred: DSLObject, p_it: DSLIterator, ip: Interpreter):
+		super._init(ip)
+		pred = p_pred
+		it = p_it
+
+	func _lazy_type() -> String:
+		return "takewhile"
+
+	func _it_produce() -> int:
+		if _done:
+			return 0
+		var more = it.has_next()
+		if it.suspended:
+			return 2
+		if not more:
+			return 0
+		var v = it.next()
+		if it.suspended:
+			return 2
+		var r = pred.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if r == null:
+			var ip = interp if interp != null else Interpreter.active
+			if ip != null and ip._suspended:
+				return 2
+			return 0
+		if not r._dsl_bool():
+			_done = true
+			return 0
+		_it_out = v
+		return 1
+
+## dropwhile(predicate, iterable) 惰性对象
+class DSLItDropwhileObject extends DSLItLazyBase:
+	var pred: DSLObject = null
+	var it: DSLIterator = null
+	var _dropping: bool = true
+
+	func _init(p_pred: DSLObject, p_it: DSLIterator, ip: Interpreter):
+		super._init(ip)
+		pred = p_pred
+		it = p_it
+
+	func _lazy_type() -> String:
+		return "dropwhile"
+
+	func _it_produce() -> int:
+		while true:
+			var more = it.has_next()
+			if it.suspended:
+				return 2
+			if not more:
+				return 0
+			var v = it.next()
+			if it.suspended:
+				return 2
+			if _dropping:
+				var r = pred.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if r == null:
+					var ip = interp if interp != null else Interpreter.active
+					if ip != null and ip._suspended:
+						return 2
+					return 0
+				if r._dsl_bool():
+					continue
+				_dropping = false
+			_it_out = v
+			return 1
+		return 0
+
+## filterfalse(predicate, iterable) 惰性对象 [br]
+## 产出谓词判定为假的元素; predicate 为 None 时按真值判定
+class DSLItFilterfalseObject extends DSLItLazyBase:
+	var pred: DSLObject = null
+	var it: DSLIterator = null
+
+	func _init(p_pred: DSLObject, p_it: DSLIterator, ip: Interpreter):
+		super._init(ip)
+		pred = p_pred
+		it = p_it
+
+	func _lazy_type() -> String:
+		return "filterfalse"
+
+	func _it_produce() -> int:
+		while true:
+			var more = it.has_next()
+			if it.suspended:
+				return 2
+			if not more:
+				return 0
+			var v = it.next()
+			if it.suspended:
+				return 2
+			var keep = false
+			if pred != null and not (pred is DSLNone):
+				var r = pred.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if r == null:
+					var ip = interp if interp != null else Interpreter.active
+					if ip != null and ip._suspended:
+						return 2
+					return 0
+				keep = r._dsl_bool()
+			else:
+				keep = v._dsl_bool()
+			if keep:
+				continue
+			_it_out = v
+			return 1
+		return 0
+
+## batched(iterable, n) 惰性对象 [br]
+## 每次产出 n 个元素的元组, 最后一批不足 n 时按剩余数量
+class DSLItBatchedObject extends DSLItLazyBase:
+	var it: DSLIterator = null
+	var n: int = 1
+	var _done: bool = false
+
+	func _init(p_it: DSLIterator, p_n: int, ip: Interpreter):
+		super._init(ip)
+		it = p_it
+		n = p_n
+
+	func _lazy_type() -> String:
+		return "batched"
+
+	func _it_produce() -> int:
+		if _done:
+			return 0
+		var batch: Array[DSLObject] = []
+		while batch.size() < n:
+			var more = it.has_next()
+			if it.suspended:
+				return 2
+			if not more:
+				break
+			var v = it.next()
+			if it.suspended:
+				return 2
+			batch.append(v)
+		if batch.size() == 0:
+			_done = true
+			return 0
+		_it_out = DSLTuple.new(batch)
+		return 1
+
+## heapq.merge 多路归并惰性对象 [br]
+## 输入视为已排序序列, 每步取最小 (或 reverse 时最大) 头部产出
+class DSLItHeapMergeObject extends DSLItLazyBase:
+	var its: Array = []
+	var key_fn: DSLObject = null
+	var reverse: bool = false
+	var heads: Array = []
+	var exhausted: Array = []
+
+	func _init(p_its: Array, p_key: DSLObject, p_reverse: bool, ip: Interpreter):
+		super._init(ip)
+		its = p_its
+		key_fn = p_key
+		reverse = p_reverse
+		heads.resize(p_its.size())
+		exhausted.resize(p_its.size())
+		for i in range(p_its.size()):
+			exhausted[i] = false
+
+	func _lazy_type() -> String:
+		return "merge"
+
+	## 取 key 值 (无 key 时原值)
+	func _key_of(v: DSLObject) -> DSLObject:
+		if key_fn != null and not (key_fn is DSLNone):
+			var r = key_fn.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if r == null:
+				var ip = interp if interp != null else Interpreter.active
+				if ip != null and ip._suspended:
+					return v
+				return v
+			return r
+		return v
+
+	## 归并序比较: reverse=False 取较小者, reverse=True 取较大者
+	func _merge_lt(a: DSLObject, b: DSLObject) -> bool:
+		var ip = interp if interp != null else Interpreter.active
+		if ip == null:
+			return false
+		var ka = _key_of(a)
+		var kb = _key_of(b)
+		if reverse:
+			return ip._dsl_lt_checked(kb, ka)
+		return ip._dsl_lt_checked(ka, kb)
+
+	func _it_produce() -> int:
+		# 补充各源头部缓存 (含挂起传播)
+		for i in range(its.size()):
+			if heads[i] == null and not exhausted[i]:
+				var it = its[i] as DSLIterator
+				var more = it.has_next()
+				if it.suspended:
+					return 2
+				if more:
+					var v = it.next()
+					if it.suspended:
+						return 2
+					heads[i] = v
+				else:
+					exhausted[i] = true
+		var best = -1
+		for i in range(its.size()):
+			if exhausted[i] or heads[i] == null:
+				continue
+			if best == -1:
+				best = i
+			elif _merge_lt(heads[i], heads[best]):
+				best = i
+		if best == -1:
+			return 0
+		_it_out = heads[best]
+		heads[best] = null
+		return 1
+
+## accumulate(iterable[, func][, initial]) 惰性对象
+class DSLItAccumulateObject extends DSLItLazyBase:
+	var it: DSLIterator = null
+	var func_obj: DSLObject = null
+	var acc: DSLObject = null
+	var has_initial: bool = false
+	var _started: bool = false
+
+	func _init(p_it: DSLIterator, p_func: DSLObject, p_acc: DSLObject, p_has_initial: bool, ip: Interpreter):
+		super._init(ip)
+		it = p_it
+		func_obj = p_func
+		acc = p_acc
+		has_initial = p_has_initial
+
+	func _lazy_type() -> String:
+		return "accumulate"
+
+	func _it_produce() -> int:
+		if not _started:
+			# 无 initial: 首元素直接产出 (可能挂起, 挂起期间 _started 保持 false, 重放轮重走此分支)
+			if not has_initial:
+				var more = it.has_next()
+				if it.suspended:
+					return 2
+				if not more:
+					return 0
+				acc = it.next()
+				if it.suspended:
+					return 2
+				_started = true
+				_it_out = acc
+				return 1
+			# 有 initial: 先产出 initial
+			_started = true
+			_it_out = acc
+			return 1
+		var more2 = it.has_next()
+		if it.suspended:
+			return 2
+		if not more2:
+			return 0
+		var v = it.next()
+		if it.suspended:
+			return 2
+		if func_obj == null:
+			acc = acc.magic_add([acc, v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		else:
+			acc = func_obj.magic_call([acc, v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if acc == null:
+			var ip = interp if interp != null else Interpreter.active
+			if ip != null and ip._suspended:
+				return 2
+			return 0
+		_it_out = acc
+		return 1
+
+## pairwise(iterable) 惰性对象
+class DSLItPairwiseObject extends DSLItLazyBase:
+	var it: DSLIterator = null
+	var prev: DSLObject = null
+	var _has_prev: bool = false
+
+	func _init(p_it: DSLIterator, ip: Interpreter):
+		super._init(ip)
+		it = p_it
+
+	func _lazy_type() -> String:
+		return "pairwise"
+
+	func _it_produce() -> int:
+		if not _has_prev:
+			var m0 = it.has_next()
+			if it.suspended:
+				return 2
+			if not m0:
+				return 0
+			prev = it.next()
+			if it.suspended:
+				return 2
+			_has_prev = true
+		var m1 = it.has_next()
+		if it.suspended:
+			return 2
+		if not m1:
+			return 0
+		var cur = it.next()
+		if it.suspended:
+			return 2
+		var pair: Array[DSLObject] = [prev, cur]
+		prev = cur
+		_it_out = DSLTuple.new(pair)
+		return 1
+
+## starmap(func, iterable) 惰性对象
+class DSLItStarmapObject extends DSLItLazyBase:
+	var fn: DSLObject = null
+	var it: DSLIterator = null
+
+	func _init(p_fn: DSLObject, p_it: DSLIterator, ip: Interpreter):
+		super._init(ip)
+		fn = p_fn
+		it = p_it
+
+	func _lazy_type() -> String:
+		return "starmap"
+
+	func _it_produce() -> int:
+		var more = it.has_next()
+		if it.suspended:
+			return 2
+		if not more:
+			return 0
+		var row = it.next()
+		if it.suspended:
+			return 2
+		var row_it = row._dsl_iter()
+		if row_it == null:
+			var ip = interp if interp != null else Interpreter.active
+			if ip != null:
+				ip.raise_exception("TypeError", "starmap() argument 2 must be an iterable of iterables")
+			return 0
+		var call_args: Array[DSLObject] = []
+		while row_it.has_next():
+			call_args.append(row_it.next())
+			if row_it.suspended:
+				return 2
+		var r = fn.magic_call(call_args, {} as Dictionary[String, DSLObject])
+		if r == null:
+			var ip2 = interp if interp != null else Interpreter.active
+			if ip2 != null and ip2._suspended:
+				return 2
+			return 0
+		_it_out = r
+		return 1
 
 class DSLTeeHandle extends DSLObject:
 	## 共享状态: {items: 缓冲数组, it: 源迭代器, interp: 解释器}
@@ -17630,8 +20624,12 @@ class DSLRepeat extends DSLObject:
 		value = v
 	func _type_name() -> String:
 		return "repeat"
+	## 缓存共享驱动: 跨语句消费共享进度 (一次性迭代语义)
+	var _driver: DSLIterator = null
 	func _dsl_iter() -> DSLIterator:
-		return DSLRepeatIterator.new(value)
+		if _driver == null:
+			_driver = DSLRepeatIterator.new(value)
+		return _driver
 
 ## itertools.cycle 无限对象
 class DSLCycle extends DSLObject:
@@ -17644,26 +20642,34 @@ class DSLCycle extends DSLObject:
 		items = it
 	func _type_name() -> String:
 		return "cycle"
+	## 缓存共享驱动: 跨语句消费共享进度
+	var _driver: DSLIterator = null
 	func _dsl_iter() -> DSLIterator:
-		return DSLCycleIterator.new(items)
+		if _driver == null:
+			_driver = DSLCycleIterator.new(items)
+		return _driver
 
 ## itertools.count 无限对象
 class DSLCount extends DSLObject:
-	## 起始值
-	var start: int
-	## 步长
-	var step: int
+	## 起始值 (DSLInteger/DSLFloat)
+	var start: DSLObject
+	## 步长 (DSLInteger/DSLFloat)
+	var step: DSLObject
 	## 构造 count 对象 [br]
 	## [param s] 起始值 [br]
 	## [param st] 步长
-	func _init(s, st):
+	func _init(s: DSLObject, st: DSLObject):
 		super._init()
 		start = s
 		step = st
 	func _type_name() -> String:
 		return "count"
+	## 缓存共享驱动: 跨语句消费共享进度
+	var _driver: DSLIterator = null
 	func _dsl_iter() -> DSLIterator:
-		return DSLCountIterator.new(start, step)
+		if _driver == null:
+			_driver = DSLCountIterator.new(start, step)
+		return _driver
 
 ## 生成器表达式对象, 对应 Python generator [br]
 ## 惰性求值: 持有表达式与闭包环境, 通过共享的 DSLGeneratorIterator 逐次产出元素 [br]
@@ -17686,12 +20692,22 @@ class DSLGenerator extends DSLObject:
 	## 私有驱动环境: 子句变量绑定于此并持久化 (CPython 推导式作用域语义) [br]
 	## lambda 闭包捕获本环境, 推导式结束后仍可见最后绑定值
 	var drive_env = null
+	## 最外层可迭代的急切求值结果 (生成器表达式创建时求值, 此后同名重绑不影响已有生成器)
+	var first_iterable: DSLObject = null
+	var first_evaluated: bool = false
+	## repr 限定名链: 构造时按当前作用域计算, CPython 形态 func.<locals>.<genexpr> / A.<genexpr> / <genexpr>
+	var _repr_name: String = "<genexpr>"
 
 	## 取 (必要时创建) 私有驱动环境 [br]
 	## [returns] 以 closure 为父的子环境
 	func _ensure_drive_env() -> DSLEnvironment:
 		if drive_env == null:
-			drive_env = DSLEnvironment.new(interp.report, closure)
+			# 类体内的推导式: 驱动作用域跳过类体命名空间 (CPython 编译期约束,
+			# 推导式体不可见类级名字), 外层函数作用域保持可见
+			var closure_env = closure
+			while closure_env.is_class_scope and closure_env.enclosing != null:
+				closure_env = closure_env.enclosing
+			drive_env = DSLEnvironment.new(interp.report, closure_env)
 			drive_env.comp_scope = true
 		return drive_env
 
@@ -17706,21 +20722,129 @@ class DSLGenerator extends DSLObject:
 		clauses = c
 		closure = env
 		interp = ip
+		_repr_name = ip._genexpr_repr_name(env)
 
 	func _type_name() -> String:
 		return "generator"
 
 	func _dsl_str() -> String:
-		return "<generator object <genexpr>>"
+		return "<generator object %s>" % _repr_name
+
+	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new("<generator object %s>" % _repr_name)
 
 	func _dsl_bool() -> bool:
 		return true
 
 	## 返回共享迭代器, 使生成器保持一次性语义
 	func _dsl_iter() -> DSLIterator:
+		if _closed:
+			# 已 close/throw: 后续迭代即刻耗尽 (CPython 生成器同形)
+			var closed_it = DSLGeneratorIterator.new(self)
+			closed_it.done = true
+			return closed_it
 		if _iterator == null:
 			_iterator = DSLGeneratorIterator.new(self)
 		return _iterator
+
+	## 生成器表达式协议方法 (send/throw/close/__next__) 的属性访问 [br]
+	## 与 def 生成器 (DSLFunctionGenerator) 协议面一致
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "send":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_send"))
+		if name == "throw":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_throw"))
+		if name == "close":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_close"))
+		if name == "__next__":
+			return DSLBuiltinFunction.new(name, Callable(self, "_dsl_next"))
+		return super._dsl_getattribute(name)
+
+	## 是否已关闭 (close/throw 后置位)
+	var _closed: bool = false
+
+	## 取 (必要时创建) 共享迭代器
+	func _ensure_iter() -> DSLGeneratorIterator:
+		if _iterator == null:
+			_iterator = DSLGeneratorIterator.new(self)
+		return _iterator
+
+	## 经共享迭代器推进一步: 返回产出值, 挂起返回 null (suspended), 耗尽返回 null (done)
+	func _protocol_advance() -> DSLObject:
+		var it = _ensure_iter()
+		return it.next()
+
+	## genexpr.send(value) - 未启动且非 None 报 TypeError, 之后按 next 推进 (send 值被丢弃) [br]
+	## CPython 生成器表达式的隐式 yield 无读取端, send 值静默忽略
+	func _dsl_send(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			interp.raise_exception("TypeError", "send() takes exactly one argument (%d given)" % args.size())
+			return null
+		var value = args[0]
+		if _closed or _ensure_iter().done:
+			interp.raise_stop_iteration_value(interp.get_none())
+			return null
+		if not _ensure_iter()._started and not (value is DSLNone):
+			interp.raise_exception("TypeError", "can't send non-None value to a just-started generator")
+			return null
+		return _protocol_return(_protocol_advance())
+
+	## genexpr.throw(exc) - 在挂起点注入异常 (推导式体内无捕获点, 一律传播)
+	func _dsl_throw(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var exc = _throw_arg_to_exception(args)
+		if exc == null:
+			return null
+		_closed = true
+		if _iterator != null:
+			_iterator.done = true
+		interp.raise_existing_exception(exc)
+		return null
+
+	## genexpr.close() - 停止生成器, 返回 None (后续 next 报 StopIteration)
+	func _dsl_close(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		_closed = true
+		if _iterator != null:
+			_iterator.done = true
+		return interp.get_none()
+
+	## genexpr.__next__() - 与 next(g) 等价
+	func _dsl_next(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if _closed or _ensure_iter().done:
+			interp.raise_stop_iteration_value(interp.get_none())
+			return null
+		return _protocol_return(_protocol_advance())
+
+	## 协议推进结果归一: 耗尽转 StopIteration, 挂起原样交上层
+	func _protocol_return(v: DSLObject) -> DSLObject:
+		if v == null:
+			if _ensure_iter().suspended:
+				return null
+			interp.raise_stop_iteration_value(interp.get_none())
+			return null
+		return v
+
+	## throw 实参转异常实例 (与 def 生成器同规则)
+	func _throw_arg_to_exception(args: Array[DSLObject]):
+		if args.size() == 0:
+			interp.raise_exception("TypeError", "throw() takes at least 1 argument (0 given)")
+			return null
+		var first = args[0]
+		if first is DSLClass:
+			var ctor_args: Array[DSLObject] = []
+			if args.size() >= 2:
+				ctor_args.append(args[1])
+			var inst = first.magic_call(ctor_args, {})
+			if inst == null or interp.report.has_error:
+				return null
+			return inst
+		if first is DSLException:
+			return first
+		if first.fields != null:
+			var exc_root = interp.globals.get_val_safe("BaseException")
+			if exc_root is DSLClass and first._is_subclass_of_klass(exc_root):
+				return first
+		interp.raise_exception("TypeError", "thrown value is not an exception")
+		return null
 
 ## 生成器表达式迭代器: 每次 next() 推进一次推导式循环 [br]
 ## 惰性求值迭代源, 循环状态 (源迭代器/变量绑定/是否耗尽) 保存在字段中
@@ -17800,10 +20924,15 @@ class DSLGeneratorIterator extends DSLIterator:
 		var clause = gen.clauses[idx]
 		var it = null
 		var prev_env = interp.environment
-		# 首子句的可迭代在封装作用域求值 (CPython 语义); 嵌套子句在推导式作用域求值 (可引用先前子句变量)
-		interp.environment = gen.closure if idx == 0 else gen._ensure_drive_env()
-		var iterable_val = interp.evaluate(clause.iterable)
-		interp.environment = prev_env
+		var iterable_val = null
+		if idx == 0 and gen.first_evaluated:
+			# 首子句可迭代已在创建时急切求值, 直接使用其结果
+			iterable_val = gen.first_iterable
+		else:
+			# 首子句的可迭代在封装作用域求值 (CPython 语义); 嵌套子句在推导式作用域求值 (可引用先前子句变量)
+			interp.environment = gen.closure if idx == 0 else gen._ensure_drive_env()
+			iterable_val = interp.evaluate(clause.iterable)
+			interp.environment = prev_env
 		if interp._suspended:
 			suspended = true
 			return false
@@ -18105,8 +21234,8 @@ class DSLFunctionGenerator extends DSLObject:
 	## 语句内若同时含普通 yield 与 yield from, 二者的挂起交替发生: [br]
 	## 普通 yield 用 _pending_yield_index 标识重放轮, 而 yield from 只靠节点状态续跑, [br]
 	## 若仅按 _pending_yield_index 判定, yield from 挂起的那一轮会被误判为「新一轮」 [br]
-	## 从而清空记忆并使此前的普通 yield 被重新产出。该标志在整个挂起周期内保持为真, [br]
-	## 直到所在语句真正执行完毕才清除
+	## 从而清空记忆并使此前的普通 yield 被重新产出 [br]
+	## 该标志在整个挂起周期内保持为真, 直到所在语句真正执行完毕才清除
 	var _yv_stmt_active: bool = false
 
 	## 构造生成器对象 [br]
@@ -18119,7 +21248,8 @@ class DSLFunctionGenerator extends DSLObject:
 		function = p_func
 		local_env = p_env
 		body = p_func.declaration.body
-		_name = p_func.declaration.name
+		# repr 用限定名 (嵌套 def 为 outer.<locals>.inner, 顶层为函数名)
+		_name = p_func.qualname if p_func.qualname != "" else p_func.declaration.name
 		_result_value = _none()
 
 	func _type_name() -> String:
@@ -18213,9 +21343,9 @@ class DSLFunctionGenerator extends DSLObject:
 			step_result = 2
 		elif res == Interpreter.ExecResult.RAISE or res == Interpreter.ExecResult.ERROR:
 			_finished = true
-			# PEP 479: 生成器体内逃逸的 StopIteration 转为可捕获的 RuntimeError
+			# PEP 479: 生成器体内逃逸的 StopIteration (含其子类) 转为可捕获的 RuntimeError
 			# 先清除报告错误: 否则 magic_call 因 has_error 跳过 __init__, 消息与 __context__ 丢失
-			if ip.last_exception != null and ip.last_exception._type_name() == "StopIteration":
+			if ip._is_stop_iteration(ip.last_exception):
 				ip.report.clear_error()
 				ip.raise_exception("RuntimeError", "generator raised StopIteration")
 			step_result = 3
@@ -18384,11 +21514,12 @@ class DSLFunctionGenerator extends DSLObject:
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] 产出的值, 结束/出错时返回 null
 	func _dsl_throw(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if _finished:
-			interp.raise_stop_iteration_value(_result_value)
-			return null
 		var exc = _throw_arg_to_exception(args)
 		if exc == null:
+			return null
+		if _finished:
+			# 已耗尽生成器 throw: 注入的异常原样传播 (CPython 语义), 不转 StopIteration
+			interp.raise_existing_exception(exc)
 			return null
 		_invalidate_iter()
 		_throw_pending = true
@@ -18663,7 +21794,7 @@ class DSLAsyncGenerator extends DSLFunctionGenerator:
 	func _make_step(mode: String, send_val: DSLObject, throw_exc) -> DSLAsyncGenStep:
 		return DSLAsyncGenStep.new(self, mode, send_val, throw_exc)
 
-	## 异步生成器不支持同步迭代 (CPython 同文案)
+	## 异步生成器不支持同步迭代
 	func _dsl_iter() -> DSLIterator:
 		last_error = "TypeError: 'async_generator' object is not iterable"
 		return null
@@ -18752,6 +21883,15 @@ class DSLEnvironment:
 	func get_val(name: String) -> DSLObject:
 		if nonlocal_bindings.has(name):
 			return nonlocal_bindings[name].get_val(name)
+		if global_vars.has(name):
+			# global 声明名的读取直达模块全局 (CPython 语义), 不回退闭包链上的同名局部
+			var env = self
+			while env.enclosing:
+				env = env.enclosing
+			if env.values.has(name):
+				return env.values[name]
+			report.error("NameError: name '%s' is not defined" % name)
+			return null
 		if values.has(name):
 			return values[name]
 		if enclosing:
@@ -18766,6 +21906,12 @@ class DSLEnvironment:
 	func get_val_safe(name: String) -> DSLObject:
 		if nonlocal_bindings.has(name):
 			return nonlocal_bindings[name].get_val_safe(name)
+		if global_vars.has(name):
+			# global 声明名的读取直达模块全局 (CPython 语义), 不回退闭包链上的同名局部
+			var env = self
+			while env.enclosing:
+				env = env.enclosing
+			return env.values.get(name) if env.values.has(name) else null
 		if values.has(name):
 			return values[name]
 		if enclosing:
@@ -18829,8 +21975,23 @@ class DSLEnvironment:
 		if nonlocal_bindings.has(name):
 			nonlocal_bindings[name].delete(name)
 			return
+		if global_vars.has(name):
+			# global 声明名的删除直达模块全局 (CPython 语义)
+			var env = self
+			while env.enclosing:
+				env = env.enclosing
+			if env.values.has(name):
+				env.values.erase(name)
+				return
+			report.error("NameError: name '%s' is not defined" % name)
+			return
 		if values.has(name):
 			values.erase(name)
+			return
+		# 函数作用域内的 del 只作用于本层局部: 未绑定即 UnboundLocalError (CPython),
+		# 不沿链向上查找外层绑定 (del 使名字成为本函数局部)
+		if not function_locals.is_empty():
+			report.error("UnboundLocalError: cannot access local variable '%s' where it is not associated with a value" % name)
 			return
 		if enclosing:
 			enclosing.delete(name)
@@ -18897,6 +22058,12 @@ class Parser:
 				statements.append(stmt)
 		if not report.has_error:
 			_walk_yield_stmt(statements, 0)
+		if not report.has_error:
+			# global 声明前置使用检查 (编译期)
+			_walk_global_prior(statements)
+		if not report.has_error:
+			# nonlocal 无绑定 / 模块级声明 编译期检查
+			_walk_nonlocal_check(statements)
 		return statements
 		
 	## 检查是否已到达 Token 流末尾 [br]
@@ -19249,6 +22416,8 @@ class Parser:
 		var params: Array[Param] = []
 		var saw_kwargs = false
 		var saw_star = false
+		var saw_slash = false
+		var saw_default = false
 		
 		if not check(TokenType.RPAREN):
 			while true:
@@ -19261,10 +22430,20 @@ class Parser:
 				# 处理 / 分隔
 				if check(TokenType.SLASH):
 					advance()
+					# / 只能出现一次且前面须有位置参数 (def f(/), def f(a, /, /, b) 报错)
+					if saw_slash:
+						report.error("SyntaxError: / may appear only once")
+						return null
+					if params.size() == 0:
+						report.error("SyntaxError: invalid syntax")
+						return null
+					saw_slash = true
 					# 将前面所有普通参数标记为 positional-only
 					for p in params:
 						if not p.is_args and not p.is_kwargs:
 							p.is_positional_only = true
+					# / 之后是新的参数组, 默认值顺序约束重新计数
+					saw_default = false
 					if not match_types([TokenType.COMMA]):
 						break
 					continue
@@ -19286,12 +22465,14 @@ class Parser:
 					if is_star_only:
 						advance()
 						saw_star = true
-						if not match_types([TokenType.COMMA]):
-							break
-						# CPython: 裸 * 后必须跟命名参数 (def f(*,) 报错)
+						# * 之后是关键字专属参数组, 默认值顺序约束重新计数
+						saw_default = false
+						# 裸 * 后必须跟命名参数 (def f(*) / def f(*,) 均报错)
 						if check(TokenType.RPAREN):
 							report.error("SyntaxError: named arguments must follow bare *")
 							return null
+						if not match_types([TokenType.COMMA]):
+							break
 						continue
 					else:
 						# *args
@@ -19304,6 +22485,8 @@ class Parser:
 							star_ann = simple_expression()
 						params.append(Param.new(tok.lexeme, null, true, false, false, false, star_ann))
 						saw_star = true
+						# *args 之后是关键字专属参数组, 默认值顺序约束重新计数
+						saw_default = false
 						if not match_types([TokenType.COMMA]):
 							break
 						continue
@@ -19348,7 +22531,13 @@ class Parser:
 						default_expr = simple_expression()
 						if report.has_error:
 							return null
-						
+					# 有默认值的参数后不得跟无默认值参数 (def f(a=1, b) 报错)
+					if default_expr == null and saw_default:
+						report.error("SyntaxError: parameter without a default follows parameter with a default")
+						return null
+					if default_expr != null:
+						saw_default = true
+					
 					# keyword-only 条件: 处于 * 之后且不为 *args
 					params.append(Param.new(param_name, default_expr, false, false, false, saw_star, param_ann))
 					
@@ -19567,9 +22756,20 @@ class Parser:
 			elif target is Literal:
 				report.error("SyntaxError: cannot delete literal")
 				return null
+			elif target is Call:
+				# del f() 报错 (CPython 同)
+				report.error("SyntaxError: cannot delete function call")
+				return null
+			elif target is Binary:
+				# del a + b 报错 (CPython 同)
+				report.error("SyntaxError: cannot delete expression")
+				return null
 			else:
 				targets.append(target)
 			if not match_types([TokenType.COMMA]):
+				break
+			# 目标列表尾逗号合法 (del a,); 分号已由词法器映射为 NEWLINE
+			if check(TokenType.NEWLINE) or check(TokenType.EOF):
 				break
 		_expect_statement_end()
 		skip_newlines()
@@ -19622,7 +22822,7 @@ class Parser:
 		return ImportStmt.new(names)
 
 	## 解析 from-import 语句: from math import sqrt / from math import sqrt as s, pi / from math import * [br]
-	## 相对导入 (from . import x / from .mod import x) 解析期接受, 运行期报 ImportError (I2-71) [br]
+	## 相对导入 (from . import x / from .mod import x) 解析期接受, 运行期报 ImportError [br]
 	## [returns] FromImportStmt 节点, 出错时返回 null
 	func from_statement():
 		# 相对导入: 前导点 (from . / from .. / from .mod ...), PyGDS 无父包上下文
@@ -19681,6 +22881,10 @@ class Parser:
 			if not match_types([TokenType.COMMA]):
 				break
 		if has_paren:
+			# from math import () 空括号导入报错
+			if names.size() == 0:
+				report.error("SyntaxError: invalid syntax")
+				return null
 			_consume_bracket_close(TokenType.RPAREN, "Expected ')' after import names")
 		skip_newlines()
 		# __future__ 特性名解析期校验 (CPython 编译器指令); 执行期按 no-op 处理
@@ -20192,6 +23396,9 @@ class Parser:
 					pos_patterns.append(sub)
 				if not match_types([TokenType.COMMA]):
 					break
+				# 类模式尾逗号合法 (case int(1,))
+				if check(TokenType.RPAREN):
+					break
 		_consume_bracket_close(TokenType.RPAREN, "Expected ')'")
 		if report.has_error:
 			return null
@@ -20285,6 +23492,9 @@ class Parser:
 							report.error("SyntaxError: mapping pattern checks duplicate key (%s)" % _const_key_repr((key as Literal).value))
 							return null
 				if not match_types([TokenType.COMMA]):
+					break
+				# 映射模式尾逗号合法 (case {1: x,})
+				if check(TokenType.RBRACE):
 					break
 		_consume_bracket_close(TokenType.RBRACE, "Expected '}'")
 		if report.has_error:
@@ -20520,7 +23730,7 @@ class Parser:
 			else:
 				saw_plain = true
 			if saw_starred and saw_plain:
-				# CPython 同文案: except 与 except* 不得混用于同一 try
+				# except 与 except* 不得混用于同一 try
 				report.error("SyntaxError: cannot have both 'except' and 'except*' on the same 'try'")
 				return null
 			var exc_type = null
@@ -20532,7 +23742,7 @@ class Parser:
 					if var_tok != null:
 						as_name = var_tok.lexeme
 			if starred and exc_type == null:
-				# CPython 同文案: 裸 except* 非法
+				# 裸 except* 非法
 				report.error("SyntaxError: expected one or more exception types")
 				return null
 			var colon = consume(TokenType.COLON, "expected ':'")
@@ -20673,6 +23883,10 @@ class Parser:
 		var expr = or_expr()
 		if match_types([TokenType.IF]):
 			var condition = or_expr()
+			# 条件为未括号 lambda 非法 (1 if lambda: 2 else 3 报错)
+			if condition is LambdaExpr and not condition.has_meta("parenthesized"):
+				report.error("SyntaxError: invalid syntax")
+				return null
 			if not check(TokenType.ELSE):
 				report.error("SyntaxError: expected 'else' after 'if' expression")
 				return null
@@ -20731,12 +23945,14 @@ class Parser:
 				var prev_op = previous()
 				if prev_op.type == TokenType.IS and match_types([TokenType.NOT]):
 					op = Token.new(TokenType.IS_NOT, "is not", null, prev_op.line, prev_op.column)
-				elif prev_op.type == TokenType.IN and match_types([TokenType.NOT]):
-					op = Token.new(TokenType.NOT_IN, "not in", null, prev_op.line, prev_op.column)
 				else:
 					op = prev_op
 			if op == null:
 				break
+			# 比较操作符后跟一元 not 非法 (a in not b 报 SyntaxError)
+			if check(TokenType.NOT):
+				report.error("SyntaxError: invalid syntax")
+				return null
 			ops.append(op)
 			var right = bitwise_or()
 			comparators.append(right)
@@ -21110,7 +24326,7 @@ class Parser:
 		if check(TokenType.ASYNC) or check(TokenType.AWAIT):
 			report.error("SyntaxError: invalid syntax")
 			return null
-		report.error("Unexpected token '%s'" % peek().lexeme)
+		report.error("Line %d, Column %d: Unexpected token '%s'" % [peek().line, peek().column, peek().lexeme])
 		return null
 
 	## 解析 lambda 表达式: lambda [params]: body [br]
@@ -21205,8 +24421,12 @@ class Parser:
 	func yield_expression() -> Expr:
 		var y = YieldExpr.new(null)
 		if match_types([TokenType.FROM]):
-			var from_val = tuple_expression()
+			var from_val = simple_expression()
 			if report.has_error or from_val == null:
+				return null
+			# yield from 不接受裸逗号元组 (yield from x, y 报 SyntaxError)
+			if check(TokenType.COMMA):
+				report.error("SyntaxError: invalid syntax")
 				return null
 			y.from_expr = from_val
 			return y
@@ -21239,6 +24459,8 @@ class Parser:
 	## [param scope] 0=模块/类体(非函数), 1=函数体, 2=lambda 体 [br]
 	## [returns] 本作用域内是否含直接 yield
 	var _walk_async: bool = false
+	## 当前是否在 except* 子句体内 (该体内 return/break/continue 编译期拒绝)
+	var _walk_except_star: bool = false
 
 	func _walk_yield_stmt(stmts: Array, scope: int, loop_depth: int = 0) -> bool:
 		var found = false
@@ -21287,22 +24509,37 @@ class Parser:
 				_walk_yield_expr(stmt.condition, scope, "")
 				if _walk_yield_stmt(stmt.body, scope, loop_depth + 1):
 					found = true
+				# else 体不在循环内 (break/continue 非法), 以原 loop_depth 遍历
+				if stmt.has_meta("_else_body"):
+					if _walk_yield_stmt(stmt.get_meta("_else_body"), scope, loop_depth):
+						found = true
 			elif stmt is ForStmt:
 				if stmt.is_async and not _walk_async:
 					report.error("SyntaxError: 'async for' outside async function")
 				_walk_yield_expr(stmt.iterable, scope, "")
 				if _walk_yield_stmt(stmt.body, scope, loop_depth + 1):
 					found = true
+				if stmt.has_meta("_else_body"):
+					if _walk_yield_stmt(stmt.get_meta("_else_body"), scope, loop_depth):
+						found = true
 			elif stmt is ReturnStmt:
+				# return 在 except* 体内拒绝 (scope 检查优先)
 				if scope == 0:
 					report.error("SyntaxError: 'return' outside function")
+				elif _walk_except_star:
+					report.error("SyntaxError: 'break', 'continue' and 'return' cannot appear in an except* block")
 				if stmt.value != null and _walk_yield_expr(stmt.value, scope, ""):
 					found = true
 			elif stmt is BreakStmt:
-				if loop_depth == 0:
+				# break 在 except* 体内拒绝 (优先于 loop 检查)
+				if _walk_except_star:
+					report.error("SyntaxError: 'break', 'continue' and 'return' cannot appear in an except* block")
+				elif loop_depth == 0:
 					report.error("SyntaxError: 'break' outside loop")
 			elif stmt is ContinueStmt:
-				if loop_depth == 0:
+				if _walk_except_star:
+					report.error("SyntaxError: 'break', 'continue' and 'return' cannot appear in an except* block")
+				elif loop_depth == 0:
 					report.error("SyntaxError: 'continue' not properly in loop")
 			elif stmt is TryStmt:
 				if _walk_yield_stmt(stmt.try_body, scope, loop_depth):
@@ -21310,8 +24547,14 @@ class Parser:
 				for clause in stmt.except_clauses:
 					if clause.exception_type != null:
 						_walk_yield_expr(clause.exception_type, scope, "")
+					var prev_except_star = _walk_except_star
+					_walk_except_star = clause.starred
 					if _walk_yield_stmt(clause.body, scope, loop_depth):
 						found = true
+					_walk_except_star = prev_except_star
+				# try 的 else 体 (无 except 时解析器已拒; 有 except 时同样不在循环内)
+				if _walk_yield_stmt(stmt.else_body, scope, loop_depth):
+					found = true
 				if _walk_yield_stmt(stmt.finally_body, scope, loop_depth):
 					found = true
 			elif stmt is WithStmt:
@@ -21344,10 +24587,475 @@ class Parser:
 			elif stmt is AnnotatedAssign:
 				# 注解与值表达式同样受 yield/await 作用域规则约束 (类体 scope=0 一并报错)
 				_walk_yield_expr(stmt.annotation, scope, "")
+				if stmt.target != null and _walk_yield_expr(stmt.target, scope, ""):
+					found = true
 				if stmt.value != null and _walk_yield_expr(stmt.value, scope, ""):
 					found = true
 		return found
 
+	## global 声明前置使用检查 (CPython 编译期 SyntaxError) [br]
+	## 作用域内名字在 global 声明前被读报 "used prior", 被写报 "assigned to before" [br]
+	## 函数/类体为独立作用域 (fresh 追踪), global 声明后该名重置 (后续使用合法)
+	func _walk_global_prior(stmts: Array) -> void:
+		_gprior_stmts(stmts, {}, {})
+
+	func _gprior_stmts(stmts: Array, used: Dictionary, assigned: Dictionary) -> void:
+		for st in stmts:
+			if report.has_error:
+				return
+			if st is GlobalStmt:
+				for gname in st.names:
+					if used.has(gname):
+						report.error("SyntaxError: name '%s' is used prior to global declaration" % gname)
+						return
+					if assigned.has(gname):
+						report.error("SyntaxError: name '%s' is assigned to before global declaration" % gname)
+						return
+				# global 声明后该名重置: 后续读写合法
+				for gname in st.names:
+					used.erase(gname)
+					assigned.erase(gname)
+				continue
+			if st is FunctionStmt:
+				# 函数体独立作用域; 函数头默认值 / 装饰器在本作用域求值
+				for d in st.decorators:
+					_gprior_expr(d, used, assigned)
+				for p in st.params:
+					if p.default_value != null:
+						_gprior_expr(p.default_value, used, assigned)
+				_gprior_stmts(st.body, {}, {})
+				continue
+			if st is ClassStmt:
+				for d in st.decorators:
+					_gprior_expr(d, used, assigned)
+				for b in st.bases:
+					_gprior_expr(b, used, assigned)
+				for kb in st.kw_bases:
+					_gprior_expr(kb.value, used, assigned)
+				for skb in st.starkw_bases:
+					_gprior_expr(skb, used, assigned)
+				_gprior_stmts(st.body, {}, {})
+				continue
+			if st is IfStmt:
+				_gprior_expr(st.condition, used, assigned)
+				_gprior_stmts(st.then_branch, used, assigned)
+				for branch in st.elif_branches:
+					_gprior_expr(branch[0], used, assigned)
+					_gprior_stmts(branch[1], used, assigned)
+				_gprior_stmts(st.else_branch, used, assigned)
+				continue
+			if st is WhileStmt:
+				_gprior_expr(st.condition, used, assigned)
+				_gprior_stmts(st.body, used, assigned)
+				_gprior_stmts(st._else_body, used, assigned)
+				continue
+			if st is ForStmt:
+				_gprior_expr(st.iterable, used, assigned)
+				_gprior_targets(st.targets, assigned)
+				_gprior_stmts(st.body, used, assigned)
+				_gprior_stmts(st._else_body, used, assigned)
+				continue
+			if st is TryStmt:
+				_gprior_stmts(st.try_body, used, assigned)
+				for clause in st.except_clauses:
+					if clause.exception_type != null:
+						_gprior_expr(clause.exception_type, used, assigned)
+					_gprior_stmts(clause.body, used, assigned)
+				_gprior_stmts(st.else_body, used, assigned)
+				_gprior_stmts(st.finally_body, used, assigned)
+				continue
+			if st is WithStmt:
+				for item in st.items:
+					_gprior_expr(item.context_expr, used, assigned)
+					_gprior_target(item.target, assigned)
+				_gprior_stmts(st.body, used, assigned)
+				continue
+			if st is MatchStmt:
+				_gprior_expr(st.subject, used, assigned)
+				for case in st.cases:
+					if case.guard != null:
+						_gprior_expr(case.guard, used, assigned)
+					_gprior_pattern(case.pattern, assigned)
+					_gprior_stmts(case.body, used, assigned)
+				continue
+			if st is ExpressionStmt:
+				_gprior_expr(st.expression, used, assigned)
+				continue
+			if st is ReturnStmt:
+				if st.value != null:
+					_gprior_expr(st.value, used, assigned)
+				continue
+			if st is RaiseStmt:
+				if st.expression != null:
+					_gprior_expr(st.expression, used, assigned)
+				continue
+			if st is AssertStmt:
+				_gprior_expr(st.test, used, assigned)
+				if st.message != null:
+					_gprior_expr(st.message, used, assigned)
+				continue
+			if st is DelStmt:
+				for t in st.targets:
+					_gprior_target(t, assigned)
+				continue
+			if st is AnnotatedAssign:
+				_gprior_expr(st.annotation, used, assigned)
+				if st.target != null:
+					_gprior_expr(st.target, used, assigned)
+				else:
+					assigned[st.name] = true
+				if st.value != null:
+					_gprior_expr(st.value, used, assigned)
+				continue
+
+	## nonlocal 声明 编译期检查 [br]
+	## CPython 在编译整个函数时即报 SyntaxError (同文件后续代码不执行): [br]
+	## 模块级 nonlocal -> "nonlocal declaration not allowed at module level", [br]
+	## 函数内 nonlocal 无外层绑定 -> "no binding for nonlocal 'x' found" [br]
+	## nonlocal 名绑定到最近 enclosing 函数, 可跨级闭包: 累积全部外层函数绑定
+	func _walk_nonlocal_check(stmts: Array) -> void:
+		for st in stmts:
+			if report.has_error:
+				return
+			if st is NonlocalStmt:
+				report.error("SyntaxError: nonlocal declaration not allowed at module level")
+				return
+			if st is FunctionStmt:
+				var bound: Dictionary = {}
+				_nl_collect_bound(st.body, bound)
+				for p in st.params:
+					bound[p.name] = true
+				_nl_scan_funcbody(st.body, bound, {})
+			elif st is ClassStmt:
+				_nl_scan_funcbody(st.body, {}, {})
+
+	## 递归扫描一个函数/类体 [br]
+	## [param cur_bound] 当前函数自身的绑定集 (类体为 null) [br]
+	## [param outer] 当前函数的外层函数绑定并集 (direct nonlocal 的可绑定范围)
+	func _nl_scan_funcbody(body: Array, cur_bound, outer) -> void:
+		for st in body:
+			if report.has_error:
+				return
+			_nl_scan_func_stmt(st, cur_bound, outer)
+
+	func _nl_scan_func_stmt(st, cur_bound, outer) -> void:
+		if st == null or report.has_error:
+			return
+		if st is NonlocalStmt:
+			for nl in st.names:
+				if not outer.has(nl):
+					report.error("SyntaxError: no binding for nonlocal '%s' found" % nl)
+					return
+			return
+		if st is FunctionStmt:
+			var bound: Dictionary = {}
+			_nl_collect_bound(st.body, bound)
+			for p in st.params:
+				bound[p.name] = true
+			# 嵌套函数的外层 = 当前函数绑定 ∪ 当前函数的外层 (跨级闭包可见)
+			var new_outer: Dictionary = {}
+			for k in cur_bound:
+				new_outer[k] = true
+			for k in outer:
+				new_outer[k] = true
+			_nl_scan_funcbody(st.body, bound, new_outer)
+			return
+		if st is ClassStmt:
+			# 类体 nonlocal 绑定到类外 enclosing 函数 (含当前函数); 类体里嵌套函数同此
+			var cls_outer: Dictionary = {}
+			for k in cur_bound:
+				cls_outer[k] = true
+			for k in outer:
+				cls_outer[k] = true
+			_nl_scan_funcbody(st.body, {}, cls_outer)
+			return
+		if st is IfStmt:
+			_nl_scan_funcbody(st.then_branch, cur_bound, outer)
+			for eb in st.elif_branches:
+				_nl_scan_funcbody(eb[1], cur_bound, outer)
+			_nl_scan_funcbody(st.else_branch, cur_bound, outer)
+		elif st is WhileStmt:
+			_nl_scan_funcbody(st.body, cur_bound, outer)
+			_nl_scan_funcbody(st._else_body, cur_bound, outer)
+		elif st is ForStmt:
+			_nl_scan_funcbody(st.body, cur_bound, outer)
+			_nl_scan_funcbody(st._else_body, cur_bound, outer)
+		elif st is TryStmt:
+			_nl_scan_funcbody(st.try_body, cur_bound, outer)
+			for clause in st.except_clauses:
+				_nl_scan_funcbody(clause.body, cur_bound, outer)
+			_nl_scan_funcbody(st.else_body, cur_bound, outer)
+			_nl_scan_funcbody(st.finally_body, cur_bound, outer)
+		elif st is WithStmt:
+			for item in st.items:
+				_nl_bound_target(item.target, cur_bound)
+			_nl_scan_funcbody(st.body, cur_bound, outer)
+		elif st is MatchStmt:
+			for case in st.cases:
+				if case.body != null:
+					_nl_scan_funcbody(case.body, cur_bound, outer)
+
+	## 收集函数体「直接作用域」的绑定名 (供 nonlocal 检查; 不递归嵌套函数体内)
+	func _nl_collect_bound(stmts: Array, bound: Dictionary) -> void:
+		for st in stmts:
+			_nl_bound_stmt(st, bound)
+
+	func _nl_bound_stmt(st, bound: Dictionary) -> void:
+		if st == null:
+			return
+		if st is ForStmt:
+			_nl_bound_targets(st.targets, bound)
+			_nl_collect_bound(st.body, bound)
+			_nl_collect_bound(st._else_body, bound)
+		elif st is IfStmt:
+			_nl_collect_bound(st.then_branch, bound)
+			for eb in st.elif_branches:
+				_nl_collect_bound(eb[1], bound)
+			_nl_collect_bound(st.else_branch, bound)
+		elif st is WhileStmt:
+			_nl_collect_bound(st.body, bound)
+			_nl_collect_bound(st._else_body, bound)
+		elif st is TryStmt:
+			_nl_collect_bound(st.try_body, bound)
+			for clause in st.except_clauses:
+				if clause.as_name != "":
+					bound[clause.as_name] = true
+				_nl_collect_bound(clause.body, bound)
+			_nl_collect_bound(st.else_body, bound)
+			_nl_collect_bound(st.finally_body, bound)
+		elif st is WithStmt:
+			for item in st.items:
+				_nl_bound_target(item.target, bound)
+			_nl_collect_bound(st.body, bound)
+		elif st is FunctionStmt:
+			# 函数/类定义名属于本作用域绑定; 函数体内绑定不进本集合
+			bound[st.name] = true
+		elif st is ClassStmt:
+			bound[st.name] = true
+		elif st is ImportStmt:
+			for it in st.names:
+				bound[it.alias if it.alias != "" else it.name] = true
+		elif st is FromImportStmt:
+			if not st.star:
+				for it in st.names:
+					bound[it.alias if it.alias != "" else it.name] = true
+		elif st is MatchStmt:
+			for case in st.cases:
+				_nl_bound_pattern(case.pattern, bound)
+				_nl_collect_bound(case.body, bound)
+		elif st is DelStmt:
+			for t in st.targets:
+				_nl_bound_target(t, bound)
+		elif st is AnnotatedAssign:
+			if st.target == null:
+				bound[st.name] = true
+		elif st is ExpressionStmt:
+			_nl_bound_expr(st.expression, bound)
+		else:
+			_nl_bound_expr(st, bound)
+
+	func _nl_bound_expr(expr, bound: Dictionary) -> void:
+		if expr == null:
+			return
+		if expr is Assign:
+			bound[expr.name] = true
+			_nl_bound_expr(expr.value, bound)
+		elif expr is AugAssign:
+			bound[expr.name] = true
+			_nl_bound_expr(expr.value, bound)
+		elif expr is ChainAssign:
+			for t in expr.targets:
+				_nl_bound_target(t, bound)
+			_nl_bound_expr(expr.value, bound)
+		# 其余表达式 (调用/属性/下标等) 不产生函数级名绑定
+
+	func _nl_bound_target(t, bound: Dictionary) -> void:
+		if t == null:
+			return
+		if t is Variable:
+			bound[t.name] = true
+		elif t is UnpackTarget:
+			for sub in t.items:
+				_nl_bound_target(sub, bound)
+
+	func _nl_bound_targets(targets: Array, bound: Dictionary) -> void:
+		for t in targets:
+			_nl_bound_target(t, bound)
+
+	func _nl_bound_pattern(p, bound: Dictionary) -> void:
+		if p == null:
+			return
+		if p is MatchCapturePattern:
+			if p.name != "_" and p.name != "":
+				bound[p.name] = true
+		elif p is MatchAsPattern:
+			_nl_bound_pattern(p.pattern, bound)
+			if p.name != "_" and p.name != "":
+				bound[p.name] = true
+		elif p is MatchSequencePattern:
+			for sp in p.patterns:
+				_nl_bound_pattern(sp, bound)
+			if p.star_name != "" and p.star_name != "_":
+				bound[p.star_name] = true
+		elif p is MatchMappingPattern:
+			for vp in p.value_patterns:
+				_nl_bound_pattern(vp, bound)
+			if p.rest_name != "" and p.rest_name != "_":
+				bound[p.rest_name] = true
+		elif p is MatchClassPattern:
+			for sp in p.pos_patterns:
+				_nl_bound_pattern(sp, bound)
+			for kp in p.kw_patterns:
+				_nl_bound_pattern(kp, bound)
+		elif p is MatchOrPattern:
+			for ap in p.alternatives:
+				_nl_bound_pattern(ap, bound)
+
+	## 赋值目标的写记录 (变量名记 assigned; 下标/属性目标内的对象/键表达式按读)
+	func _gprior_target(t, assigned: Dictionary) -> void:
+		if t == null:
+			return
+		if t is Variable:
+			assigned[t.name] = true
+		elif t is GetItem:
+			_gprior_expr(t.object, {}, assigned)
+			_gprior_expr(t.index, {}, assigned)
+		elif t is GetAttr:
+			_gprior_expr(t.object, {}, assigned)
+
+	func _gprior_targets(targets: Array, assigned: Dictionary) -> void:
+		for t in targets:
+			_gprior_target(t, assigned)
+
+	## match 模式捕获 (写)
+	func _gprior_pattern(pat, assigned: Dictionary) -> void:
+		if pat == null:
+			return
+		if pat is MatchCapturePattern or pat is MatchAsPattern:
+			if pat.name != "":
+				assigned[pat.name] = true
+		elif pat is MatchSequencePattern:
+			if pat.star_name != "":
+				assigned[pat.star_name] = true
+			for sp in pat.patterns:
+				_gprior_pattern(sp, assigned)
+		elif pat is MatchMappingPattern:
+			if pat.rest_name != "":
+				assigned[pat.rest_name] = true
+			for vp in pat.value_patterns:
+				_gprior_pattern(vp, assigned)
+		elif pat is MatchClassPattern:
+			for ap in pat.pos_patterns:
+				_gprior_pattern(ap, assigned)
+			for kp in pat.kw_patterns:
+				_gprior_pattern(kp, assigned)
+		elif pat is MatchOrPattern:
+			for op in pat.alternatives:
+				_gprior_pattern(op, assigned)
+
+	## 表达式的读/写遍历: Variable 读记 used, Assign/Walrus/AugAssign 写记 assigned
+	func _gprior_expr(expr, used: Dictionary, assigned: Dictionary) -> void:
+		if expr == null:
+			return
+		if expr is Variable:
+			used[expr.name] = true
+		elif expr is Assign:
+			assigned[expr.name] = true
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is WalrusExpr:
+			assigned[expr.name] = true
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is AugAssign:
+			assigned[expr.name] = true
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is LambdaExpr:
+			# lambda 体独立作用域
+			if expr.body != null:
+				_gprior_expr(expr.body, {}, {})
+		elif expr is ListComp or expr is SetComp or expr is GenComp:
+			_gprior_expr(expr.elt_expr, used, assigned)
+			for c in expr.clauses:
+				_gprior_expr(c.iterable, used, assigned)
+				_gprior_targets(c.targets, assigned)
+				for cond in c.conditions:
+					_gprior_expr(cond, used, assigned)
+		elif expr is DictComp:
+			_gprior_expr(expr.key_expr, used, assigned)
+			_gprior_expr(expr.value_expr, used, assigned)
+			for c in expr.clauses:
+				_gprior_expr(c.iterable, used, assigned)
+				_gprior_targets(c.targets, assigned)
+				for cond in c.conditions:
+					_gprior_expr(cond, used, assigned)
+		elif expr is AugAssignAttr:
+			_gprior_expr(expr.object, used, assigned)
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is AugAssignItem:
+			_gprior_expr(expr.object, used, assigned)
+			_gprior_expr(expr.index, used, assigned)
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is GetItem:
+			_gprior_expr(expr.object, used, assigned)
+			_gprior_expr(expr.index, used, assigned)
+		elif expr is SetItem:
+			_gprior_expr(expr.object, used, assigned)
+			_gprior_expr(expr.index, used, assigned)
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is ChainAssign:
+			for ct in expr.targets:
+				if ct is Variable:
+					assigned[ct.name] = true
+				else:
+					_gprior_expr(ct, used, assigned)
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is SliceExpr:
+			_gprior_expr(expr.start, used, assigned)
+			_gprior_expr(expr.stop, used, assigned)
+			_gprior_expr(expr.step, used, assigned)
+		elif expr is CompareChainExpr:
+			_gprior_expr(expr.left, used, assigned)
+			for cmp in expr.comparators:
+				_gprior_expr(cmp, used, assigned)
+		elif expr is Binary:
+			_gprior_expr(expr.left, used, assigned)
+			_gprior_expr(expr.right, used, assigned)
+		elif expr is Unary:
+			_gprior_expr(expr.right, used, assigned)
+		elif expr is GetAttr:
+			_gprior_expr(expr.object, used, assigned)
+		elif expr is SetAttr:
+			_gprior_expr(expr.object, used, assigned)
+			_gprior_expr(expr.value, used, assigned)
+		elif expr is Call:
+			_gprior_expr(expr.callee_expr, used, assigned)
+			for a in expr.arguments:
+				_gprior_expr(a, used, assigned)
+			for kw in expr.keyword_args:
+				_gprior_expr(kw.value, used, assigned)
+			for sa in expr.star_args:
+				_gprior_expr(sa, used, assigned)
+			for sw in expr.star_kwargs:
+				_gprior_expr(sw, used, assigned)
+		elif expr is ListLiteral or expr is TupleLiteral or expr is SetLiteral:
+			for item in expr.elements:
+				_gprior_expr(item, used, assigned)
+		elif expr is DictLiteral:
+			for k in expr.keys:
+				_gprior_expr(k, used, assigned)
+			for v in expr.values:
+				_gprior_expr(v, used, assigned)
+		elif expr is ConditionalExpr:
+			_gprior_expr(expr.condition, used, assigned)
+			_gprior_expr(expr.true_expr, used, assigned)
+			_gprior_expr(expr.false_expr, used, assigned)
+		elif expr is YieldExpr:
+			if expr.value != null:
+				_gprior_expr(expr.value, used, assigned)
+			if expr.from_expr != null:
+				_gprior_expr(expr.from_expr, used, assigned)
+		elif expr is AwaitExpr:
+			if expr.value != null:
+				_gprior_expr(expr.value, used, assigned)
 	## 递归遍历表达式, 检测 yield 用法 (对标 CPython 3.12) [br]
 	## [param expr] 表达式节点 [br]
 	## [param scope] 0=模块/类体, 1=函数体, 2=lambda 体 [br]
@@ -21406,7 +25114,7 @@ class Parser:
 				report.error("SyntaxError: 'yield' outside function")
 				return false
 			if _walk_async and expr.from_expr != null:
-				# CPython 同文案: async 函数体内禁止 yield from (PEP 525)
+				# async 函数体内禁止 yield from (PEP 525)
 				report.error("SyntaxError: 'yield from' inside async function")
 				return false
 			if expr.value != null:
@@ -21466,6 +25174,11 @@ class Parser:
 				return true
 			if _walk_yield_expr(expr.index, scope, comp_ctx):
 				return true
+			return _walk_yield_expr(expr.value, scope, comp_ctx)
+		if expr is ChainAssign:
+			for ct in expr.targets:
+				if _walk_yield_expr(ct, scope, comp_ctx):
+					return true
 			return _walk_yield_expr(expr.value, scope, comp_ctx)
 		if expr is SliceExpr:
 			if expr.start != null and _walk_yield_expr(expr.start, scope, comp_ctx):
@@ -21622,8 +25335,8 @@ class Parser:
 	## [param parts_raw] Lexer 产出的原始 parts (expr 为源码字符串) [br]
 	## [returns] FStringExpr 节点, 出错时返回 null
 	## 合并相邻字符串 / 字节串 / f-string 字面量 (CPython 词法层隐式连接) [br]
-	## str+str 合并为单字面量, bytes+bytes 合并为驻留字面量, 含 f-string 时合并为单个 f-string; [br]
-	## str 与 bytes 混用报 CPython 同文案 SyntaxError; [br]
+	## str+str 合并为单字面量, bytes+bytes 合并为驻留字面量, 含 f-string 时合并为单个 f-string [br]
+	## str 与 bytes 混用报 SyntaxError [br]
 	## 括号内跨行与反斜杠续行因词法层不产出 NEWLINE 而自然相邻, 语句间换行不相邻 [br]
 	## [returns] String / DSLBytes / FStringExpr, 出错返回 null
 	func _merge_string_literals():
@@ -21700,13 +25413,15 @@ class Parser:
 			return null
 		var sub_parser = Parser.new(report, toks)
 		sub_parser.unclosed_error = lexer.unclosed_error
-		var expr = sub_parser.simple_expression()
+		# 字段表达式可为元组 (f"{1, 2}" -> "(1, 2)")
+		var expr = sub_parser.tuple_expression()
 		if report.has_error or expr == null:
 			if report.has_error and sub_parser.unclosed_error != "" and report.last_error != "SyntaxError: invalid syntax":
 				report.last_error = sub_parser.unclosed_error
 			return null
-		if sub_parser.unclosed_error != "":
-			report.error(sub_parser.unclosed_error)
+		# 尾随 token 校验: 字段表达式后不允许残留 (CPython 对非法形态报 invalid syntax)
+		if sub_parser.current < toks.size() and toks[sub_parser.current].type != TokenType.EOF:
+			report.error("SyntaxError: invalid syntax")
 			return null
 		return expr
 		
@@ -21738,52 +25453,14 @@ class Parser:
 					return null
 				expr = Call.new(expr, args, kw_args, star_args, star_kwargs, arg_layout)
 			elif match_types([TokenType.LBRACKET]):
-				if match_types([TokenType.COLON]):
-					var start = null
-					var stop = null
-					var step = null
-					if not check(TokenType.RBRACKET) and not check(TokenType.COLON):
-						stop = simple_expression()
-					if match_types([TokenType.COLON]):
-						if not check(TokenType.RBRACKET):
-							step = simple_expression()
-					var rbracket = _consume_bracket_close(TokenType.RBRACKET, "Expected ']'")
-					if rbracket == null:
-						return null
-					expr = GetItem.new(expr, SliceExpr.new(start, stop, step))
-				else:
-					var index = simple_expression()
-					if report.has_error:
-						return null
-					# 元组下标: 逗号分隔的多个下标表达式打包为元组键 (d[1, 2])
-					if check(TokenType.COMMA):
-						var tuple_elems = [index]
-						while match_types([TokenType.COMMA]):
-							if check(TokenType.RBRACKET):
-								break
-							var tuple_elem = simple_expression()
-							if report.has_error:
-								return null
-							tuple_elems.append(tuple_elem)
-						index = TupleLiteral.new(tuple_elems)
-					if match_types([TokenType.COLON]):
-						var start = index
-						var stop = null
-						var step = null
-						if not check(TokenType.RBRACKET) and not check(TokenType.COLON):
-							stop = simple_expression()
-						if match_types([TokenType.COLON]):
-							if not check(TokenType.RBRACKET):
-								step = simple_expression()
-						var rbracket = _consume_bracket_close(TokenType.RBRACKET, "Expected ']'")
-						if rbracket == null:
-							return null
-						expr = GetItem.new(expr, SliceExpr.new(start, stop, step))
-					else:
-						var rbracket = _consume_bracket_close(TokenType.RBRACKET, "Expected ']'")
-						if rbracket == null:
-							return null
-						expr = GetItem.new(expr, index)
+				# 统一下标解析 (元组 + 切片 + * 解包混合形态)
+				var index = _parse_subscript_index()
+				if index == null or report.has_error:
+					return null
+				var rbracket = _consume_bracket_close(TokenType.RBRACKET, "Expected ']'")
+				if rbracket == null:
+					return null
+				expr = GetItem.new(expr, index)
 			elif match_types([TokenType.DOT]):
 				var attr_tok = consume(TokenType.IDENTIFIER, "Expected attribute name")
 				if attr_tok == null:
@@ -21841,6 +25518,10 @@ class Parser:
 						# 这是一个关键字参数, 要求 expr 必须 Variable
 						if not expr is Variable:
 							report.error("Invalid keyword argument name")
+							return [pos_args, kw_args, star_args, star_kwargs, layout]
+						elif expr.has_meta("parenthesized"):
+							# 括号包络的名字不能作 kwarg 名 (f((x) = 1) 报错)
+							report.error("SyntaxError: expression cannot contain assignment, perhaps you meant '==' instead of '='?")
 							return [pos_args, kw_args, star_args, star_kwargs, layout]
 						else:
 							# CPython: 重复关键字实参报 SyntaxError
@@ -21939,9 +25620,23 @@ class Parser:
 	## [returns] 校验通过返回 true, 违反规则时报错并返回 false
 	func _check_comp_walrus(node, outer_protected: Array = []) -> bool:
 		var protected: Array = outer_protected.duplicate()
+		# 收集推导式目标树中的绑定名 (目标节点为 Variable/StarredTarget/UnpackTarget)
 		for clause in node.clauses:
 			for t in clause.targets:
-				protected.append(t)
+				if t is Variable:
+					protected.append(t.name)
+				elif t is StarredTarget and t.target is Variable:
+					protected.append(t.target.name)
+				elif t is UnpackTarget:
+					var pending: Array = t.targets.duplicate()
+					while pending.size() > 0:
+						var sub = pending.pop_back()
+						if sub is Variable:
+							protected.append(sub.name)
+						elif sub is StarredTarget and sub.target is Variable:
+							protected.append(sub.target.name)
+						elif sub is UnpackTarget:
+							pending.append_array(sub.targets)
 		# 规则 2: 可迭代表达式内禁止任何赋值表达式 (含 lambda 与嵌套推导式内部)
 		for clause in node.clauses:
 			if _has_walrus_anywhere(clause.iterable):
@@ -22002,6 +25697,11 @@ class Parser:
 				return false
 			if not _check_walrus_rebind(expr.index, protected):
 				return false
+			return _check_walrus_rebind(expr.value, protected)
+		if expr is ChainAssign:
+			for ct in expr.targets:
+				if not _check_walrus_rebind(ct, protected):
+					return false
 			return _check_walrus_rebind(expr.value, protected)
 		if expr is SliceExpr:
 			if not _check_walrus_rebind(expr.start, protected):
@@ -22112,6 +25812,11 @@ class Parser:
 			return _has_walrus_anywhere(expr.object) or _has_walrus_anywhere(expr.index)
 		if expr is SetItem:
 			return _has_walrus_anywhere(expr.object) or _has_walrus_anywhere(expr.index) or _has_walrus_anywhere(expr.value)
+		if expr is ChainAssign:
+			for ct in expr.targets:
+				if _has_walrus_anywhere(ct):
+					return true
+			return _has_walrus_anywhere(expr.value)
 		if expr is SliceExpr:
 			return _has_walrus_anywhere(expr.start) or _has_walrus_anywhere(expr.stop) or _has_walrus_anywhere(expr.step)
 		if expr is CompareChainExpr:
@@ -22195,17 +25900,14 @@ class Parser:
 	func _parse_comp_clauses(allow_pair_target: bool):
 		var clauses: Array = []
 		while match_types([TokenType.FOR]):
-			var targets: Array = []
-			var first_tok = consume(TokenType.IDENTIFIER, "Expected variable")
-			if first_tok == null:
+			# 推导式 for 目标复用完整目标语法 (嵌套解包/星形/括号)
+			var targets = parse_target_list()
+			if targets.is_empty():
+				report.error("Expected variable")
 				return null
-			targets.append(first_tok.lexeme)
-			if allow_pair_target or check(TokenType.COMMA):
-				while match_types([TokenType.COMMA]):
-					var next_tok = consume(TokenType.IDENTIFIER, "Expected variable")
-					if next_tok == null:
-						return null
-					targets.append(next_tok.lexeme)
+			if targets.size() == 1 and targets[0] is StarredTarget and not _targets_had_trailing_comma:
+				report.error("SyntaxError: starred assignment target must be in a list or tuple")
+				return null
 			var in_tok = consume(TokenType.IN, "Expected 'in'")
 			if in_tok == null:
 				return null
@@ -22233,6 +25935,65 @@ class Parser:
 				return null
 			return StarredExpr.new(inner)
 		return simple_expression()
+
+	## 解析下标内容 (方括号内) 为索引键 [br]
+	## 支持: 普通表达式, 切片 (含空分量), 元组下标 (元素可为切片或 * 解包): [br]
+	##   a[0] / a[1:3] / a[:] / a[::2] / a[0, 1] / a[0, 1:3] / a[:, 1] / a[*x] / a[*x, 1] [br]
+	## [returns] 索引 Expr (普通表达式 / SliceExpr / TupleLiteral), 出错返回 null
+	func _parse_subscript_index():
+		var elems: Array[Expr] = []
+		var is_tuple = false
+		while true:
+			var elem = _parse_subscript_element()
+			if elem == null:
+				return null
+			elems.append(elem)
+			if not match_types([TokenType.COMMA]):
+				break
+			is_tuple = true
+			if check(TokenType.RBRACKET):
+				# 尾随逗号构成 1 元组 (a[1,] → (1,))
+				break
+		if not is_tuple and elems.size() == 1:
+			# 单个 * 解包元素须包成元组 (M()[*a] → (*a,) → (1, 2))
+			if elems[0] is StarredExpr:
+				return TupleLiteral.new(elems)
+			return elems[0]
+		return TupleLiteral.new(elems)
+
+	## 解析单个下标元素 (普通表达式 / 切片 / * 解包) [br]
+	## 切片分量可为空 (a[:] / a[::2]), 分量后为逗号或右括号时按空处理 [br]
+	## [returns] 元素 Expr (含 SliceExpr / StarredExpr), 出错返回 null
+	func _parse_subscript_element():
+		if match_types([TokenType.STAR]):
+			var inner = simple_expression()
+			if report.has_error:
+				return null
+			return StarredExpr.new(inner)
+		if match_types([TokenType.COLON]):
+			# 空起点切片
+			var stop_e = null
+			var step_e = null
+			if not check(TokenType.RBRACKET) and not check(TokenType.COLON) and not check(TokenType.COMMA):
+				stop_e = simple_expression()
+			if match_types([TokenType.COLON]):
+				if not check(TokenType.RBRACKET) and not check(TokenType.COMMA):
+					step_e = simple_expression()
+			return SliceExpr.new(null, stop_e, step_e)
+		var elem = simple_expression()
+		if report.has_error:
+			return null
+		if match_types([TokenType.COLON]):
+			# 有起点切片
+			var stop_e = null
+			var step_e = null
+			if not check(TokenType.RBRACKET) and not check(TokenType.COLON) and not check(TokenType.COMMA):
+				stop_e = simple_expression()
+			if match_types([TokenType.COLON]):
+				if not check(TokenType.RBRACKET) and not check(TokenType.COMMA):
+					step_e = simple_expression()
+			return SliceExpr.new(elem, stop_e, step_e)
+		return elem
 
 	## 解析列表字面量或列表推导式 [br]
 	## 空方括号返回空列表, 有 for 则解析为列表推导式, 否则解析普通列表 (支持 * 解包) [br]
@@ -22431,37 +26192,10 @@ class Parser:
 				if check(TokenType.RBRACKET):
 					report.error("Invalid assignment target")
 					return null
-				# 切片分量可为空 (::2 / [:]), 先判冒号再解析表达式
-				var index_expr = null
-				if not check(TokenType.COLON):
-					index_expr = simple_expression()
-					if index_expr == null:
-						return null
-					# 元组下标目标 (d[1, 2] = v)
-					if check(TokenType.COMMA):
-						var tuple_elems = [index_expr]
-						while match_types([TokenType.COMMA]):
-							if check(TokenType.RBRACKET) or check(TokenType.COLON):
-								break
-							var tuple_elem = simple_expression()
-							if tuple_elem == null:
-								return null
-							tuple_elems.append(tuple_elem)
-						index_expr = TupleLiteral.new(tuple_elems)
-				if match_types([TokenType.COLON]):
-					# 切片目标 (a[1:3] = v): 解析为 SliceExpr, 求值后为 DSLSlice
-					var stop_e = null
-					var step_e = null
-					if not check(TokenType.RBRACKET) and not check(TokenType.COLON):
-						stop_e = simple_expression()
-						if stop_e == null:
-							return null
-					if match_types([TokenType.COLON]):
-						if not check(TokenType.RBRACKET):
-							step_e = simple_expression()
-							if step_e == null:
-								return null
-					index_expr = SliceExpr.new(index_expr, stop_e, step_e)
+				# 下标目标统一走元素解析 (元组 + 切片 + * 解包混合形态)
+				var index_expr = _parse_subscript_index()
+				if index_expr == null or report.has_error:
+					return null
 				var rb = _consume_bracket_close(TokenType.RBRACKET, "Expected ']' after subscript target")
 				if rb == null:
 					return null
@@ -22644,6 +26378,23 @@ class Parser:
 			report.error("SyntaxError: invalid syntax")
 			return null
 
+		# PEP 526 属性/下标注解目标 (self.x: int = 5 / d[0]: int = 5 / self.x: int)
+		if check(TokenType.COLON) and (expr is Variable or expr is GetAttr or expr is GetItem):
+			advance()
+			var ann = simple_expression()
+			if report.has_error or ann == null:
+				return null
+			var ann_value = null
+			if match_types([TokenType.EQUAL]):
+				ann_value = tuple_expression()
+				if report.has_error or ann_value == null:
+					return null
+			_expect_statement_end()
+			skip_newlines()
+			if expr is Variable:
+				return AnnotatedAssign.new((expr as Variable).name, ann, ann_value)
+			return AnnotatedAssign.new("", ann, ann_value, expr)
+
 		# 增强赋值 x += 1, x -= 2, x *= 3, x /= 4, x //= 5, x **= 6, x %= 7, x |= 8
 		if match_types([TokenType.PLUS_EQ, TokenType.MINUS_EQ, TokenType.STAR_EQ, TokenType.SLASH_EQ, TokenType.DOUBLESLASH_EQ, TokenType.STARSTAR_EQ, TokenType.PERCENT_EQ, TokenType.AT_EQ, TokenType.PIPE_EQ, TokenType.AMP_EQ, TokenType.CARET_EQ, TokenType.LESS_LESS_EQ, TokenType.GREATER_GREATER_EQ]):
 			var op = previous()
@@ -22662,6 +26413,10 @@ class Parser:
 				return null
 		
 		if match_types([TokenType.EQUAL]):
+			# 首个赋值目标也须可赋值 (字面量/表达式报 Invalid assignment target)
+			if not (expr is Variable or expr is GetItem or expr is GetAttr):
+				report.error("Line %d, Column %d: Invalid assignment target" % [previous().line, previous().column])
+				return null
 			# 收集赋值目标链 (支持 a = b = value)
 			var targets = [expr]
 			while true:
@@ -22676,21 +26431,9 @@ class Parser:
 				else:
 					# 最终的右侧
 					var value = rhs
-					# 从右向左嵌套生成 Assign / SetItem
-					var assign_expr: Expr = value
-					for i in range(targets.size() - 1, -1, -1):
-						var tgt = targets[i]
-						if tgt is Variable:
-							assign_expr = Assign.new(tgt.name, assign_expr)
-						elif tgt is GetItem:
-							assign_expr = SetItem.new(tgt.object, tgt.index, assign_expr)
-						elif tgt is GetAttr:
-							assign_expr = SetAttr.new(tgt.object, tgt.name, assign_expr)
-						else:
-							report.error("Invalid assignment target")
-							return null
-					_expect_statement_end()
-					return ExpressionStmt.new(assign_expr)
+					# 链式赋值 (含下标/属性目标) 生成 ChainAssign, 值只求值一次、
+					# 目标从左到右依次赋值 (CPython 语义, dict 插入序与单值语义均对齐)
+					return ExpressionStmt.new(ChainAssign.new(targets, value))
 		else:
 			_expect_statement_end()
 			return ExpressionStmt.new(expr)
@@ -22777,9 +26520,10 @@ class Parser:
 				
 			# 下标后缀 (紧跟在目标之后, 如 a[0] 的 [0]): 整体跳过配对括号,
 			# 其内容属于目标表达式而非独立的解包目标
+			# 单个下标/属性目标不设解包标志, 使 a[0] = b[0] = v 链式赋值
+			# 走 expression_statement 的链式分支 (SetItem/SetAttr 嵌套)
 			if t.type == TokenType.LBRACKET and has_target:
 				idx = _skip_parens(idx, TokenType.LBRACKET, TokenType.RBRACKET)
-				has_comma_or_star_or_paren = true
 				continue
 			
 			# 开括号: 增加深度, 根据不同情况设置标志
@@ -22828,10 +26572,10 @@ class Parser:
 				continue
 			
 			# 下标/属性后缀: 属于目标的一部分 (如 a[0] / o.x), 继续扫描其后缀与逗号
+			# (属性后缀不设解包标志, 链式 o.x = o.y = v 走链式分支)
 			if t.type == TokenType.DOT:
 				if not has_target:
 					return false
-				has_comma_or_star_or_paren = true
 				idx += 1
 				continue
 				
@@ -23254,7 +26998,7 @@ class Interpreter:
 		return true
 
 	## 判断实参在语句重放前后是否「同一个值」 [br]
-	## 重放会重新求值实参表达式, 因此像 f(C(1)) 里的 C(1) 会产生结构相同但身份不同的新实例； [br]
+	## 重放会重新求值实参表达式, 因此像 f(C(1)) 里的 C(1) 会产生结构相同但身份不同的新实例 [br]
 	## 此处按值/结构逐层比较, 使这类调用能匹配到已挂起的帧 [br]
 	## 不使用用户 __eq__: 它可能带副作用或侧效应, 不适合在内部匹配时调用 [br]
 	## [param x] 保存帧中的实参 [br]
@@ -23344,7 +27088,7 @@ class Interpreter:
 		return x == y
 
 	## 取 None 单例, 必要时初始化缓存 [br]
-	## 保证同一解释器内 None 的身份唯一 (`x is None` 依赖于此) [br]
+	## 保证同一解释器内 None 的身份唯一 (x is None 依赖于此) [br]
 	## [returns] DSLNone 单例
 	func get_none() -> DSLNone:
 		if _cached_none == null:
@@ -23443,6 +27187,20 @@ class Interpreter:
 			return false
 		return _is_registered_exception_class(exc.klass)
 
+	## 用户 __getattribute__ 钩子分派: 显式属性读取 (GetAttr / getattr / hasattr) 统一入口 [br]
+	## CPython 的实例属性读取经 __getattribute__ 槽, 用户覆写后拦截全部显式读取; [br]
+	## 内建类型的隐式协议分派走类型槽不经此钩子, 与槽位语义一致 [br]
+	## [param obj] 接收者 [br]
+	## [param name] 属性名 [br]
+	## [returns] 钩子结果 (含 DSLNone); 类未定义钩子时返回 null (无错误), 钩子内异常置 report.has_error
+	func _user_getattribute_hook(obj: DSLObject, name: String) -> DSLObject:
+		if obj.klass == null:
+			return null
+		var ga_method = obj.klass._lookup_method("__getattribute__")
+		if ga_method == null:
+			return null
+		return obj.klass._invoke_func(ga_method, [obj, DSLString.new(name)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+
 	## 判断类是否在异常继承体系中 (沿 MRO 核对注册表) [br]
 	## [param cls] 待判断的类 [br]
 	## [returns] 是已注册异常类 (含其子类) 时返回 true
@@ -23451,6 +27209,27 @@ class Interpreter:
 			if exception_hierarchy.has(k.name):
 				return true
 		return false
+
+	## 判断异常实例是否为目标异常类型或其后代 [br]
+	## CPython 中异常子类 (StopIteration / IndexError / GeneratorExit 等) 与原类同语义,
+	## 精确类型名匹配会把子类当普通异常传播 [br]
+	## [param exc] 在途异常实例 (DSLException 或 DSLInstance wrapper) [br]
+	## [param type_name] 目标异常类型名 [br]
+	## [returns] 是目标类型或其子类实例时返回 true
+	func _is_exception_kind(exc, type_name: String) -> bool:
+		if exc == null:
+			return false
+		if exc is DSLException:
+			return (exc as DSLException).error_type == type_name
+		if exc.klass != null:
+			var cls = globals.get_val_safe(type_name)
+			if cls is DSLClass and exc._is_subclass_of_klass(cls):
+				return true
+		return false
+
+	## 判断异常实例是否为 StopIteration 或其后代
+	func _is_stop_iteration(exc) -> bool:
+		return _is_exception_kind(exc, "StopIteration")
 
 	## 将 from 子句的因果异常存入异常实例 [br]
 	## 实例 wrapper 存入 fields (自动可经属性访问), 裸 DSLException 存入专有字段 [br]
@@ -23491,7 +27270,7 @@ class Interpreter:
 				if _suspended:
 					return null
 				if result != null:
-					# I2-73: 描述符把 magic 方法的 null 结果包成 DSLNone 会掩盖 last_error
+					# 描述符把 magic 方法的 null 结果包成 DSLNone 会掩盖 last_error
 					# (如 bytearray % 的格式化错误); 接收者 last_error 或通道已置时按错误传播
 					if obj.last_error != "" or report.has_error:
 						return null
@@ -23541,7 +27320,7 @@ class Interpreter:
 			methods["__new__"] = obj_new
 		
 		var init_desc = DSLWrappedDescriptor.new("__init__", Callable(self, "_exception_init"))
-		# I2-72: 异常描述符归属类名 (CPython: __init__ 按类型名, __str__/__repr__ 归 BaseException)
+		# 异常描述符归属类名 (CPython: __init__ 按类型名, __str__/__repr__ 归 BaseException)
 		init_desc.owner_name = type_name
 		methods["__init__"] = init_desc
 		
@@ -23570,12 +27349,21 @@ class Interpreter:
 		# 原地方法 (__iadd__ 等) 优先于普通二元方法, 返回值替换原绑定 (CPython 语义)
 		var inplace = _inplace_method_name(op.type)
 		if inplace != "":
-			var r = _call_magic_or_fallback(left, inplace, [right], func(): return null)
+			# 内建容器 (klass == null) 无类方法槽, 原地方法直接分派到对象自身的
+			# magic_i<op> 实现 (如 list.__iadd__ 即 extend), 未实现时回退二元语义
+			var magic_name = "magic_" + inplace.substr(2, inplace.length() - 4)
+			var inplace_fallback := func() -> DSLObject:
+				if left.has_method(magic_name):
+					return left.call(magic_name, [left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				return null
+			var r = _call_magic_or_fallback(left, inplace, [right], inplace_fallback)
 			if _suspended:
 				return null
 			if r != null:
 				return r
 			if report.has_error:
+				return null
+			if left.last_error != "":
 				return null
 		var result: DSLObject = null
 		match op.type:
@@ -23738,7 +27526,7 @@ class Interpreter:
 		var right_has = right.klass != null and right.klass._lookup_method(dunder) != null
 		# 内建数值对 (int/bool/float) 跳过同向反射: 数值比较是完备的精确比较
 		# (大数与浮点按 m*2^ep 精确比), 而同向反射 (right.dunder(left)) 对序比较
-		# 方向颠倒且大数经 double 有损转换会误报 OverflowError (I1-77)
+		# 方向颠倒且大数经 double 有损转换会误报 OverflowError
 		var numeric_pair = (left is DSLInteger or left is DSLBool or left is DSLFloat) \
 			and (right is DSLInteger or right is DSLBool or right is DSLFloat)
 		if not numeric_pair and not left_has and right_has:
@@ -23769,7 +27557,7 @@ class Interpreter:
 	## 匹配期抛出「非法 except 类型」TypeError [br]
 	## 匹配期 report.has_error 恒为真 (在途异常已报告), 直接 raise 会使 report.error 成为 [br]
 	## no-op 且 magic_call 提前返回 (__init__ 不跑, _wrapped 为空), 顶层仍报告在途原异常; [br]
-	## 故临时清 has_error 使新异常完整构造并被记录为报告错误 (I2-65)
+	## 故临时清 has_error 使新异常完整构造并被记录为报告错误
 	func _raise_invalid_except_type() -> void:
 		var saved_he = report.has_error
 		report.has_error = false
@@ -23779,7 +27567,7 @@ class Interpreter:
 	## 判断异常是否命中 except 子句类型表达式 [br]
 	## 类型表达式必须是可捕获异常类 (自身或元组成员为 BaseException 子类的类), [br]
 	## 否则按 CPython 报 TypeError: catching classes that do not inherit from [br]
-	## BaseException is not allowed (I2-65); 元组的全部成员先整体校验再匹配
+	## BaseException is not allowed, 元组的全部成员先整体校验再匹配
 	func _is_exception_match(exc, type_expr) -> bool:
 		if type_expr == null:
 			return true
@@ -23817,23 +27605,6 @@ class Interpreter:
 			return false
 		return _is_registered_exception_class(cls)
 
-	## I2-65: 检测匹配阶段是否已因非法 except 类型抛出 TypeError [br]
-	## 匹配期 report.has_error 恒为真 (在途异常已报告), report.error 是 no-op, [br]
-	## 匹配期构造的异常因 magic_call 提前返回而 _wrapped 为空 (args 仍预写 fields), [br]
-	## 故以「当前在途异常是文案精确匹配的 TypeError」为判据; 调用方须同时核对
-	## 匹配前在途异常身份已变化 (仅本次匹配新抛), 排除「原异常自身即该文案 TypeError」的误判
-	func _invalid_except_type_raised() -> bool:
-		if last_exception == null or last_exception._type_name() != "TypeError":
-			return false
-		var msg := ""
-		if last_exception._wrapped is DSLException:
-			msg = last_exception._wrapped.message
-		elif last_exception.fields != null and last_exception.fields.has("args") and last_exception.fields["args"] is DSLTuple:
-			var arg_items = last_exception.fields["args"].items
-			if arg_items.size() > 0 and arg_items[0] is DSLString:
-				msg = arg_items[0].value
-		return msg == "catching classes that do not inherit from BaseException is not allowed"
-	
 	## 判断 try 语句是否为 except* 形态 (解析期保证全部子句同型) [br]
 	## [param stmt] try 语句节点 [br]
 	## [returns] 子句存在且首个子句为 starred 时返回 true
@@ -23934,8 +27705,8 @@ class Interpreter:
 			var clause = stmt.except_clauses[idx]
 			var match_exc = last_exception
 			var matched = _starred_match(star_exc, clause.exception_type)
-			if last_exception != match_exc and _invalid_except_type_raised():
-				# I2-65: except* 子句类型非法 (非 BaseException 子类), 传播 TypeError
+			if last_exception != match_exc:
+				# 类型表达式求值抛出的新异常 (NameError 等) 或非法 except 类型 TypeError 立即传播
 				return ExecResult.RAISE
 			if matched.is_empty():
 				idx += 1
@@ -23988,6 +27759,12 @@ class Interpreter:
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] DSLNone
 	func _exception_init(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if _kwargs.size() > 0:
+			var cls_name = "BaseException"
+			if exc_args.size() > 0 and exc_args[0] != null and exc_args[0].klass != null:
+				cls_name = exc_args[0].klass.name
+			raise_exception("TypeError", "%s() takes no keyword arguments" % cls_name)
+			return null
 		var wrapper = exc_args[0]
 		var pos_args: Array[DSLObject] = []
 		for i in range(1, exc_args.size()):
@@ -23996,6 +27773,16 @@ class Interpreter:
 		var exc = DSLException.new(msg, wrapper.klass.name, pos_args)
 		wrapper._wrapped = exc
 		wrapper.fields["args"] = DSLTuple.new(pos_args)
+		# SystemExit.code 属性 (0 参 None / 1 参本身 / 多参元组, 沿 MRO 继承)
+		for k in wrapper.klass.mro:
+			if k.name == "SystemExit":
+				if pos_args.size() == 0:
+					wrapper.fields["code"] = _wrap(null)
+				elif pos_args.size() == 1:
+					wrapper.fields["code"] = pos_args[0]
+				else:
+					wrapper.fields["code"] = DSLTuple.new(pos_args)
+				break
 		# 因果链与回溯默认值: 无 from 时 __cause__ 为 None, __suppress_context__ 为 False, __traceback__ 为 None
 		wrapper.fields["__cause__"] = _wrap(null)
 		wrapper.fields["__suppress_context__"] = _wrap(false)
@@ -24142,7 +27929,7 @@ class Interpreter:
 			return r != null and not (r is DSLNone) and r._dsl_bool()
 		return false
 
-	## I2-63: 异常组 filter 类型校验 (CPython: 须为异常类 / 类元组 / 可调用, 否则 TypeError) [br]
+	## 异常组 filter 类型校验 (CPython: 须为异常类 / 类元组 / 可调用, 否则 TypeError) [br]
 	## [param filter] 原始 filter 实参 [br]
 	## [returns] 解包后的合法 filter; 非法时报 TypeError 并返回 null
 	func _validate_group_filter(filter) -> DSLObject:
@@ -24276,7 +28063,7 @@ class Interpreter:
 		if self_obj.fields != null and self_obj.fields.has(name):
 			self_obj.fields.erase(name)
 			return DSLNone.new()
-		raise_exception("AttributeError", name)
+		raise_exception("AttributeError", "'%s' object has no attribute '%s'" % [self_obj._type_name(), name])
 		return null
 	
 	## 内置 object.__init_subclass__ 回调: 默认空操作 [br]
@@ -24295,7 +28082,7 @@ class Interpreter:
 		var raw = wrapper._wrapped
 		if raw and raw is DSLException:
 			return DSLString.new(raw._dsl_str())
-		# I2-66: 自定义异常未调 super().__init__ 时 _wrapped 为空, str(e) 按 args
+		# 自定义异常未调 super().__init__ 时 _wrapped 为空, str(e) 按 args
 		# 格式化 (CPython 同: 无参为空串, 单参 str/KeyError repr, 多参元组 repr);
 		# args 由构造期 BaseException.__new__ 记录 (magic_call 预写 fields)
 		var pos_args: Array[DSLObject] = []
@@ -24334,7 +28121,7 @@ class Interpreter:
 		var obj_methods = {}
 		obj_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_object_new"))
 		var obj_init_desc = DSLWrappedDescriptor.new("__init__", Callable(self, "_object_init"))
-		# I2-72: object 类描述符归属类名 (回调绑定解释器, 显式标注); __init__ 等为 slot wrapper 形态
+		# object 类描述符归属类名 (回调绑定解释器, 显式标注); __init__ 等为 slot wrapper 形态
 		obj_init_desc.owner_name = "object"
 		obj_methods["__init__"] = obj_init_desc
 		var obj_setattr_desc = DSLWrappedDescriptor.new("__setattr__", Callable(self, "_object_setattr"))
@@ -24481,6 +28268,8 @@ class Interpreter:
 		# Create slice class: __new__ 返回 DSLSlice (slice(start, stop[, step]))
 		var slice_methods = {}
 		slice_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_slice_new"))
+		var slice_proto = DSLSlice.new(null, null)
+		slice_methods["indices"] = DSLMethodDescriptor.new("indices", Callable(slice_proto, "builtin_indices"))
 		var slice_class = DSLClass.new("slice", obj_class, slice_methods, self)
 		slice_class.klass = type_class
 		globals.define("slice", slice_class)
@@ -24602,6 +28391,8 @@ class Interpreter:
 		_define_exception("StopIteration")
 		_define_exception("StopAsyncIteration")
 		_define_exception("SyntaxError")
+		# TabError (SyntaxError 子类, CPython 同继承关系)
+		_define_exception("TabError", "SyntaxError")
 		# 异常组 (PEP 654): 构造校验 / str / repr / subgroup / split 为组特有形态
 		_define_exception("KeyboardInterrupt", "BaseException")
 		_define_exception("BaseExceptionGroup", "BaseException")
@@ -24644,6 +28435,10 @@ class Interpreter:
 		_define_exception("MemoryError")
 		_define_exception("OSError")
 		_define_exception("FileNotFoundError", "OSError")
+		_define_exception("FileExistsError", "OSError")
+		_define_exception("PermissionError", "OSError")
+		_define_exception("IsADirectoryError", "OSError")
+		_define_exception("NotADirectoryError", "OSError")
 		_define_exception("UnsupportedOperation", "OSError")
 		_define_exception("UnicodeError", "ValueError")
 		_define_exception("UnicodeEncodeError", "UnicodeError")
@@ -24684,12 +28479,28 @@ class Interpreter:
 		var anextaw_type_class = DSLClass.new("anext_awaitable", obj_class, {}, self)
 		anextaw_type_class.klass = type_class
 		_builtin_type_classes["anext_awaitable"] = anextaw_type_class
-		# PEP 695 类型别名的类型类: type(别名) 的返回值 (I2-70), 不入内建名
+		# PEP 695 类型别名的类型类: type(别名) 的返回值, 不入内建名
 		# CPython 的 TypeAliasType 定义于 typing 模块, repr 带 typing. 前缀
 		var typealias_type_class = DSLClass.new("TypeAliasType", obj_class, {}, self)
 		typealias_type_class.klass = type_class
 		typealias_type_class.module_prefix = "typing."
 		_builtin_type_classes["TypeAliasType"] = typealias_type_class
+		# 生成器 / 文件对象的类型类: type(生成器).__name__
+		var gen_type_class = DSLClass.new("generator", obj_class, {}, self)
+		gen_type_class.klass = type_class
+		_builtin_type_classes["generator"] = gen_type_class
+		var tio_type_class = DSLClass.new("TextIOWrapper", obj_class, {}, self)
+		tio_type_class.klass = type_class
+		_builtin_type_classes["TextIOWrapper"] = tio_type_class
+		var br_type_class = DSLClass.new("BufferedReader", obj_class, {}, self)
+		br_type_class.klass = type_class
+		_builtin_type_classes["BufferedReader"] = br_type_class
+		# itertools 惰性迭代器的类型类: type(chain([...])).__name__ 为 'chain' 等
+		for itn in ["chain", "product", "combinations", "permutations", "zip_longest",
+				"takewhile", "dropwhile", "accumulate", "pairwise", "starmap"]:
+			var itc = DSLClass.new(itn, obj_class, {}, self)
+			itc.klass = type_class
+			_builtin_type_classes[itn] = itc
 
 		# klass 为空的内建值解析 __class__ 的注册表 (键为 _type_name())
 		DSLObject._builtin_class_by_name["int"] = int_class
@@ -24714,6 +28525,12 @@ class Interpreter:
 		DSLObject._builtin_class_by_name["async_generator_asend"] = agensend_type_class
 		DSLObject._builtin_class_by_name["async_generator_athrow"] = agenthrow_type_class
 		DSLObject._builtin_class_by_name["anext_awaitable"] = anextaw_type_class
+		DSLObject._builtin_class_by_name["generator"] = gen_type_class
+		DSLObject._builtin_class_by_name["TextIOWrapper"] = tio_type_class
+		DSLObject._builtin_class_by_name["BufferedReader"] = br_type_class
+		for itn2 in ["chain", "product", "combinations", "permutations", "zip_longest",
+				"takewhile", "dropwhile", "accumulate", "pairwise", "starmap"]:
+			DSLObject._builtin_class_by_name[itn2] = _builtin_type_classes[itn2]
 		_builtin_name_snapshot.assign(globals.values.keys())
 	
 	## 注册内置模块到模块注册表 [br]
@@ -24736,7 +28553,7 @@ class Interpreter:
 		modules["json"] = _create_json_module()
 		modules["logging"] = _create_logging_module()
 
-		# I2-68: 登记时全部为内置模块 (用户模块经 _load_user_module 延迟加入, 默认非内置)
+		# 登记时全部为内置模块 (用户模块经 _load_user_module 延迟加入, 默认非内置)
 		for mname in modules:
 			(modules[mname] as DSLModule).is_builtin = true
 
@@ -24787,13 +28604,19 @@ class Interpreter:
 	## [param lo] 下界 [br]
 	## [param hi] 上界 (超出列表长度按 CPython 钳制) [br]
 	## [param left] 取左边界 (bisect_left) 或右边界 (bisect_right)
-	func _bisect_impl(lst: DSLList, x: DSLObject, lo: int, hi: int, left: bool) -> int:
+	func _bisect_impl(lst: DSLList, x: DSLObject, lo: int, hi: int, left: bool, key_func = null) -> int:
 		var items = lst.items
 		if hi > items.size():
 			hi = items.size()
 		while lo < hi:
 			var mid = (lo + hi) >> 1
-			var lt: bool = _dsl_lt_checked(items[mid], x) if left else _dsl_lt_checked(x, items[mid])
+			# key 只施加于列表元素, 不施加于检索值 (CPython bisect key 语义)
+			var mid_item = items[mid]
+			if key_func != null:
+				mid_item = key_func.magic_call([mid_item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if _suspended or report.has_error:
+					return lo
+			var lt: bool = _dsl_lt_checked(mid_item, x) if left else _dsl_lt_checked(x, mid_item)
 			if _suspended or report.has_error:
 				return lo
 			if left:
@@ -24810,13 +28633,38 @@ class Interpreter:
 					lo = mid + 1
 		return lo
 
-	## 解析 bisect 的 lo/hi 实参: DSLInteger/None/缺省 (lo 默认 0, hi 默认列表长度)
-	func _bisect_bound(lst: DSLList, args: Array[DSLObject], idx: int, default: int) -> int:
+	## 解析 bisect 的 lo/hi 实参 (位置或关键字 lo=/hi=, CPython 关键字实参生效) [br]
+	## 位置与关键字混用 / 非整数关键字实参按 CPython 报 TypeError; 出错时置 report.has_error, [br]
+	## 调用方须先查 report.has_error 再校验负下界
+	func _bisect_bound(lst: DSLList, args: Array[DSLObject], idx: int, default: int, _kwargs: Dictionary[String, DSLObject], fn_name: String, kw_name: String) -> int:
+		if _kwargs.has(kw_name):
+			if args.size() > idx:
+				raise_exception("TypeError", "argument for %s() given by name ('%s') and position (%d)" % [fn_name, kw_name, idx + 1])
+				return 0
+			var kv = _kwargs[kw_name]
+			if kv is DSLInteger:
+				return kv.value
+			if kv is DSLBool:
+				return 1 if kv.value else 0
+			raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % kv._type_name())
+			return 0
 		if args.size() > idx and args[idx] is DSLInteger:
 			return (args[idx] as DSLInteger).value
 		if args.size() > idx and args[idx] is DSLBool:
 			return 1 if (args[idx] as DSLBool).value else 0
 		return default
+
+	## 解析 bisect 的 key= 关键字实参: None 或可调用, 其余按 CPython 报 TypeError
+	func _bisect_key_arg(_kwargs: Dictionary[String, DSLObject]):
+		if not _kwargs.has("key"):
+			return null
+		var kf = _kwargs["key"]
+		if kf is DSLNone:
+			return null
+		if not kf._dsl_is_callable():
+			raise_exception("TypeError", "'%s' object is not callable" % kf._type_name())
+			return null
+		return kf
 
 	func _bisect_left(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 2 or args.size() > 4:
@@ -24826,12 +28674,16 @@ class Interpreter:
 		if not (lst is DSLList):
 			raise_exception("TypeError", "the first argument must be a list")
 			return null
-		var lo = _bisect_bound(lst, args, 2, 0)
+		var lo = _bisect_bound(lst, args, 2, 0, _kwargs, "bisect_left", "lo")
+		if report.has_error:
+			return null
 		if lo < 0:
 			raise_exception("ValueError", "lo must be non-negative")
 			return null
-		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
-		return DSLInteger.pooled(_bisect_impl(lst, args[1], lo, hi, true))
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size(), _kwargs, "bisect_left", "hi")
+		if report.has_error:
+			return null
+		return DSLInteger.pooled(_bisect_impl(lst, args[1], lo, hi, true, _bisect_key_arg(_kwargs)))
 
 	func _bisect_right(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 2 or args.size() > 4:
@@ -24841,12 +28693,16 @@ class Interpreter:
 		if not (lst is DSLList):
 			raise_exception("TypeError", "the first argument must be a list")
 			return null
-		var lo = _bisect_bound(lst, args, 2, 0)
+		var lo = _bisect_bound(lst, args, 2, 0, _kwargs, "bisect_right", "lo")
+		if report.has_error:
+			return null
 		if lo < 0:
 			raise_exception("ValueError", "lo must be non-negative")
 			return null
-		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
-		return DSLInteger.pooled(_bisect_impl(lst, args[1], lo, hi, false))
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size(), _kwargs, "bisect_right", "hi")
+		if report.has_error:
+			return null
+		return DSLInteger.pooled(_bisect_impl(lst, args[1], lo, hi, false, _bisect_key_arg(_kwargs)))
 
 	func _insort_left(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 2 or args.size() > 4:
@@ -24856,12 +28712,23 @@ class Interpreter:
 		if not (lst is DSLList):
 			raise_exception("TypeError", "the first argument must be a list")
 			return null
-		var lo = _bisect_bound(lst, args, 2, 0)
+		var lo = _bisect_bound(lst, args, 2, 0, _kwargs, "insort_left", "lo")
+		if report.has_error:
+			return null
 		if lo < 0:
 			raise_exception("ValueError", "lo must be non-negative")
 			return null
-		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
-		var idx = _bisect_impl(lst, args[1], lo, hi, true)
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size(), _kwargs, "insort_left", "hi")
+		if report.has_error:
+			return null
+		# insort 的 key 预施加于检索值 x (CPython insort_left 内部 bisect_left(a, key(x), key=key))
+		var keyf = _bisect_key_arg(_kwargs)
+		var xv = args[1]
+		if keyf != null:
+			xv = keyf.magic_call([xv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if _suspended or report.has_error:
+				return DSLNone.new()
+		var idx = _bisect_impl(lst, xv, lo, hi, true, keyf)
 		if _suspended or report.has_error:
 			return DSLNone.new()
 		(lst as DSLList).items.insert(idx, args[1])
@@ -24875,12 +28742,23 @@ class Interpreter:
 		if not (lst is DSLList):
 			raise_exception("TypeError", "the first argument must be a list")
 			return null
-		var lo = _bisect_bound(lst, args, 2, 0)
+		var lo = _bisect_bound(lst, args, 2, 0, _kwargs, "insort_right", "lo")
+		if report.has_error:
+			return null
 		if lo < 0:
 			raise_exception("ValueError", "lo must be non-negative")
 			return null
-		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size())
-		var idx = _bisect_impl(lst, args[1], lo, hi, false)
+		var hi = _bisect_bound(lst, args, 3, (lst as DSLList).items.size(), _kwargs, "insort_right", "hi")
+		if report.has_error:
+			return null
+		# insort 的 key 预施加于检索值 x (CPython insort_right 内部 bisect_right(a, key(x), key=key))
+		var keyf = _bisect_key_arg(_kwargs)
+		var xv = args[1]
+		if keyf != null:
+			xv = keyf.magic_call([xv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if _suspended or report.has_error:
+				return DSLNone.new()
+		var idx = _bisect_impl(lst, xv, lo, hi, false, keyf)
 		if _suspended or report.has_error:
 			return DSLNone.new()
 		(lst as DSLList).items.insert(idx, args[1])
@@ -24894,6 +28772,9 @@ class Interpreter:
 		mod.members["heapify"] = _make_builtin("heapify", Callable(self, "_heap_heapify"))
 		mod.members["heapreplace"] = _make_builtin("heapreplace", Callable(self, "_heap_heapreplace"))
 		mod.members["heappushpop"] = _make_builtin("heappushpop", Callable(self, "_heap_heappushpop"))
+		mod.members["nsmallest"] = _make_builtin("nsmallest", Callable(self, "_heap_nsmallest"))
+		mod.members["nlargest"] = _make_builtin("nlargest", Callable(self, "_heap_nlargest"))
+		mod.members["merge"] = _make_builtin("merge", Callable(self, "_heap_merge"))
 		return mod
 
 	## 堆上浮 (heapq._siftup 同型): 新元素从 pos 向上, 直至父不大于它
@@ -24981,6 +28862,9 @@ class Interpreter:
 		var h = _heap_items(args)
 		if report.has_error:
 			return null
+		if h.is_empty():
+			raise_exception("IndexError", "index out of range")
+			return null
 		var returnitem = h[0]
 		h[0] = args[1]
 		_heap_siftdown(h, 0, h.size())
@@ -25001,6 +28885,106 @@ class Interpreter:
 			_heap_siftdown(h, 0, h.size())
 			return ret
 		return args[1]
+
+	## heapq.nsmallest(n, iterable, key=None) - 返回最小的 n 个元素 (升序列表)
+	func _heap_nsmallest(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or args.size() > 3:
+			raise_exception("TypeError", "nsmallest() takes 2 or 3 arguments")
+			return null
+		var n = _heap_count_arg(args[0])
+		if report.has_error:
+			return null
+		var items = _heap_collect(args[1])
+		if report.has_error:
+			return null
+		if n <= 0:
+			return DSLList.new()
+		var sl = builtin_sorted([DSLList.new(items)], kwargs)
+		if sl == null or report.has_error:
+			return null
+		var cnt = mini(n, sl.items.size())
+		var out = DSLList.new()
+		for i in range(cnt):
+			out.items.append(sl.items[i])
+		return out
+
+	## heapq.nlargest(n, iterable, key=None) - 返回最大的 n 个元素 (降序列表)
+	func _heap_nlargest(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or args.size() > 3:
+			raise_exception("TypeError", "nlargest() takes 2 or 3 arguments")
+			return null
+		var n = _heap_count_arg(args[0])
+		if report.has_error:
+			return null
+		var items = _heap_collect(args[1])
+		if report.has_error:
+			return null
+		if n <= 0:
+			return DSLList.new()
+		var kw2: Dictionary[String, DSLObject] = {}
+		for k in kwargs:
+			kw2[k] = kwargs[k]
+		kw2["reverse"] = DSLBool.new(true)
+		var sl = builtin_sorted([DSLList.new(items)], kw2)
+		if sl == null or report.has_error:
+			return null
+		var cnt = mini(n, sl.items.size())
+		var out = DSLList.new()
+		for i in range(cnt):
+			out.items.append(sl.items[i])
+		return out
+
+	## heapq.merge(*iterables, key=None, reverse=False) - 多路归并已排序序列 [br]
+	## 惰性产出 (DSLItHeapMergeObject)
+	func _heap_merge(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var key_fn: DSLObject = null
+		var reverse = false
+		if kwargs.has("key"):
+			key_fn = kwargs["key"]
+		if kwargs.has("reverse") and kwargs["reverse"] is DSLBool:
+			reverse = kwargs["reverse"].value
+		var its: Array = []
+		for a in args:
+			var it = a._dsl_iter()
+			if it == null:
+				raise_exception("TypeError", "merge() argument must be an iterable")
+				return null
+			it.windowed = false
+			its.append(it)
+		return _memo_generator(_current_call_node, DSLItHeapMergeObject.new(its, key_fn, reverse, self))
+
+	## nsmallest/nlargest 的 n 实参归一 (整数, bool 按 0/1, 浮点报 TypeError)
+	func _heap_count_arg(v: DSLObject) -> int:
+		var raw = DSLObject._unwrap_dsl(v)
+		if raw is DSLBool:
+			return 1 if raw.value else 0
+		if raw is DSLInteger:
+			if (raw as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return 0
+			return (raw as DSLInteger).value
+		if raw is DSLFloat:
+			raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
+			return 0
+		var idxv = DSLObject._seq_index_int(raw, raw)
+		if idxv == DSLObject.INDEX_ERR:
+			if not report.has_error:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return 0
+		return idxv
+
+	## nsmallest/nlargest 的可迭代元素收集
+	func _heap_collect(obj: DSLObject) -> Array[DSLObject]:
+		var items: Array[DSLObject] = []
+		var it = obj._dsl_iter()
+		if it == null:
+			raise_exception("TypeError", "iterable argument required")
+			return items
+		while it.has_next():
+			items.append(it.next())
+			if it.suspended:
+				return items
+		return items
 
 	## base64 模块: Base16/Base64 编解码 (CPython 对齐, 仅 bytes 输入输出)
 	func _create_base64_module() -> DSLModule:
@@ -25031,6 +29015,31 @@ class Interpreter:
 			raise_exception("TypeError", "a bytes-like object is required, not 'str'")
 			return null
 		raise_exception("TypeError", "a bytes-like object is required, not '%s'" % raw._type_name())
+		return null
+
+	## 取 decode 侧 bytes 实参 (bytes-like 或 ASCII str — CPython 的 decode 族接受 str) [br]
+	## 非 ASCII str 报 ValueError, 其余类型报 TypeError [br]
+	## [param args] 实参数组 [br]
+	## [param idx] 实参位置 [br]
+	## [returns] DSLBytes 或 null
+	func _b64_bytes_arg_decode(args: Array[DSLObject], idx: int) -> DSLBytes:
+		if args.size() <= idx:
+			raise_exception("TypeError", "argument should be a bytes-like object")
+			return null
+		var raw = DSLObject._unwrap_dsl(args[idx])
+		if raw is DSLBytes:
+			return raw
+		if raw is DSLString:
+			var buf = raw.value.to_utf8_buffer()
+			for b in buf:
+				if b >= 128:
+					raise_exception("ValueError", "string argument should contain only ASCII characters")
+					return null
+			var data: Array[int] = []
+			for b in raw.value.to_ascii_buffer():
+				data.append(b)
+			return DSLBytes.new(data)
+		raise_exception("TypeError", "argument should be a bytes-like object or ASCII string, not '%s'" % raw._type_name())
 		return null
 
 	## 3 字节 -> 4 base64 字符 (表为 64 字符串; padding 用 '=')
@@ -25126,7 +29135,7 @@ class Interpreter:
 		return dec
 
 	func _b64_b64decode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var raw = _b64_bytes_arg(args, 0)
+		var raw = _b64_bytes_arg_decode(args, 0)
 		if raw == null:
 			return null
 		var table = B64_STD_TABLE
@@ -25170,7 +29179,7 @@ class Interpreter:
 		return DSLBytes.new(res)
 
 	func _b64_b16decode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var raw = _b64_bytes_arg(args, 0)
+		var raw = _b64_bytes_arg_decode(args, 0)
 		if raw == null:
 			return null
 		var s = ""
@@ -25213,7 +29222,7 @@ class Interpreter:
 		return DSLBytes.new(res)
 
 	func _b64_decodebytes(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var raw = _b64_bytes_arg(args, 0)
+		var raw = _b64_bytes_arg_decode(args, 0)
 		if raw == null:
 			return null
 		var s = ""
@@ -25262,14 +29271,15 @@ class Interpreter:
 			elif cp < 0x80:
 				out += ch
 			elif ensure_ascii:
-				out += "\\u%04x" % cp
-			else:
-				# 非 ASCII 且 ensure_ascii=false: 按码位输出 UTF-8 (代理对按两码位输出)
+				# 超过 BMP 的码位转义为合法代理对
 				if cp >= 0x10000:
 					var v = cp - 0x10000
-					out += char(0xD800 + (v >> 10)) + char(0xDC00 + (v & 0x3FF))
+					out += "\\u%04x\\u%04x" % [0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)]
 				else:
-					out += ch
+					out += "\\u%04x" % cp
+			else:
+				# 非 ASCII 且 ensure_ascii=false: 按码位原样输出 (String 为 UTF-32 内部表示, 逐码位迭代)
+				out += ch
 			i += 1
 		return out + "\""
 
@@ -25299,7 +29309,9 @@ class Interpreter:
 	## [param ensure_ascii] 非 ASCII 转义 [br]
 	## [param sep] 分隔符对 (item_sep, kv_sep) [br]
 	## [param level] 当前缩进层级 (递归)
-	func _json_encode(obj: DSLObject, indent: int, sort_keys: bool, ensure_ascii: bool, sep: Array, level: int) -> String:
+	## [param allow_nan] 允许 NaN/Infinity 字面量 (False 时按 CPython 报 ValueError)
+	## [param default_fn] 不可序列化对象的钩子 (CPython default=)
+	func _json_encode(obj: DSLObject, indent: int, sort_keys: bool, ensure_ascii: bool, sep: Array, level: int, allow_nan: bool = true, default_fn = null) -> String:
 		var raw = obj._wrapped if obj._wrapped != null else obj
 		if raw is DSLNone:
 			return "null"
@@ -25312,8 +29324,14 @@ class Interpreter:
 		if raw is DSLFloat:
 			var fv = raw.value
 			if is_nan(fv):
+				if not allow_nan:
+					raise_exception("ValueError", "Out of range float values are not JSON compliant: nan")
+					return ""
 				return "NaN"
 			if is_inf(fv):
+				if not allow_nan:
+					raise_exception("ValueError", "Out of range float values are not JSON compliant: %s" % ("-inf" if fv < 0 else "inf"))
+					return ""
 				return "Infinity" if fv > 0 else "-Infinity"
 			return DSLObject._py_float_repr(fv)
 		if raw is DSLString:
@@ -25326,32 +29344,38 @@ class Interpreter:
 			if is_rng:
 				var it = (raw as DSLRange)._dsl_iter()
 				while it.has_next():
-					parts.append(_json_encode(it.next(), indent, sort_keys, ensure_ascii, sep, level + 1))
+					parts.append(_json_encode(it.next(), indent, sort_keys, ensure_ascii, sep, level + 1, allow_nan, default_fn))
 			else:
 				for e in items:
-					parts.append(_json_encode(e, indent, sort_keys, ensure_ascii, sep, level + 1))
+					parts.append(_json_encode(e, indent, sort_keys, ensure_ascii, sep, level + 1, allow_nan, default_fn))
 			return _json_array(parts, indent, level, sep)
 		if raw is DSLDict:
 			var keys = raw.dict.keys()
 			var key_objs: Array = []
 			for k in keys:
-				key_objs.append(_json_key_from_variant(k))
+				# 经 _original_key_obj 还原首键对象 (bool 键外显 true/false 而非 1/0)
+				key_objs.append(raw._original_key_obj(k))
 			if sort_keys:
+				# 按实际键对象比较 (混合类型按 CPython 报 TypeError, 不得按字符串排序)
 				key_objs.sort_custom(func(a, b):
-					var ka = a._dsl_str()
-					var kb = b._dsl_str()
-					return ka < kb)
+					return _dsl_lt_checked(a, b))
 			var parts: Array[String] = []
 			for k in key_objs:
 				# JSON 对象键必须为字符串: 非字符串键 (int/float/bool/None) 按其字面量转义为字符串 (CPython 同)
 				var ks: String
 				if k is DSLString:
-					ks = _json_encode(k, indent, sort_keys, ensure_ascii, sep, level + 1)
+					ks = _json_encode(k, indent, sort_keys, ensure_ascii, sep, level + 1, allow_nan, default_fn)
 				else:
-					ks = _json_escape(_json_encode(k, indent, sort_keys, ensure_ascii, sep, level + 1), ensure_ascii)
-				var vs = _json_encode(raw.dict[raw._key_to_variant(k)], indent, sort_keys, ensure_ascii, sep, level + 1)
+					ks = _json_escape(_json_encode(k, indent, sort_keys, ensure_ascii, sep, level + 1, allow_nan, default_fn), ensure_ascii)
+				var vs = _json_encode(raw.dict[raw._key_to_variant(k)], indent, sort_keys, ensure_ascii, sep, level + 1, allow_nan, default_fn)
 				parts.append(ks + sep[1] + vs)
 			return _json_object(parts, indent, level, sep)
+		# 不可序列化: 走 default 钩子, 结果递归序列化
+		if default_fn != null:
+			var dres = default_fn.magic_call([obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if dres == null:
+				return ""
+			return _json_encode(dres, indent, sort_keys, ensure_ascii, sep, level, allow_nan, default_fn)
 		raise_exception("TypeError", "Object of type %s is not JSON serializable" % raw._type_name())
 		return ""
 
@@ -25373,7 +29397,8 @@ class Interpreter:
 		for i in range(parts.size()):
 			s += inner + parts[i]
 			if i < parts.size() - 1:
-				s += ","
+				# 缩进形态同样用分隔符参数
+				s += sep[0]
 		s += _json_indent(indent, level) + "]"
 		return s
 
@@ -25387,7 +29412,7 @@ class Interpreter:
 		for i in range(parts.size()):
 			s += inner + parts[i]
 			if i < parts.size() - 1:
-				s += ","
+				s += sep[0]
 		s += _json_indent(indent, level) + "}"
 		return s
 
@@ -25398,6 +29423,8 @@ class Interpreter:
 		var indent = -1
 		var sort_keys = false
 		var ensure_ascii = true
+		var allow_nan = true
+		var default_fn = null
 		var sep: Array = [", ", ": "]
 		if _kwargs.has("indent"):
 			var iv = DSLObject._unwrap_dsl(_kwargs["indent"])
@@ -25409,17 +29436,37 @@ class Interpreter:
 			sort_keys = _kwargs["sort_keys"].value
 		if _kwargs.has("ensure_ascii") and _kwargs["ensure_ascii"] is DSLBool:
 			ensure_ascii = _kwargs["ensure_ascii"].value
+		# allow_nan 与 default 钩子
+		if _kwargs.has("allow_nan") and _kwargs["allow_nan"] is DSLBool:
+			allow_nan = _kwargs["allow_nan"].value
+		if _kwargs.has("default"):
+			default_fn = _kwargs["default"]
+		var sep_explicit = false
 		if _kwargs.has("separators"):
 			var sv = _kwargs["separators"]
 			if not (sv is DSLTuple) or sv.items.size() != 2:
 				raise_exception("TypeError", "separators must be an iterable of length 2")
 				return null
 			sep = [sv.items[0]._dsl_str(), sv.items[1]._dsl_str()]
-		return DSLString.new(_json_encode(args[0], indent, sort_keys, ensure_ascii, sep, 0))
+			sep_explicit = true
+		# 缩进形态下未显式传 separators 时元素分隔符去掉默认空格 (CPython: 空格由换行缩进承担)
+		if indent >= 0 and not sep_explicit:
+			sep[0] = ","
+		return DSLString.new(_json_encode(args[0], indent, sort_keys, ensure_ascii, sep, 0, allow_nan, default_fn))
 
 	## JSON 解析器: 文本 -> DSL 值 (错误抛 JSONDecodeError)
+	## JSON 解析游标 (解析器局部状态)
 	var _json_pos: int = 0
 	var _json_text: String = ""
+	## 动态环境写回用的 globals 原始键快照 (exec/eval 内 del 的键也要从 globals 删除)
+	var _dynamic_env_snapshot: Array[String] = []
+	## functools.singledispatch 的注册表: 键为分派对象 id, 值为 {default, regs}
+	var _sd_registries: Dictionary = {}
+	var _sd_counter: int = 0
+	## functools.wraps / lru_cache 装饰器的参数暂存 (宿主 Callable.bind+callv 失效, 经成员传递)
+	var _ft_wraps_src: DSLObject = null
+	var _ft_lru_maxsize: Variant = 128
+	var _ft_lru_typed: bool = false
 
 	func _json_peek() -> String:
 		return _json_text[_json_pos] if _json_pos < _json_text.length() else ""
@@ -25467,6 +29514,19 @@ class Interpreter:
 				return _wrap(null)
 			_json_fail("Expecting value")
 			return null
+		# NaN / Infinity 字面量默认接受 (allow_nan 默认 true, 大小写敏感)
+		if c == "N":
+			if _json_text.substr(_json_pos, 3) == "NaN":
+				_json_pos += 3
+				return DSLFloat.new(NAN)
+			_json_fail("Expecting value")
+			return null
+		if c == "I":
+			if _json_text.substr(_json_pos, 8) == "Infinity":
+				_json_pos += 8
+				return DSLFloat.new(INF)
+			_json_fail("Expecting value")
+			return null
 		if c == "-" or (c >= "0" and c <= "9"):
 			return _json_parse_number()
 		_json_fail("Expecting value")
@@ -25477,16 +29537,47 @@ class Interpreter:
 		var start = _json_pos
 		if _json_peek() == "-":
 			_json_pos += 1
+			# -Infinity (大小写敏感)
+			if _json_text.substr(_json_pos, 8) == "Infinity":
+				_json_pos += 8
+				return DSLFloat.new(-INF)
+		# 整数部分
+		var int_start = _json_pos
 		while _json_pos < _json_text.length():
 			var ch = _json_text[_json_pos]
-			if (ch >= "0" and ch <= "9") or ch == "." or ch == "e" or ch == "E" or ch == "+" or ch == "-":
+			if ch >= "0" and ch <= "9":
 				_json_pos += 1
 			else:
 				break
+		# 前导零 (如 01) 只解析 0, 剩余交给上层报 Extra data / 分隔符错 (CPython 同位置)
+		if _json_pos - int_start >= 2 and _json_text[int_start] == "0":
+			_json_pos = int_start + 1
+		# 小数部分
+		if _json_peek() == ".":
+			_json_pos += 1
+			while _json_pos < _json_text.length():
+				var ch2 = _json_text[_json_pos]
+				if ch2 >= "0" and ch2 <= "9":
+					_json_pos += 1
+				else:
+					break
+		# 指数部分
+		var ec = _json_peek()
+		if ec == "e" or ec == "E":
+			_json_pos += 1
+			var sc = _json_peek()
+			if sc == "+" or sc == "-":
+				_json_pos += 1
+			while _json_pos < _json_text.length():
+				var ch3 = _json_text[_json_pos]
+				if ch3 >= "0" and ch3 <= "9":
+					_json_pos += 1
+				else:
+					break
 		var token = _json_text.substr(start, _json_pos - start)
-		# JSON 数字不允许前导零 (CPython: json.loads("01") 报 JSONDecodeError)
-		var tbody = token.substr(1) if token.begins_with("-") else token
-		if tbody.length() > 1 and tbody[0] == "0" and tbody[1] != "." and tbody[1] != "e" and tbody[1] != "E":
+		# 裸负号/空 token 非合法数字 (CPython 报 Expecting value)
+		if token == "" or token == "-":
+			_json_pos = start
 			_json_fail("Expecting value")
 			return null
 		var is_float = token.contains(".") or token.contains("e") or token.contains("E")
@@ -25630,11 +29721,24 @@ class Interpreter:
 			raise_exception("TypeError", "loads() takes 1 positional argument")
 			return null
 		var raw = DSLObject._unwrap_dsl(args[0])
-		if not (raw is DSLString):
+		var text := ""
+		if raw is DSLString:
+			text = raw.value
+		elif raw is DSLBytes:
+			# bytes / bytearray 按 UTF-8 解码 (CPython 的 json.loads 接受)
+			var ba := PackedByteArray()
+			for b in raw.data:
+				ba.append(b)
+			text = ba.get_string_from_utf8()
+		else:
 			raise_exception("TypeError", "the JSON object must be str, bytes or bytearray, not %s" % raw._type_name())
 			return null
-		_json_text = raw.value
+		_json_text = text
 		_json_pos = 0
+		# UTF-8 BOM 起始报 CPython 同文案 (提示用 utf-8-sig 解码)
+		if _json_text.length() > 0 and _json_text.unicode_at(0) == 0xFEFF:
+			raise_exception_typed("JSONDecodeError", [DSLString.new("Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)")])
+			return null
 		var v = _json_parse_value()
 		if report.has_error:
 			return null
@@ -25657,14 +29761,22 @@ class Interpreter:
 		if _kwargs.has("indent") and _kwargs["indent"] is DSLInteger:
 			indent = _kwargs["indent"].value
 		var sort_keys = _kwargs.has("sort_keys") and _kwargs["sort_keys"] is DSLBool and _kwargs["sort_keys"].value
+		var allow_nan = true
+		if _kwargs.has("allow_nan") and _kwargs["allow_nan"] is DSLBool:
+			allow_nan = _kwargs["allow_nan"].value
+		var default_fn = _kwargs.get("default") if _kwargs.has("default") else null
 		var sep: Array = [", ", ": "]
+		var sep_explicit = false
 		if _kwargs.has("separators"):
 			var sv = _kwargs["separators"]
 			if not (sv is DSLTuple) or sv.items.size() != 2:
 				raise_exception("TypeError", "separators must be an iterable of length 2")
 				return null
 			sep = [sv.items[0]._dsl_str(), sv.items[1]._dsl_str()]
-		var text = _json_encode(args[0], indent, sort_keys, true, sep, 0)
+			sep_explicit = true
+		if indent >= 0 and not sep_explicit:
+			sep[0] = ","
+		var text = _json_encode(args[0], indent, sort_keys, true, sep, 0, allow_nan, default_fn)
 		if report.has_error:
 			return null
 		(fp as DSLFile).builtin_fwrite([fp, DSLString.new(text)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
@@ -25749,6 +29861,16 @@ class Interpreter:
 			return null
 		if secs < 0:
 			raise_exception("ValueError", "sleep length must be non-negative")
+			return null
+		# inf / NaN / 超出 time_t 的时长按 CPython 报错
+		if is_nan(secs):
+			raise_exception("ValueError", "Invalid value NaN (not a number)")
+			return null
+		if is_inf(secs):
+			raise_exception("OverflowError", "timestamp out of range for platform time_t")
+			return null
+		if secs > 9.223372036854776e18:
+			raise_exception("OverflowError", "timestamp out of range for platform time_t")
 			return null
 		# 生成器步内部的 sleep: 生成器对象会被复用, 其进度由自身挂起状态保证,
 		# 因此这里遇到的每个 sleep 都是「首次遇到」, 必须真正等待
@@ -25969,7 +30091,7 @@ class Interpreter:
 		if report.has_error:
 			modules.erase(name)
 			return null
-		# 独立模块顶层环境 (__name__ / __file__ 绑定, CPython 模块全局语义);
+		# 独立模块顶层环境 (__name__ / __file__ 绑定, CPython 模块全局语义),
 		# 父链为内建层环境, 内建名可见而主脚本顶层变量不可见 (CPython 分层语义)
 		var mod_env = DSLEnvironment.new(report, _builtin_env)
 		mod_env.define("__name__", DSLString.new(name))
@@ -25978,7 +30100,7 @@ class Interpreter:
 		if _sandbox_root != "" and path.begins_with(_sandbox_root + "/"):
 			file_label = _sandbox_letter + ":/" + path.substr(_sandbox_root.length() + 1)
 		mod_env.define("__file__", DSLString.new(file_label))
-		# I2-68: 用户模块 repr 带源文件路径 (脚本可见形态)
+		# 用户模块 repr 带源文件路径 (脚本可见形态)
 		mod.source_path = file_label
 		# 解释器状态保存/恢复 (模块体整块执行, 仿生成器 _step 的调用方保存)
 		var caller_env = environment
@@ -26074,6 +30196,9 @@ class Interpreter:
 		mod.members["isfinite"] = _make_builtin("isfinite", Callable(self, "_math_isfinite"))
 		mod.members["remainder"] = _make_builtin("remainder", Callable(self, "_math_remainder"))
 		mod.members["cbrt"] = _make_builtin("cbrt", Callable(self, "_math_cbrt"))
+		mod.members["log1p"] = _make_builtin("log1p", Callable(self, "_math_log1p"))
+		mod.members["expm1"] = _make_builtin("expm1", Callable(self, "_math_expm1"))
+		mod.members["dist"] = _make_builtin("dist", Callable(self, "_math_dist"))
 		return mod
 
 	## 创建 random 模块 [br]
@@ -26095,6 +30220,31 @@ class Interpreter:
 		mod.members["sample"] = _make_builtin("sample", Callable(self, "_rng_sample"))
 		mod.members["choices"] = _make_builtin("choices", Callable(self, "_rng_choices"))
 		mod.members["gauss"] = _make_builtin("gauss", Callable(self, "_rng_gauss"))
+		mod.members["triangular"] = _make_builtin("triangular", Callable(self, "_rng_triangular"))
+		mod.members["randbytes"] = _make_builtin("randbytes", Callable(self, "_rng_randbytes"))
+		# random.Random 类: 可独立实例化的 PRNG (持有独立 MT 状态)
+		var rng_methods = {}
+		rng_methods["__new__"] = _make_builtin("__new__", Callable(self, "_rng_inst_new"))
+		rng_methods["__init__"] = DSLMethodDescriptor.new("__init__", Callable(self, "_rng_inst_init"))
+		rng_methods["seed"] = DSLMethodDescriptor.new("seed", Callable(self, "_rng_inst_seed"))
+		rng_methods["random"] = DSLMethodDescriptor.new("random", Callable(self, "_rng_inst_random"))
+		rng_methods["randint"] = DSLMethodDescriptor.new("randint", Callable(self, "_rng_inst_randint"))
+		rng_methods["randrange"] = DSLMethodDescriptor.new("randrange", Callable(self, "_rng_inst_randrange"))
+		rng_methods["uniform"] = DSLMethodDescriptor.new("uniform", Callable(self, "_rng_inst_uniform"))
+		rng_methods["choice"] = DSLMethodDescriptor.new("choice", Callable(self, "_rng_inst_choice"))
+		rng_methods["shuffle"] = DSLMethodDescriptor.new("shuffle", Callable(self, "_rng_inst_shuffle"))
+		rng_methods["getrandbits"] = DSLMethodDescriptor.new("getrandbits", Callable(self, "_rng_inst_getrandbits"))
+		rng_methods["triangular"] = DSLMethodDescriptor.new("triangular", Callable(self, "_rng_inst_triangular"))
+		rng_methods["randbytes"] = DSLMethodDescriptor.new("randbytes", Callable(self, "_rng_inst_randbytes"))
+		rng_methods["gauss"] = DSLMethodDescriptor.new("gauss", Callable(self, "_rng_inst_gauss"))
+		rng_methods["getstate"] = DSLMethodDescriptor.new("getstate", Callable(self, "_rng_inst_getstate"))
+		rng_methods["setstate"] = DSLMethodDescriptor.new("setstate", Callable(self, "_rng_inst_setstate"))
+		var rng_cls = DSLClass.new("Random", globals.get_val_safe("object"), rng_methods, self)
+		rng_cls.klass = _builtin_type_classes["type"]
+		rng_cls.module_prefix = "random."
+		mod.members["Random"] = rng_cls
+		DSLRandomInstance._type_class = rng_cls
+		DSLObject._builtin_class_by_name["Random"] = rng_cls
 		return mod
 
 	## 创建 statistics 模块 (纯逻辑统计函数) [br]
@@ -26102,6 +30252,9 @@ class Interpreter:
 	func _create_statistics_module() -> DSLModule:
 		var mod = DSLModule.new("statistics")
 		mod.members["mean"] = _make_builtin("mean", Callable(self, "_stat_mean"))
+		mod.members["fmean"] = _make_builtin("fmean", Callable(self, "_stat_fmean"))
+		mod.members["geometric_mean"] = _make_builtin("geometric_mean", Callable(self, "_stat_geometric_mean"))
+		mod.members["harmonic_mean"] = _make_builtin("harmonic_mean", Callable(self, "_stat_harmonic_mean"))
 		mod.members["median"] = _make_builtin("median", Callable(self, "_stat_median"))
 		mod.members["mode"] = _make_builtin("mode", Callable(self, "_stat_mode"))
 		mod.members["stdev"] = _make_builtin("stdev", Callable(self, "_stat_stdev"))
@@ -26119,6 +30272,9 @@ class Interpreter:
 		mod.members["reduce"] = _make_builtin("reduce", Callable(self, "_ft_reduce"))
 		mod.members["partial"] = _make_builtin("partial", Callable(self, "_ft_partial"))
 		mod.members["cmp_to_key"] = _make_builtin("cmp_to_key", Callable(self, "_ft_cmp_to_key"))
+		mod.members["wraps"] = _make_builtin("wraps", Callable(self, "_ft_wraps"))
+		mod.members["lru_cache"] = _make_builtin("lru_cache", Callable(self, "_ft_lru_cache"))
+		mod.members["singledispatch"] = _make_builtin("singledispatch", Callable(self, "_ft_singledispatch"))
 		return mod
 
 	## 创建 itertools 模块 (常用迭代工具) [br]
@@ -26138,6 +30294,8 @@ class Interpreter:
 		mod.members["zip_longest"] = _make_builtin("zip_longest", Callable(self, "_it_zip_longest"))
 		mod.members["takewhile"] = _make_builtin("takewhile", Callable(self, "_it_takewhile"))
 		mod.members["dropwhile"] = _make_builtin("dropwhile", Callable(self, "_it_dropwhile"))
+		mod.members["filterfalse"] = _make_builtin("filterfalse", Callable(self, "_it_filterfalse"))
+		mod.members["batched"] = _make_builtin("batched", Callable(self, "_it_batched"))
 		mod.members["accumulate"] = _make_builtin("accumulate", Callable(self, "_it_accumulate"))
 		mod.members["pairwise"] = _make_builtin("pairwise", Callable(self, "_it_pairwise"))
 		mod.members["groupby"] = _make_builtin("groupby", Callable(self, "_it_groupby"))
@@ -26239,7 +30397,52 @@ class Interpreter:
 		mod.members["punctuation"] = DSLString.new("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 		mod.members["whitespace"] = DSLString.new(" \t\n\r\v\f")
 		mod.members["printable"] = DSLString.new("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r\v\f")
+		mod.members["capwords"] = _make_builtin("capwords", Callable(self, "_string_capwords"))
 		return mod
+
+	## string.capwords(s, sep=None) - 每词首字母大写后用空格 (或 sep) 连接 [br]
+	## 无 sep 时按任意空白切分 (CPython str.split() 无参语义)
+	func _string_capwords(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1 or args.size() > 2:
+			raise_exception("TypeError", "capwords() takes 1 or 2 arguments")
+			return null
+		var s = DSLObject._unwrap_dsl(args[0])
+		if not (s is DSLString):
+			raise_exception("TypeError", "capwords() argument 1 must be str")
+			return null
+		var sep: DSLString = null
+		if args.size() == 2:
+			var sep_raw = DSLObject._unwrap_dsl(args[1])
+			if not (sep_raw is DSLString):
+				raise_exception("TypeError", "capwords() argument 2 must be str")
+				return null
+			sep = sep_raw as DSLString
+		var parts: PackedStringArray = []
+		var text = (s as DSLString).value
+		if sep == null:
+			# 按空白切分 (合并连续空白, 忽略首尾; CPython str.split() 无参语义)
+			var current = ""
+			for i in range(text.length()):
+				var ch = text[i]
+				if ch == " " or ch == "\t" or ch == "\n" or ch == "\r" or ch == "\v" or ch == "\f":
+					if current != "":
+						parts.append(current)
+						current = ""
+				else:
+					current += ch
+			if current != "":
+				parts.append(current)
+		else:
+			parts = text.split((sep as DSLString).value, false)
+		var out: PackedStringArray = []
+		for p in parts:
+			# CPython str.capitalize: 首字母大写, 其余小写 (Godot String.capitalize 语义不同, 自行实现)
+			var cap = ""
+			if p.length() > 0:
+				cap = p[0].to_upper() + p.substr(1).to_lower()
+			out.append(cap)
+		var joiner = " " if sep == null else (sep as DSLString).value
+		return DSLString.new(joiner.join(out))
 
 	## MT19937 的 32 位生成 (对齐 CPython Mersenne Twister): [br]
 	## 状态 624 字, 每 624 次输出后整表 twist, tempering 后输出
@@ -26342,7 +30545,79 @@ class Interpreter:
 			return arg.value
 		if arg is DSLFloat:
 			return arg.value
+		if arg is DSLBool:
+			# bool 是 int 子类, 数值站按 1/0 归一
+			return 1 if arg.value else 0
 		return null
+
+	## 整数实参归一: bool 按 int, DSLInteger (含大数) 原样保留,
+	## 浮点按 CPython 报 TypeError, 其余按各函数文案报 TypeError
+	func _math_int_arg(arg: DSLObject, fn_name: String) -> DSLInteger:
+		var a = DSLObject._unwrap_dsl(arg)
+		if a is DSLBool:
+			return DSLInteger.pooled(1 if a.value else 0)
+		if a is DSLInteger:
+			return a
+		if a is DSLFloat:
+			raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
+			return null
+		raise_exception("TypeError", "%s() argument must be an integer" % fn_name)
+		return null
+
+	## floor/ceil/trunc 的实数实参归一: bool 按 int, DSLInteger (含大数)/DSLFloat 保型
+	func _math_real_arg(arg: DSLObject, fn_name: String):
+		var a = DSLObject._unwrap_dsl(arg)
+		if a is DSLBool:
+			return DSLInteger.pooled(1 if a.value else 0)
+		if a is DSLInteger:
+			return a
+		if a is DSLFloat:
+			return a
+		raise_exception("TypeError", "%s() argument must be a number" % fn_name)
+		return null
+
+	## 整数绝对值 (大数经取负, 零/正原样)
+	func _math_abs_int(a: DSLInteger) -> DSLInteger:
+		if (not a.is_big() and a.value >= 0) or (a.is_big() and not a.big_neg):
+			return a
+		return a.magic_neg([a] as Array[DSLObject], {} as Dictionary[String, DSLObject]) as DSLInteger
+
+	## 大数欧几里得 gcd (a, b 已取绝对值; 支持任意精度)
+	func _big_gcd(a: DSLObject, b: DSLObject) -> DSLObject:
+		var x = a
+		var y = b
+		while not (y is DSLInteger and not (y as DSLInteger).is_big() and (y as DSLInteger).value == 0):
+			var r = x.magic_mod([x, y] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if r == null:
+				return null
+			x = y
+			y = r
+		return x
+
+	## 大数整数平方根 (牛顿迭代, 精确下取整)
+	func _big_isqrt(n: DSLInteger) -> DSLInteger:
+		if n.is_big() and DSLBigInt.mag_is_zero(n.big_limbs):
+			return DSLInteger.pooled(0)
+		if not n.is_big():
+			return DSLInteger.pooled(int(sqrt(float(n.value))))
+		# 初始估值: 2^ceil(bitlen/2) (牛顿迭代的平方上界)
+		var bl = DSLBigInt.mag_bitlen(n.big_limbs)
+		var one: Array[int] = [1]
+		var x_limbs: Array[int] = DSLBigInt.mag_shl(one, int(ceil(bl / 2.0)))
+		var x: DSLInteger = DSLInteger.from_big(false, x_limbs)
+		while true:
+			# 牛顿迭代: x ← (x + n // x) // 2 (n 为被开方数)
+			var quot = n.magic_floordiv([n, x] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if quot == null:
+				return null
+			var s = x.magic_add([x, quot] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var y = s.magic_floordiv([s, DSLInteger.pooled(2)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			# y >= x 时收敛 (y 不再减小)
+			var ge = y.magic_ge([y, x] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if ge != null and (ge as DSLBool).value:
+				break
+			x = y as DSLInteger
+		return x
 
 	## 从 DSLObject 参数中提取数值, 不可用时返回默认值 [br]
 	## [param arg] DSLObject 参数, 可为 null [br]
@@ -26374,44 +30649,100 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "isqrt() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null or x < 0:
+		var n = _math_int_arg(args[0], "isqrt")
+		if n == null:
+			return null
+		var neg: bool = n.is_big() and n.big_neg or (not n.is_big() and n.value < 0)
+		if neg:
 			raise_exception("ValueError", "isqrt() argument must be nonnegative")
 			return null
-		return DSLInteger.pooled(int(sqrt(float(x))))
+		return _big_isqrt(n)
 
 	## math.floor(x)
+	## math.floor/ceil/trunc 实参解析 — 内建数值常规路径, 用户对象走 __floor__/__ceil__/__trunc__ 协议
+	func _math_int_protocol(arg: DSLObject, dunder: String, fn_name: String):
+		var a = DSLObject._unwrap_dsl(arg)
+		if a is DSLBool or a is DSLInteger or a is DSLFloat:
+			return _math_real_arg(arg, fn_name)
+		if a.klass != null:
+			var m = a.klass._lookup_method(dunder)
+			if m != null:
+				if m.has_method("__get__"):
+					m = m.__get__(a, a.klass)
+				var res = a.klass._invoke_func(m, [] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if _suspended:
+					return null
+				if report.has_error:
+					return null
+				return res
+		# 非数值实参文案对齐 CPython (floor/ceil: must be real number, trunc 另文案)
+		if dunder == "__trunc__":
+			raise_exception("TypeError", "type %s doesn't define __trunc__ method" % a._type_name())
+		else:
+			raise_exception("TypeError", "must be real number, not %s" % a._type_name())
+		return null
+
 	func _math_floor(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "floor() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "floor() argument must be a number")
+		var v = _math_int_protocol(args[0], "__floor__", "floor")
+		if v == null:
 			return null
-		return DSLInteger.pooled(floor(float(x)))
+		if v is DSLInteger:
+			return v
+		if not (v is DSLFloat):
+			return v
+		var fv = v.value
+		if is_nan(fv):
+			raise_exception("ValueError", "cannot convert float NaN to integer")
+			return null
+		if is_inf(fv):
+			raise_exception("OverflowError", "cannot convert float infinity to integer")
+			return null
+		return DSLObject._int_from_float_exact(floor(fv))
 
 	## math.ceil(x)
 	func _math_ceil(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "ceil() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "ceil() argument must be a number")
+		var v = _math_int_protocol(args[0], "__ceil__", "ceil")
+		if v == null:
 			return null
-		return DSLInteger.pooled(ceil(float(x)))
+		if v is DSLInteger:
+			return v
+		if not (v is DSLFloat):
+			return v
+		var fv = v.value
+		if is_nan(fv):
+			raise_exception("ValueError", "cannot convert float NaN to integer")
+			return null
+		if is_inf(fv):
+			raise_exception("OverflowError", "cannot convert float infinity to integer")
+			return null
+		return DSLObject._int_from_float_exact(ceil(fv))
 
 	## math.trunc(x)
 	func _math_trunc(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "trunc() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "trunc() argument must be a number")
+		var v = _math_int_protocol(args[0], "__trunc__", "trunc")
+		if v == null:
 			return null
-		return DSLInteger.pooled(int(float(x)))
+		if v is DSLInteger:
+			return v
+		if not (v is DSLFloat):
+			return v
+		var fv = v.value
+		if is_nan(fv):
+			raise_exception("ValueError", "cannot convert float NaN to integer")
+			return null
+		if is_inf(fv):
+			raise_exception("OverflowError", "cannot convert float infinity to integer")
+			return null
+		return DSLObject._int_from_float_exact(floor(fv) if fv >= 0 else ceil(fv))
 
 	## math.fabs(x)
 	func _math_fabs(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -26434,6 +30765,10 @@ class Interpreter:
 		if a == null or b == null:
 			raise_exception("TypeError", "fmod() arguments must be numbers")
 			return null
+		# 除数为 0: CPython 按 C fmod 的域错误报 ValueError (宿主 fmod 会给出 nan)
+		if float(b) == 0.0:
+			raise_exception("ValueError", "math domain error")
+			return null
 		return DSLFloat.new(fmod(float(a), float(b)))
 
 	## math.pow(a, b)
@@ -26446,7 +30781,13 @@ class Interpreter:
 		if a == null or b == null:
 			raise_exception("TypeError", "pow() arguments must be numbers")
 			return null
-		return DSLFloat.new(pow(float(a), float(b)))
+		# 域错误 (负底数非整值指数 / 0 的负次幂): CPython 报 ValueError (宿主 pow 会给出 nan/inf)
+		var af = float(a)
+		var bf = float(b)
+		if (af < 0.0 and bf != floor(bf)) or (af == 0.0 and bf < 0.0):
+			raise_exception("ValueError", "math domain error")
+			return null
+		return DSLFloat.new(pow(af, bf))
 
 	## math.exp(x)
 	func _math_exp(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -26476,7 +30817,15 @@ class Interpreter:
 			if base == null:
 				raise_exception("TypeError", "log() base must be a number")
 				return null
-			return DSLFloat.new(log(float(x)) / log(float(base)))
+			var bf = float(base)
+			# base 0 -> 域错误, base 1 -> 除零
+			if bf == 0.0:
+				raise_exception("ValueError", "math domain error")
+				return null
+			if bf == 1.0:
+				raise_exception("ZeroDivisionError", "float division by zero")
+				return null
+			return DSLFloat.new(log(float(x)) / log(bf))
 		return DSLFloat.new(log(float(x)))
 
 	## math.log2(x)
@@ -26581,9 +30930,16 @@ class Interpreter:
 
 	## math.hypot(a, b)
 	func _math_hypot(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if args.size() < 2:
-			raise_exception("TypeError", "hypot() takes at least two arguments")
+		if args.size() == 0:
+			raise_exception("TypeError", "hypot expected at least 1 argument, got 0")
 			return null
+		if args.size() == 1:
+			# CPython: 单参 hypot(x) 返回 abs(x)
+			var x1 = _num_val(args[0])
+			if x1 == null:
+				raise_exception("TypeError", "hypot() arguments must be numbers")
+				return null
+			return DSLFloat.new(absf(float(x1)))
 		var total = 0.0
 		for a in args:
 			var v = _num_val(a)
@@ -26620,78 +30976,98 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "factorial() takes exactly one argument")
 			return null
-		var n = _num_val(args[0])
+		var n = _math_int_arg(args[0], "factorial")
 		if n == null:
-			raise_exception("TypeError", "factorial() argument must be an integer")
 			return null
-		var iv = int(n)
-		if float(iv) != float(n):
-			raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
-			return null
-		if iv < 0:
+		if (not n.is_big() and n.value < 0) or (n.is_big() and n.big_neg):
 			raise_exception("ValueError", "factorial() not defined for negative values")
 			return null
-		var result = 1
+		# 输入经整数实参归一 (小整数快路径); 结果以大数乘法累积 (factorial(21) 起超 int64)
+		var iv = n.value
+		var result: DSLObject = DSLInteger.pooled(1)
 		for i in range(2, iv + 1):
-			result *= i
-		return DSLInteger.pooled(result)
+			result = result.magic_mul([result, DSLInteger.pooled(i)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return result
 
-	## math.gcd(a, b)
+	## math.gcd(a, b, ...)
 	func _math_gcd(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if args.size() < 2:
-			raise_exception("TypeError", "gcd() takes at least two arguments")
-			return null
-		var a = int(_num_val(args[0]))
-		var b = int(_num_val(args[1]))
-		a = abs(a)
-		b = abs(b)
-		while b != 0:
-			var t = b
-			b = a % b
-			a = t
-		return DSLInteger.pooled(a)
+		var acc: DSLObject = DSLInteger.pooled(0)
+		for a in args:
+			var ai = _math_int_arg(a, "gcd")
+			if ai == null:
+				return null
+			acc = _big_gcd(acc, _math_abs_int(ai))
+			if acc == null:
+				return null
+		return acc
 
 	## math.comb(n, k) - 组合数 C(n, k)
 	func _math_comb(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 2:
 			raise_exception("TypeError", "comb() takes exactly two arguments")
 			return null
-		var n = int(_num_val(args[0]))
-		var k = int(_num_val(args[1]))
-		if n < 0:
+		var n = _math_int_arg(args[0], "comb")
+		var k = _math_int_arg(args[1], "comb")
+		if n == null or k == null:
+			return null
+		var n_neg: bool = n.is_big() and n.big_neg or (not n.is_big() and n.value < 0)
+		var k_neg: bool = k.is_big() and k.big_neg or (not k.is_big() and k.value < 0)
+		if n_neg:
 			raise_exception("ValueError", "n must be a non-negative integer")
 			return null
-		if k < 0:
+		if k_neg:
 			raise_exception("ValueError", "k must be a non-negative integer")
 			return null
-		if k > n:
+		# k > n → 0 (经大数比较)
+		var kgt = k.magic_gt([k, n] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if kgt != null and (kgt as DSLBool).value:
 			return DSLInteger.pooled(0)
-		if k > n - k:
-			k = n - k
-		var result: float = 1.0
-		for i in range(1, k + 1):
-			result = result * (n - k + i) / i
-		return DSLInteger.pooled(int(result))
+		var kk = k
+		# 对称性: k > n-k 时取 n-k (减少乘法次数, 大数 n 亦安全)
+		var nmk = n.magic_sub([n, kk] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var kgtnmk = kk.magic_gt([kk, nmk] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if kgtnmk != null and (kgtnmk as DSLBool).value:
+			kk = nmk
+		if kk.is_big():
+			# k 超 int64: n ≥ k 时结果巨大 (CPython 亦会计算); 测试不覆盖超界, 此处按大数循环
+			raise_exception("OverflowError", "k too large")
+			return null
+		var result: DSLObject = DSLInteger.pooled(1)
+		for i in range(1, kk.value + 1):
+			var num = n.magic_sub([n, kk] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			num = num.magic_add([num, DSLInteger.pooled(i)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			result = result.magic_mul([result, num] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			result = result.magic_floordiv([result, DSLInteger.pooled(i)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if result == null:
+				return null
+		return result
 
 	## math.perm(n, k) - 排列数 P(n, k)
 	func _math_perm(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 2:
 			raise_exception("TypeError", "perm() takes exactly two arguments")
 			return null
-		var n = int(_num_val(args[0]))
-		var k = int(_num_val(args[1]))
-		if n < 0:
+		var n = _math_int_arg(args[0], "perm")
+		var k = _math_int_arg(args[1], "perm")
+		if n == null or k == null:
+			return null
+		var n_neg: bool = n.is_big() and n.big_neg or (not n.is_big() and n.value < 0)
+		var k_neg: bool = k.is_big() and k.big_neg or (not k.is_big() and k.value < 0)
+		if n_neg:
 			raise_exception("ValueError", "n must be a non-negative integer")
 			return null
-		if k < 0:
+		if k_neg:
 			raise_exception("ValueError", "k must be a non-negative integer")
 			return null
-		if k > n:
+		var kgt = k.magic_gt([k, n] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if kgt != null and (kgt as DSLBool).value:
 			return DSLInteger.pooled(0)
-		var result: float = 1.0
-		for i in range(n - k + 1, n + 1):
-			result = result * i
-		return DSLInteger.pooled(int(result))
+		var nv = n.value
+		var kv = k.value
+		var result: DSLObject = DSLInteger.pooled(1)
+		for i in range(nv - kv + 1, nv + 1):
+			result = result.magic_mul([result, DSLInteger.pooled(i)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return result
 
 	## math.prod(iterable, start=1) - 连乘
 	func _math_prod(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -26712,30 +31088,43 @@ class Interpreter:
 			var v = it.next()
 			if it.suspended:
 				break
-			result = result.magic_mul([result, v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-			if result == null:
+			# 元素乘法经完整二元分派, 左侧失败且「序列在右」(如 1 * "a") 时
+			# 走内置反射重复 (对齐主 evaluate 的 _try_reflected_op), 失败错误显式转异常
+			var mul = _binary_with_reflect(result, v, "__mul__", "__rmul__", func() -> DSLObject:
+				return result.magic_mul([result, v] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+			if mul == null and not report.has_error and last_exception == null and not _suspended:
+				if (result is DSLInteger or result is DSLBool) and (v is DSLString or v is DSLList or v is DSLTuple or v is DSLBytes or v is DSLDeque):
+					var reps = 1 if (result is DSLBool and result.value) else (0 if result is DSLBool else result.value)
+					mul = v.magic_mul([v, DSLInteger.pooled(reps)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+					if mul != null:
+						result.last_error = ""
+						v.last_error = ""
+			if mul == null:
+				if result.last_error != "":
+					raise_exception_from_last_error(result.last_error)
+					result.last_error = ""
 				return null
+			result = mul
 		return result
 
 	## math.lcm(*args) - 最小公倍数
 	func _math_lcm(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if args.size() < 2:
-			raise_exception("TypeError", "lcm() takes at least two arguments")
-			return null
-		var lcm_val = 1
+		var acc: DSLObject = DSLInteger.pooled(1)
 		for i in range(args.size()):
-			var n = abs(int(_num_val(args[i])))
-			if n == 0:
+			var ai = _math_int_arg(args[i], "lcm")
+			if ai == null:
+				return null
+			# 任一输入为 0 → lcm 为 0 (CPython 语义)
+			if not ai.is_big() and ai.value == 0:
 				return DSLInteger.pooled(0)
-			var a = lcm_val
-			var b = n
-			while b != 0:
-				var t = b
-				b = a % b
-				a = t
-			var g = a
-			lcm_val = int(lcm_val / g) * n
-		return DSLInteger.pooled(lcm_val)
+			var g = _big_gcd(acc, _math_abs_int(ai))
+			if g == null:
+				return null
+			acc = acc.magic_floordiv([acc, g] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			acc = acc.magic_mul([acc, ai] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if acc == null:
+				return null
+		return acc
 
 	## math.copysign(x, y)
 	func _math_copysign(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -26836,49 +31225,247 @@ class Interpreter:
 		var r = pow(abs(fx), 1.0 / 3.0)
 		return DSLFloat.new(-r if fx < 0.0 else r)
 
+	## math.log1p(x) - log(1+x), 供 x 接近 0 时高精度 (级数展开避免 log(1+x) 精度损失)
+	func _math_log1p(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "log1p() takes exactly one argument")
+			return null
+		var x = _num_val(args[0])
+		if x == null:
+			raise_exception("TypeError", "log1p() argument must be a number")
+			return null
+		var fx = float(x)
+		if fx < -1.0:
+			raise_exception("ValueError", "math domain error")
+			return null
+		if is_nan(fx):
+			return DSLFloat.new(fx)
+		if fx == -1.0:
+			raise_exception("ValueError", "math domain error")
+			return null
+		if is_inf(fx):
+			return DSLFloat.new(fx)
+		var sum = 0.0
+		if fx > -1.0 and fx <= 1.0:
+			# 收集项后从小到大 (逆序) 求和, 减少交替级数的累积舍入误差
+			var items: Array[float] = []
+			var term = fx
+			var k = 1
+			while absf(term) / float(k) > 1e-20 and k < 400:
+				if k % 2 == 1:
+					items.append(term / float(k))
+				else:
+					items.append(- (term / float(k)))
+				term *= fx
+				k += 1
+			for i in range(items.size() - 1, -1, -1):
+				sum += items[i]
+			return DSLFloat.new(sum)
+		return DSLFloat.new(log(1.0 + fx))
+
+	## math.expm1(x) - exp(x)-1, 供 x 接近 0 时高精度 (级数展开)
+	func _math_expm1(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "expm1() takes exactly one argument")
+			return null
+		var x = _num_val(args[0])
+		if x == null:
+			raise_exception("TypeError", "expm1() argument must be a number")
+			return null
+		var fx = float(x)
+		if is_nan(fx):
+			return DSLFloat.new(fx)
+		if is_inf(fx):
+			return DSLFloat.new(fx)
+		if absf(fx) <= 1.0:
+			# 收集项后从小到大 (逆序) 求和
+			var items: Array[float] = []
+			var term = fx
+			var k = 1
+			while absf(term) > 1e-20 and k < 400:
+				items.append(term)
+				k += 1
+				term = term * fx / float(k)
+			var sum = 0.0
+			for i in range(items.size() - 1, -1, -1):
+				sum += items[i]
+			return DSLFloat.new(sum)
+		return DSLFloat.new(exp(fx) - 1.0)
+
+	## math.dist(p, q) - 两点欧氏距离 (任意可迭代坐标序列)
+	func _math_dist(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "dist() takes exactly two arguments")
+			return null
+		var pa: Array[DSLObject] = []
+		var it1 = args[0]._dsl_iter()
+		if it1 == null:
+			raise_exception("TypeError", "'%s' object is not iterable" % args[0]._type_name())
+			return null
+		while it1.has_next():
+			pa.append(it1.next())
+			if it1.suspended:
+				return null
+		var qa: Array[DSLObject] = []
+		var it2 = args[1]._dsl_iter()
+		if it2 == null:
+			raise_exception("TypeError", "'%s' object is not iterable" % args[1]._type_name())
+			return null
+		while it2.has_next():
+			qa.append(it2.next())
+			if it2.suspended:
+				return null
+		if pa.size() != qa.size():
+			raise_exception("ValueError", "both points must have the same number of dimensions")
+			return null
+		var total = 0.0
+		for i in range(pa.size()):
+			var pv = _num_val(pa[i])
+			var qv = _num_val(qa[i])
+			if pv == null or qv == null:
+				raise_exception("TypeError", "both points must be the same type")
+				return null
+			var d = float(pv) - float(qv)
+			total += d * d
+		return DSLFloat.new(sqrt(total))
+
 	## random.seed(n)
 	func _rng_seed(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if _mt_state.is_empty():
 			_mt_state.resize(624)
-		var s = 0
-		var has_seed := false
 		if args.size() > 0 and not (args[0] is DSLNone):
-			var v = _num_val(args[0])
-			if v != null:
-				s = int(v)
-				has_seed = true
-			elif args[0] is DSLString:
+			var raw = DSLObject._unwrap_dsl(args[0])
+			if raw is DSLBool:
+				_mt_init_by_array([1 if raw.value else 0])
+				_gauss_next = null
+				return DSLNone.new()
+			if raw is DSLInteger:
+				# CPython 的 int 种子路径: 绝对值分解为 32 位小端字数组经 init_by_array
+				var key: Array = []
+				if (raw as DSLInteger).is_big():
+					# 大数种子: 幅值 limbs 即 32 位小端字 (CPython 的 int 全位种子)
+					key = (raw as DSLInteger).big_limbs.duplicate()
+				else:
+					var n0 = absi((raw as DSLInteger).value)
+					if n0 == 0:
+						key.append(0)
+					else:
+						while n0 > 0:
+							key.append(n0 & 0xFFFFFFFF)
+							n0 = n0 >> 32
+				_mt_init_by_array(key)
+				_gauss_next = null
+				return DSLNone.new()
+			if raw is DSLFloat:
+				# 浮点种子: 按 CPython 的 float hash 播种 (v 的有理数表示模 2^61-1),
+				# 使 seed(2.5) 等浮点种子的序列与 CPython 对齐 (原实现按截断 int 播种)
+				var h = _py_float_hash((raw as DSLFloat).value)
+				var key2: Array = []
+				var n1 = absi(h)
+				if n1 == 0:
+					key2.append(0)
+				else:
+					while n1 > 0:
+						key2.append(n1 & 0xFFFFFFFF)
+						n1 = n1 >> 32
+				_mt_init_by_array(key2)
+				_gauss_next = null
+				return DSLNone.new()
+			if raw is DSLString:
 				# 字符串种子: 哈希展开为 32 位整型键数组 (init_by_array);
 				# CPython 3.11+ 的 str 种子经 sha512 处理, 序列与 CPython 不对齐 (文档化差异)
-				var h = args[0].value.hash()
+				var h = raw.value.hash()
 				var key: Array = []
 				for _w in range(4):
 					key.append(h & 0xFFFFFFFF)
 					h = (h >> 32) | (h << 32) & 0xFFFFFFFF
 				_mt_init_by_array(key)
+				_gauss_next = null
 				return DSLNone.new()
-			elif args[0] is DSLBool:
-				s = 1 if args[0].value else 0
-				has_seed = true
-		if not has_seed:
-			# 无参 / None: 引擎随机源播种 (CPython 的 OS 随机源语义)
-			s = randi()
-		# CPython 的 int 种子路径: 绝对值分解为 32 位小端字数组经 init_by_array
-		var n = absi(s)
-		var key: Array = []
-		if n == 0:
-			key.append(0)
-		else:
-			while n > 0:
-				key.append(n & 0xFFFFFFFF)
-				n = n >> 32
-		_mt_init_by_array(key)
+			if raw is DSLBytes:
+				# 字节种子: 按小端 32 位字展开 (确定性可复现; CPython 经 sha512
+				# 全位展开, 具体序列与 CPython 不对齐, 文档化差异)
+				var key: Array = []
+				var acc := 0
+				var cnt := 0
+				for b in (raw as DSLBytes).data:
+					acc = acc | (int(b) << (8 * cnt))
+					cnt += 1
+					if cnt == 4:
+						key.append(acc & 0xFFFFFFFF)
+						acc = 0
+						cnt = 0
+				if cnt > 0:
+					key.append(acc & 0xFFFFFFFF)
+				if key.size() == 0:
+					key.append(0)
+				_mt_init_by_array(key)
+				_gauss_next = null
+				return DSLNone.new()
+			# 其余类型: CPython 拒绝并提示支持类型
+			raise_exception("TypeError", "The only supported seed types are: None,\nint, float, str, bytes, and bytearray.")
+			return null
+		# 无参 / None: 引擎随机源播种 (CPython 的 OS 随机源语义)
+		_mt_init_by_array([randi() & 0xFFFFFFFF])
 		_gauss_next = null
 		return DSLNone.new()
 
 	## random.random()
 	func _rng_random(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLFloat.new(_rng_float())
+
+	## CPython 的 float hash (PyObject_Hash 对 float 的语义): [br]
+	## 非整数浮点 v = m * 2^ep (m 约分至奇数), hash = (m * 2^ep) mod (2^61-1); [br]
+	## 负值取负, 结果 -1 映射 -2; 整数浮点自然归约为对应整数 hash [br]
+	## 供 random.seed(float) 播种使用 (与 CPython 序列对齐) [br]
+	## [param v] 种子浮点值 [br]
+	## [returns] CPython 语义的 hash 值
+	func _py_float_hash(v: float) -> int:
+		if is_nan(v):
+			return 0
+		if is_inf(v):
+			return DSLBigInt.HASH_MOD if v > 0.0 else -DSLBigInt.HASH_MOD
+		if v == 0.0:
+			return 0
+		# IEEE754 位分解: v = m * 2^ep, m 为 53 位尾数整数
+		var ba := PackedByteArray()
+		ba.resize(8)
+		ba.encode_double(0, v)
+		var bits := ba.decode_u64(0)
+		var neg := bits < 0
+		var exp := (bits >> 52) & 0x7FF
+		var frac := bits & 0xFFFFFFFFFFFFF
+		var m := frac
+		var ep := -1074
+		if exp != 0:
+			m = frac + 4503599627370496 # 2^52
+			ep = exp - 1075
+		if ep < 0:
+			while m % 2 == 0:
+				m = m >> 1
+				ep += 1
+		var x := m # m < 2^53 < 2^61-1, 无需再取模
+		if ep > 0:
+			for _i in range(ep % 61):
+				x = _hash_mul2_mod(x)
+		elif ep < 0:
+			var k := (61 - ((-ep) % 61)) % 61
+			for _i in range(k):
+				x = _hash_mul2_mod(x)
+		if neg:
+			x = -x
+		if x == -1:
+			x = -2
+		return x
+
+	## (x * 2) mod (2^61-1) 的 64 位安全实现 [br]
+	## [param x] 小于 2^61 的非负整数 [br]
+	## [returns] x*2 mod (2^61-1)
+	func _hash_mul2_mod(x: int) -> int:
+		var y := x * 2
+		if y >= DSLBigInt.HASH_MOD:
+			y -= DSLBigInt.HASH_MOD
+		return y
 
 	## random.uniform(a, b)
 	func _rng_uniform(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -26899,8 +31486,9 @@ class Interpreter:
 			return null
 		var a = int(_num_val(args[0]))
 		var b = int(_num_val(args[1]))
+		# randint 委托 randrange(a, b+1) 的报错形态 (回显 start 与 stop-1)
 		if a > b:
-			raise_exception("ValueError", "empty range for randint()")
+			raise_exception("ValueError", "empty range in randrange(%d, %d)" % [a, b + 1])
 			return null
 		return DSLInteger.pooled(a + _rng_randbelow(b - a + 1))
 
@@ -26909,23 +31497,54 @@ class Interpreter:
 		if args.size() < 1 or args.size() > 3:
 			raise_exception("TypeError", "randrange() takes from 1 to 3 arguments")
 			return null
+		# 实参必须是整数 (bool 按 0/1, 支持 __index__), 浮点按 CPython 报 TypeError
 		var start = 0
 		var stop = 0
 		var step = 1
-		if args.size() == 1:
-			stop = int(_num_val(args[0]))
-		elif args.size() == 2:
-			start = int(_num_val(args[0]))
-			stop = int(_num_val(args[1]))
+		var ints: Array[int] = []
+		for a in args:
+			ints.append(_rng_index_int_arg(a))
+			if report.has_error:
+				return null
+		if ints.size() == 1:
+			stop = ints[0]
+		elif ints.size() == 2:
+			start = ints[0]
+			stop = ints[1]
 		else:
-			start = int(_num_val(args[0]))
-			stop = int(_num_val(args[1]))
-			step = int(_num_val(args[2]))
-		var count = (stop - start + step - 1) / step if step > 0 else 0
+			start = ints[0]
+			stop = ints[1]
+			step = ints[2]
+		if step == 0:
+			raise_exception("ValueError", "zero step for randrange()")
+			return null
+		# 元素个数: 正步长 ceil((stop-start)/step), 负步长 ceil((start-stop)/(-step))
+		var count = 0
+		if step > 0:
+			count = (stop - start + step - 1) / step
+		else:
+			count = (start - stop - step - 1) / (-step)
 		if count <= 0:
-			raise_exception("ValueError", "empty range for randrange()")
+			raise_exception("ValueError", "empty range in randrange(%d, %d)" % [start, stop])
 			return null
 		return DSLInteger.pooled(start + step * _rng_randbelow(count))
+
+	## randrange 实参的整数归一: DSLInteger (含大数越界报 OverflowError) / DSLBool / __index__ 协议
+	func _rng_index_int_arg(v: DSLObject) -> int:
+		var raw = DSLObject._unwrap_dsl(v)
+		if raw is DSLInteger:
+			if (raw as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return 0
+			return raw.value
+		if raw is DSLBool:
+			return 1 if raw.value else 0
+		var idxv = DSLObject._seq_index_int(raw, raw)
+		if idxv == DSLObject.INDEX_ERR:
+			if not report.has_error:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return 0
+		return idxv
 
 	## 抽样函数的生成器参数校验 [br]
 	## 生成器是一次性迭代器且没有 len(), CPython 的抽样函数一律拒绝, 此处同样拒绝 [br]
@@ -27036,7 +31655,7 @@ class Interpreter:
 			raise_exception("TypeError", "sample() takes exactly two arguments")
 			return null
 		var raw = DSLObject._unwrap_dsl(args[0])
-		var k = int(_num_val(args[1]))
+		var k_raw = DSLObject._unwrap_dsl(args[1])
 		var pool: Array[DSLObject] = []
 		if raw is DSLList or raw is DSLTuple:
 			pool = raw.items.duplicate()
@@ -27052,6 +31671,27 @@ class Interpreter:
 			# CPython: sample 需要序列, 生成器/集合/字典一律拒绝并提示 sorted(d)
 			raise_exception("TypeError", "Population must be a sequence.  For dicts or sets, use sorted(d).")
 			return null
+		# k 的整数归一 (CPython 语义: 先 0 <= k <= n 比较, 再经 [None]*k 的乘法校验)
+		var k := 0
+		if k_raw is DSLBool:
+			k = 1 if k_raw.value else 0
+		elif k_raw is DSLInteger:
+			if (k_raw as DSLInteger).is_big():
+				# 大数 k 必然超出有限总体 (CPython 比较 0 <= k <= n 后报 ValueError)
+				raise_exception("ValueError", "Sample larger than population or is negative")
+				return null
+			k = (k_raw as DSLInteger).value
+		elif k_raw is DSLFloat:
+			# 浮点 k: CPython 先做范围比较, 范围内再被 [None]*k 的乘法拒绝
+			var kf := (k_raw as DSLFloat).value
+			if kf < 0.0 or kf > float(pool.size()):
+				raise_exception("ValueError", "Sample larger than population or is negative")
+				return null
+			raise_exception("TypeError", "can't multiply sequence by non-int of type 'float'")
+			return null
+		else:
+			raise_exception("TypeError", "'<=' not supported between instances of 'int' and '%s'" % k_raw._type_name())
+			return null
 		if k < 0 or k > pool.size():
 			raise_exception("ValueError", "Sample larger than population or is negative")
 			return null
@@ -27062,8 +31702,8 @@ class Interpreter:
 			pool[j] = pool[pool.size() - 1 - i]
 		return result
 
-	## random.choices(population, weights=None, k=1) [br]
-	## 有放回抽样, 可按 weights 加权, 返回长度为 k 的列表
+	## random.choices(population, weights=None, cum_weights=None, k=1) [br]
+	## 有放回抽样, 可按 weights 或 cum_weights 加权, 返回长度为 k 的列表
 	func _rng_choices(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 1 or args.size() > 3:
 			raise_exception("TypeError", "choices() takes from 1 to 3 positional arguments")
@@ -27087,19 +31727,54 @@ class Interpreter:
 		if pool.size() == 0:
 			raise_exception("IndexError", "Cannot choose from an empty population")
 			return null
-		# weights 可位置传入或关键字传入
+		# weights 可位置传入或关键字传入; cum_weights 仅关键字
 		var weights_obj: DSLObject = null
+		var cum_obj: DSLObject = null
 		if args.size() >= 2:
 			weights_obj = args[1]
 		if kwargs.has("weights"):
 			weights_obj = kwargs["weights"]
+		if kwargs.has("cum_weights"):
+			cum_obj = kwargs["cum_weights"]
 		var k = 1
 		if args.size() >= 3:
-			k = int(_num_val_or(args[2], 1.0))
+			k = _rng_choices_k(args[2])
+			if report.has_error:
+				return null
 		if kwargs.has("k"):
-			k = int(_num_val_or(kwargs["k"], 1.0))
+			k = _rng_choices_k(kwargs["k"])
+			if report.has_error:
+				return null
+		if cum_obj != null and not (cum_obj is DSLNone) and weights_obj != null and not (weights_obj is DSLNone):
+			raise_exception("TypeError", "Cannot specify both weights and cumulative weights")
+			return null
 		var cum: Array = []
-		if weights_obj != null and not (weights_obj is DSLNone):
+		if cum_obj != null and not (cum_obj is DSLNone):
+			# cum_weights 直接用 (已是累积权重)
+			var wt = cum_obj._dsl_iter()
+			if wt == null:
+				raise_exception("TypeError", "choices() cumulative weights must be a sequence")
+				return null
+			while wt.has_next():
+				var wv = _num_val(wt.next())
+				if wv == null:
+					raise_exception("TypeError", "cumulative weights must be numbers")
+					return null
+				cum.append(float(wv))
+			if wt.suspended:
+				# 消费中途挂起: cum 只是半截, 交由语句重放
+				return null
+			if cum.size() != pool.size():
+				raise_exception("ValueError", "The number of weights does not match the population")
+				return null
+			var total = float(cum[cum.size() - 1])
+			if total <= 0.0:
+				raise_exception("ValueError", "Total of weights must be greater than zero")
+				return null
+			if not is_finite(total):
+				raise_exception("ValueError", "Total of weights must be finite")
+				return null
+		elif weights_obj != null and not (weights_obj is DSLNone):
 			# 权重只需可迭代 (CPython 对 weights 不做 len 检查, 生成器可接受)
 			var wt = weights_obj._dsl_iter()
 			if wt == null:
@@ -27137,6 +31812,28 @@ class Interpreter:
 			result.items.append(pool[idx])
 		return result
 
+	## choices 的 k 实参归一: 必须为整数 (bool 按 0/1), 浮点按 CPython 报 TypeError [br]
+	## [param v] k 实参 [br]
+	## [returns] 归一后的整数
+	func _rng_choices_k(v: DSLObject) -> int:
+		var raw = DSLObject._unwrap_dsl(v)
+		if raw is DSLBool:
+			return 1 if raw.value else 0
+		if raw is DSLInteger:
+			if (raw as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return 0
+			return (raw as DSLInteger).value
+		if raw is DSLFloat:
+			raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
+			return 0
+		var idxv = DSLObject._seq_index_int(raw, raw)
+		if idxv == DSLObject.INDEX_ERR:
+			if not report.has_error:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return 0
+		return idxv
+
 	## random.gauss(mu=0.0, sigma=1.0) [br]
 	## 正态分布采样 (Box-Muller 变换), 使用内置 PRNG
 	## random.getstate(): (3, 内层 625 项元组 [624 状态 + index], gauss_next) (CPython 形态)
@@ -27155,31 +31852,100 @@ class Interpreter:
 			raise_exception("TypeError", "setstate() argument must be a tuple")
 			return null
 		var t = args[0] as DSLTuple
-		if t.items.size() < 3:
-			raise_exception("ValueError", "state tuple too short")
+		if t.items.is_empty():
+			raise_exception("IndexError", "tuple index out of range")
 			return null
-		if _mt_state.is_empty():
-			_mt_state.resize(624)
-		var inner_t = t.items[1] as DSLTuple
-		for i in range(624):
-			_mt_state[i] = int((inner_t.items[i] as DSLInteger).value) & 0xFFFFFFFF
-		_mt_index = int((inner_t.items[624] as DSLInteger).value)
-		_gauss_next = t.items[2] if t.items.size() > 2 else null
-		return DSLNone.new()
+		var version_obj = DSLObject._unwrap_dsl(t.items[0])
+		var version := 0
+		if version_obj is DSLInteger:
+			if (version_obj as DSLInteger).is_big():
+				raise_exception("ValueError", "state with version %s passed to Random.setstate() of version 3" % str(t.items[0]))
+				return null
+			version = (version_obj as DSLInteger).value
+		elif version_obj is DSLBool:
+			version = 1 if version_obj.value else 0
+		else:
+			raise_exception("ValueError", "state with version %s passed to Random.setstate() of version 3" % version_obj._type_name())
+			return null
+		if version == 3 or version == 2:
+			if t.items.size() < 3:
+				raise_exception("ValueError", "not enough values to unpack (expected 3, got %d)" % t.items.size())
+				return null
+			if t.items.size() > 3:
+				raise_exception("ValueError", "too many values to unpack (expected 3)")
+				return null
+			var inner = t.items[1]
+			if not (inner is DSLTuple):
+				raise_exception("TypeError", "state vector must be a tuple")
+				return null
+			var inner_t = inner as DSLTuple
+			if inner_t.items.size() != 625:
+				raise_exception("ValueError", "state vector is the wrong size")
+				return null
+			if _mt_state.is_empty():
+				_mt_state.resize(624)
+			for i in range(624):
+				var w = DSLObject._unwrap_dsl(inner_t.items[i])
+				if w is DSLInteger:
+					if (w as DSLInteger).is_big():
+						raise_exception("ValueError", "state vector contains invalid values")
+						return null
+					_mt_state[i] = (w as DSLInteger).value & 0xFFFFFFFF
+				elif w is DSLBool:
+					_mt_state[i] = 1 if w.value else 0
+				else:
+					raise_exception("TypeError", "state vector contains invalid values")
+					return null
+			var idx_obj = DSLObject._unwrap_dsl(inner_t.items[624])
+			if idx_obj is DSLInteger and not (idx_obj as DSLInteger).is_big():
+				_mt_index = (idx_obj as DSLInteger).value
+			elif idx_obj is DSLBool:
+				_mt_index = 1 if idx_obj.value else 0
+			else:
+				raise_exception("TypeError", "state vector contains invalid values")
+				return null
+			_gauss_next = t.items[2] if t.items.size() > 2 and not (t.items[2] is DSLNone) else null
+			return DSLNone.new()
+		raise_exception("ValueError", "state with version %d passed to Random.setstate() of version 3" % version)
+		return null
 
 	## random.getrandbits(k)
 	func _rng_getrandbits(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "getrandbits() takes exactly one argument (%d given)" % args.size())
 			return null
-		var k = _num_val(args[0])
-		if k == null:
-			raise_exception("TypeError", "number of bits must be an integer")
-			return null
+		var k_raw = DSLObject._unwrap_dsl(args[0])
+		var k := 0
+		if k_raw is DSLBool:
+			k = 1 if k_raw.value else 0
+		elif k_raw is DSLInteger:
+			if (k_raw as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return null
+			k = (k_raw as DSLInteger).value
+		else:
+			var idxv = DSLObject._seq_index_int(k_raw, k_raw)
+			if idxv == DSLObject.INDEX_ERR:
+				if not report.has_error:
+					raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % k_raw._type_name())
+				return null
+			k = idxv
 		if k < 0:
-			raise_exception("ValueError", "number of bits must be greater than zero")
+			raise_exception("ValueError", "number of bits must be non-negative")
 			return null
-		return DSLInteger.pooled(_mt_getrandbits(int(k)))
+		if k <= 63:
+			return DSLInteger.pooled(_mt_getrandbits(k))
+		# k > 63: int64 移位会回绕, 改按 32 位小端字逐字产出再组装大数
+		var words = (k - 1) >> 5
+		var limbs: Array[int] = []
+		for w in range(words + 1):
+			var r = _mt_genrand()
+			if w == words:
+				var shift = (words << 5) + 32 - k
+				r = r >> shift if shift < 32 else 0
+			limbs.append(r & 0xFFFFFFFF)
+		DSLBigInt._strip(limbs)
+		return DSLInteger.from_big(false, limbs)
 
 	func _rng_gauss(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() > 2:
@@ -27215,6 +31981,319 @@ class Interpreter:
 			_gauss_next = sin(x2pi) * g2rad
 		return DSLFloat.new(mu + z * sigma)
 
+	## random.triangular(low=0.0, high=1.0, mode=None) - 三角分布采样 [br]
+	## 用 CPython 同款公式 (u>c 时对称折叠, 避免中间量溢出)
+	func _rng_triangular(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 3:
+			raise_exception("TypeError", "triangular() takes at most 3 arguments")
+			return null
+		var low = 0.0
+		var high = 1.0
+		var mode := 0.0
+		var has_mode = false
+		if args.size() >= 1:
+			var lv = _num_val(args[0])
+			if lv == null:
+				raise_exception("TypeError", "triangular() arguments must be numbers")
+				return null
+			low = float(lv)
+		if args.size() >= 2:
+			var hv = _num_val(args[1])
+			if hv == null:
+				raise_exception("TypeError", "triangular() arguments must be numbers")
+				return null
+			high = float(hv)
+		if args.size() >= 3:
+			var mv = _num_val(args[2])
+			if mv == null:
+				raise_exception("TypeError", "triangular() arguments must be numbers")
+				return null
+			mode = float(mv)
+			has_mode = true
+		var u = _rng_float()
+		var c := 0.0
+		if not has_mode:
+			c = 0.5
+		else:
+			if high - low == 0.0:
+				return DSLFloat.new(low)
+			c = (mode - low) / (high - low)
+		if u > c:
+			u = 1.0 - u
+			c = 1.0 - c
+			var tmp = low
+			low = high
+			high = tmp
+		return DSLFloat.new(low + (high - low) * sqrt(u * c))
+
+	## random.randbytes(n) - n 个随机字节
+	func _rng_randbytes(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "randbytes() takes exactly one argument")
+			return null
+		var raw = DSLObject._unwrap_dsl(args[0])
+		var n := 0
+		if raw is DSLBool:
+			n = 1 if raw.value else 0
+		elif raw is DSLInteger:
+			if (raw as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return null
+			n = (raw as DSLInteger).value
+		else:
+			var idxv = DSLObject._seq_index_int(raw, raw)
+			if idxv == DSLObject.INDEX_ERR:
+				if not report.has_error:
+					raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+				return null
+			n = idxv
+		if n < 0:
+			raise_exception("ValueError", "number of bits must be non-negative")
+			return null
+		var data: Array[int] = []
+		for i in range(n):
+			data.append(_mt_genrand() & 0xFF)
+		return DSLBytes.new(data)
+
+	## random.Random 实例的 __new__: 构造独立 PRNG 对象
+	func _rng_inst_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var inst = DSLRandomInstance.new()
+		inst._ip = self
+		return inst
+
+	## random.Random 实例的 __init__: 可选 seed 播种
+	func _rng_inst_init(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var seed_val: DSLObject = null
+		if args.size() > 1 and not (args[1] is DSLNone):
+			seed_val = args[1]
+		inst._inst_seed_auto(seed_val)
+		return DSLNone.new()
+
+	func _rng_inst_seed(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		if args.size() > 1 and not (args[1] is DSLNone):
+			inst._inst_seed_auto(args[1])
+		else:
+			inst._inst_seed_auto(null)
+		return DSLNone.new()
+
+	func _rng_inst_random(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1 or not (args[0] is DSLRandomInstance):
+			return null
+		return DSLFloat.new((args[0] as DSLRandomInstance)._inst_float())
+
+	func _rng_inst_randint(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 3 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var a = int(_num_val(args[1]))
+		var b = int(_num_val(args[2]))
+		# randint 委托 randrange(a, b+1) 的报错形态 (回显 start 与 stop-1)
+		if a > b:
+			raise_exception("ValueError", "empty range in randrange(%d, %d)" % [a, b + 1])
+			return null
+		return DSLInteger.pooled(a + inst._inst_randbelow(b - a + 1))
+
+	func _rng_inst_randrange(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var ints: Array[int] = []
+		for i in range(1, args.size()):
+			ints.append(int(_num_val(args[i])))
+		var start = 0
+		var stop = 0
+		var step = 1
+		if ints.size() == 1:
+			stop = ints[0]
+		elif ints.size() == 2:
+			start = ints[0]
+			stop = ints[1]
+		else:
+			start = ints[0]
+			stop = ints[1]
+			step = ints[2]
+		if step == 0:
+			raise_exception("ValueError", "zero step for randrange()")
+			return null
+		var count = 0
+		if step > 0:
+			count = (stop - start + step - 1) / step
+		else:
+			count = (start - stop - step - 1) / (-step)
+		if count <= 0:
+			raise_exception("ValueError", "empty range in randrange(%d, %d)" % [start, stop])
+			return null
+		return DSLInteger.pooled(start + step * inst._inst_randbelow(count))
+
+	func _rng_inst_uniform(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 3 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var a = float(_num_val(args[1]))
+		var b = float(_num_val(args[2]))
+		return DSLFloat.new(a + (b - a) * inst._inst_float())
+
+	func _rng_inst_choice(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var seq = DSLObject._unwrap_dsl(args[1])
+		if seq is DSLList or seq is DSLTuple:
+			if seq.items.size() == 0:
+				raise_exception("IndexError", "Cannot choose from an empty sequence")
+				return null
+			return seq.items[inst._inst_randbelow(seq.items.size())]
+		if seq is DSLString:
+			if seq.value.length() == 0:
+				raise_exception("IndexError", "Cannot choose from an empty sequence")
+				return null
+			return DSLString.new(seq.value[inst._inst_randbelow(seq.value.length())])
+		raise_exception("TypeError", "choice() argument must be a sequence")
+		return null
+
+	func _rng_inst_shuffle(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var lst = DSLObject._unwrap_dsl(args[1])
+		if not (lst is DSLList):
+			raise_exception("TypeError", "shuffle() argument must be a list")
+			return null
+		var items = (lst as DSLList).items
+		for i in range(items.size() - 1, 0, -1):
+			var j = inst._inst_randbelow(i + 1)
+			var tmp = items[i]
+			items[i] = items[j]
+			items[j] = tmp
+		return DSLNone.new()
+
+	func _rng_inst_getrandbits(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var raw = DSLObject._unwrap_dsl(args[1])
+		var k := 0
+		if raw is DSLInteger:
+			k = (raw as DSLInteger).value
+		elif raw is DSLBool:
+			k = 1 if raw.value else 0
+		else:
+			raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return null
+		if k < 0:
+			raise_exception("ValueError", "number of bits must be non-negative")
+			return null
+		if k <= 63:
+			return DSLInteger.pooled(inst._inst_getrandbits(k))
+		var words = (k - 1) >> 5
+		var limbs: Array[int] = []
+		for w in range(words + 1):
+			var r = inst._inst_genrand()
+			if w == words:
+				var shift = (words << 5) + 32 - k
+				r = r >> shift if shift < 32 else 0
+			limbs.append(r & 0xFFFFFFFF)
+		DSLBigInt._strip(limbs)
+		return DSLInteger.from_big(false, limbs)
+
+	func _rng_inst_triangular(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var call_args: Array[DSLObject] = []
+		for i in range(1, args.size()):
+			call_args.append(args[i])
+		# 复用模块级实现 (仅替换随机源)
+		if call_args.size() == 0:
+			var u = inst._inst_float()
+			var c = 0.5
+			var low = 0.0
+			var high = 1.0
+			return DSLFloat.new(low + (high - low) * sqrt(u * c))
+		raise_exception("TypeError", "triangular() on Random instances supports 0 or 3 arguments")
+		return null
+
+	func _rng_inst_randbytes(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var raw = DSLObject._unwrap_dsl(args[1])
+		var n := 0
+		if raw is DSLInteger:
+			n = (raw as DSLInteger).value
+		elif raw is DSLBool:
+			n = 1 if raw.value else 0
+		else:
+			raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return null
+		if n < 0:
+			raise_exception("ValueError", "number of bits must be non-negative")
+			return null
+		var data: Array[int] = []
+		for i in range(n):
+			data.append(inst._inst_genrand() & 0xFF)
+		return DSLBytes.new(data)
+
+	func _rng_inst_gauss(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var mu := 0.0
+		var sigma := 1.0
+		if args.size() >= 2:
+			mu = float(_num_val(args[1]))
+		if args.size() >= 3:
+			sigma = float(_num_val(args[2]))
+		var z := 0.0
+		if inst._has_gauss:
+			z = inst._gauss_next
+			inst._has_gauss = false
+		else:
+			var x2pi = inst._inst_float() * TAU
+			var g2rad = sqrt(-2.0 * log(1.0 - inst._inst_float()))
+			z = cos(x2pi) * g2rad
+			inst._gauss_next = sin(x2pi) * g2rad
+			inst._has_gauss = true
+		return DSLFloat.new(mu + z * sigma)
+
+	func _rng_inst_getstate(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		inst._inst_ensure()
+		var inner: Array[DSLObject] = []
+		for w in inst._st:
+			inner.append(DSLInteger.pooled(w))
+		inner.append(DSLInteger.pooled(inst._idx))
+		var items: Array[DSLObject] = [DSLInteger.pooled(3), DSLTuple.new(inner)]
+		items.append(DSLFloat.new(inst._gauss_next) if inst._has_gauss else DSLNone.new())
+		return DSLTuple.new(items)
+
+	func _rng_inst_setstate(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2 or not (args[0] is DSLRandomInstance):
+			return null
+		var inst = args[0] as DSLRandomInstance
+		var t = DSLObject._unwrap_dsl(args[1])
+		if not (t is DSLTuple) or (t as DSLTuple).items.size() < 3:
+			raise_exception("ValueError", "state tuple too short")
+			return null
+		var tup = t as DSLTuple
+		inst._inst_ensure()
+		var inner_t = tup.items[1] as DSLTuple
+		for i in range(624):
+			inst._st[i] = int((inner_t.items[i] as DSLInteger).value) & 0xFFFFFFFF
+		inst._idx = int((inner_t.items[624] as DSLInteger).value)
+		inst._has_gauss = not (tup.items[2] is DSLNone)
+		if inst._has_gauss:
+			inst._gauss_next = float((tup.items[2] as DSLFloat).value)
+		return DSLNone.new()
+
 	## 收集数值数组, 同时记录是否全部为整数 (用于匹配 Python 3.12 的返回类型) [br]
 	## [param data] 数据对象 (list/tuple/set 等) [br]
 	## [returns] [code][数值数组, 是否全部为 int][/code]
@@ -27247,21 +32326,130 @@ class Interpreter:
 			return DSLInteger.pooled(int(v))
 		return DSLFloat.new(v)
 
+	## 精确有理数管线 (mean/variance 家族, CPython Fraction 语义)
+	## 数据点转精确有理数 [num, den] (den > 0, 已约分); 非数值返回 [null, null] 且已报错 [br]
+	## 整数直接承载, 浮点按 m×2^ep 精确二进制分解
+	func _stat_exact_parts(v: DSLObject) -> Array:
+		var a = DSLObject._unwrap_dsl(v)
+		if a is DSLBool:
+			return [DSLInteger.pooled(1 if a.value else 0), DSLInteger.pooled(1)]
+		if a is DSLInteger:
+			return [a, DSLInteger.pooled(1)]
+		if a is DSLFloat:
+			var fv = a.value
+			if fv == 0.0:
+				return [DSLInteger.pooled(0), DSLInteger.pooled(1)]
+			var neg = fv < 0.0
+			var dec = DSLObject._decompose_double(absf(fv))
+			var m: int = dec[0]
+			var ep: int = dec[1]
+			var num: DSLObject
+			var den: DSLObject
+			if ep >= 0:
+				num = DSLInteger.pooled(m).magic_lshift([DSLInteger.pooled(m), DSLInteger.pooled(ep)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				den = DSLInteger.pooled(1)
+			else:
+				num = DSLInteger.pooled(m)
+				den = DSLInteger.pooled(1).magic_lshift([DSLInteger.pooled(1), DSLInteger.pooled(-ep)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if neg:
+				num = num.magic_neg([num] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			return _stat_r_reduce(num, den)
+		raise_exception("TypeError", "statistics functions require numeric data")
+		return [null, null]
+
+	## 有理数约分: 分母归一为正并除以 gcd
+	func _stat_r_reduce(num: DSLObject, den: DSLObject) -> Array:
+		var d: DSLInteger = den as DSLInteger
+		if d.is_big() and d.big_neg or (not d.is_big() and d.value < 0):
+			num = num.magic_neg([num] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			d = d.magic_neg([d] as Array[DSLObject], {} as Dictionary[String, DSLObject]) as DSLInteger
+		var g = _big_gcd(_math_abs_int(num as DSLInteger), d)
+		if g != null and not (g is DSLInteger and not (g as DSLInteger).is_big() and (g as DSLInteger).value == 1):
+			num = num.magic_floordiv([num, g] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			d = d.magic_floordiv([d, g] as Array[DSLObject], {} as Dictionary[String, DSLObject]) as DSLInteger
+		return [num, d]
+
+	func _stat_r_add(a: Array, b: Array) -> Array:
+		var n1 = (a[0] as DSLInteger).magic_mul([a[0], b[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var n2 = (b[0] as DSLInteger).magic_mul([b[0], a[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var num = n1.magic_add([n1, n2] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var den = (a[1] as DSLInteger).magic_mul([a[1], b[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return _stat_r_reduce(num, den)
+
+	func _stat_r_sub(a: Array, b: Array) -> Array:
+		var n1 = (a[0] as DSLInteger).magic_mul([a[0], b[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var n2 = (b[0] as DSLInteger).magic_mul([b[0], a[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var num = n1.magic_sub([n1, n2] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var den = (a[1] as DSLInteger).magic_mul([a[1], b[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return _stat_r_reduce(num, den)
+
+	func _stat_r_mul(a: Array, b: Array) -> Array:
+		var num = (a[0] as DSLInteger).magic_mul([a[0], b[0]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var den = (a[1] as DSLInteger).magic_mul([a[1], b[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return _stat_r_reduce(num, den)
+
+	func _stat_r_div(a: Array, b: Array) -> Array:
+		var num = (a[0] as DSLInteger).magic_mul([a[0], b[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var den = (a[1] as DSLInteger).magic_mul([a[1], b[0]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return _stat_r_reduce(num, den)
+
+	## DSLInteger → float (大数经 mag_to_float 正确舍入)
+	func _stat_int_to_float(x: DSLInteger) -> float:
+		if not x.is_big():
+			return float(x.value)
+		return DSLBigInt.mag_to_float(x.big_neg, x.big_limbs)[1]
+
+	## 有理数 → float (约分后分子分母小整数走快路径精确除, 大数经正确舍入近似)
+	func _stat_r_to_float(a: Array) -> DSLObject:
+		var num: DSLInteger = a[0]
+		var den: DSLInteger = a[1]
+		if not num.is_big() and not den.is_big():
+			return DSLFloat.new(float(num.value) / float(den.value))
+		return DSLFloat.new(_stat_int_to_float(num) / _stat_int_to_float(den))
+
+	## 收集数据点为精确有理数列表 + all_int 标志
+	func _stat_collect_exact(data: DSLObject) -> Array:
+		var points: Array = []
+		var all_int = true
+		var it = data._dsl_iter()
+		if it == null:
+			raise_exception("TypeError", "statistics functions require an iterable")
+			return [points, false]
+		while it.has_next():
+			var v = it.next()
+			if it.suspended:
+				break
+			var p = _stat_exact_parts(v)
+			if p[0] == null:
+				return [points, false]
+			if not (DSLObject._unwrap_dsl(v) is DSLInteger):
+				all_int = false
+			points.append(p)
+		return [points, all_int]
+
+	## 精确有理数结果 → 返回对象 (整数输入且约分后分母为 1 → DSLInteger, 否则 DSLFloat)
+	func _stat_exact_result(a: Array, all_int: bool) -> DSLObject:
+		var den: DSLInteger = a[1]
+		if all_int and not den.is_big() and den.value == 1:
+			return a[0]
+		return _stat_r_to_float(a)
+
 	## statistics.mean(data)
 	func _stat_mean(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "mean() takes exactly one argument")
 			return null
-		var collected = _collect_nums(args[0])
-		var nums: Array = collected[0]
+		var collected = _stat_collect_exact(args[0])
+		var points: Array = collected[0]
 		var all_int: bool = collected[1]
-		if nums.size() == 0:
+		if points.size() == 0:
 			raise_exception("StatisticsError", "mean requires at least one data point")
 			return null
-		var total = 0.0
-		for n in nums:
-			total += n
-		return _stat_num_result(total / nums.size(), all_int)
+		var s: Array = [DSLInteger.pooled(0), DSLInteger.pooled(1)]
+		for p in points:
+			s = _stat_r_add(s, p)
+		var res = _stat_r_div(s, [DSLInteger.pooled(points.size()), DSLInteger.pooled(1)])
+		return _stat_exact_result(res, all_int)
 
 	## statistics.median(data)
 	func _stat_median(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -27279,6 +32467,71 @@ class Interpreter:
 		if n % 2 == 1:
 			return _stat_num_result(nums[n / 2], all_int)
 		return _stat_num_result((nums[n / 2 - 1] + nums[n / 2]) / 2.0, all_int)
+
+	## statistics.fmean(data) - 浮点均值 (始终返回 float)
+	func _stat_fmean(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "fmean() takes exactly one argument")
+			return null
+		var collected = _collect_nums(args[0])
+		var nums: Array = collected[0]
+		if report.has_error:
+			return null
+		if nums.size() == 0:
+			raise_exception("StatisticsError", "fmean requires at least one data point")
+			return null
+		var s = 0.0
+		for n in nums:
+			s += float(n)
+		return DSLFloat.new(s / float(nums.size()))
+
+	## statistics.geometric_mean(data) - 几何均值
+	func _stat_geometric_mean(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "geometric_mean() takes exactly one argument")
+			return null
+		var collected = _collect_nums(args[0])
+		var nums: Array = collected[0]
+		if report.has_error:
+			return null
+		if nums.size() == 0:
+			raise_exception("StatisticsError", "geometric mean requires a non-empty dataset containing positive numbers")
+			return null
+		for n in nums:
+			if float(n) <= 0.0:
+				raise_exception("StatisticsError", "geometric mean requires a non-empty dataset containing positive numbers")
+				return null
+		var s = 0.0
+		var c = 0.0
+		for n in nums:
+			var y = log(float(n)) - c
+			var t = s + y
+			c = (t - s) - y
+			s = t
+		return DSLFloat.new(exp(s / float(nums.size())))
+
+	## statistics.harmonic_mean(data) - 调和均值
+	func _stat_harmonic_mean(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "harmonic_mean() takes exactly one argument")
+			return null
+		var collected = _collect_nums(args[0])
+		var nums: Array = collected[0]
+		if report.has_error:
+			return null
+		if nums.size() == 0:
+			raise_exception("StatisticsError", "harmonic_mean requires at least one data point")
+			return null
+		var s = 0.0
+		for n in nums:
+			var f = float(n)
+			if f < 0.0:
+				raise_exception("StatisticsError", "harmonic mean does not support negative values")
+				return null
+			if f == 0.0:
+				return DSLInteger.pooled(0)
+			s += 1.0 / f
+		return DSLFloat.new(float(nums.size()) / s)
 
 	## statistics.mode(data) - 返回出现次数最多的元素
 	func _stat_mode(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -27324,90 +32577,139 @@ class Interpreter:
 		return counts[best_key]["obj"]
 
 	## statistics.variance(data) - 样本方差 (n-1)
-	func _stat_variance(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject], err_type: String = "StatisticsError", err_msg: String = "variance() requires at least two data points") -> DSLObject:
+	func _stat_variance(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject], ddof: int = 1, err_type: String = "StatisticsError", err_msg: String = "variance() requires at least two data points") -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "variance() takes exactly one argument")
 			return null
-		var collected = _collect_nums(args[0])
-		var nums: Array = collected[0]
+		var collected = _stat_collect_exact(args[0])
+		var points: Array = collected[0]
 		var all_int: bool = collected[1]
-		if nums.size() < 2:
+		if points.size() <= ddof:
 			raise_exception(err_type, err_msg)
 			return null
-		var mean = 0.0
-		for n in nums:
-			mean += n
-		mean /= nums.size()
-		var sq = 0.0
-		for n in nums:
-			var d = n - mean
-			sq += d * d
-		return _stat_num_result(sq / (nums.size() - 1), all_int)
+		# 方差 = (Σx² - (Σx)²/n) / (n-ddof), 全部经精确有理数 (CPython Fraction 语义)
+		var sum_r: Array = [DSLInteger.pooled(0), DSLInteger.pooled(1)]
+		var sq_r: Array = [DSLInteger.pooled(0), DSLInteger.pooled(1)]
+		for p in points:
+			sum_r = _stat_r_add(sum_r, p)
+			sq_r = _stat_r_add(sq_r, _stat_r_mul(p, p))
+		var n_r: Array = [DSLInteger.pooled(points.size()), DSLInteger.pooled(1)]
+		var sum_sq_over_n = _stat_r_div(_stat_r_mul(sum_r, sum_r), n_r)
+		var diff = _stat_r_sub(sq_r, sum_sq_over_n)
+		var res = _stat_r_div(diff, [DSLInteger.pooled(points.size() - ddof), DSLInteger.pooled(1)])
+		return _stat_exact_result(res, all_int)
 
 	## statistics.stdev(data) - 样本标准差
 	func _stat_stdev(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var v = _stat_variance(args, _kwargs, "StatisticsError", "stdev requires at least two data points")
-		var vnum = v.value if (v is DSLInteger or v is DSLFloat) else 0.0
-		return DSLFloat.new(sqrt(float(vnum)))
+		var v = _stat_variance(args, _kwargs, 1, "StatisticsError", "stdev requires at least two data points")
+		if v == null:
+			return null
+		var vnum = 0.0
+		if v is DSLFloat:
+			vnum = v.value
+		elif v is DSLInteger:
+			vnum = _stat_int_to_float(v as DSLInteger)
+		return DSLFloat.new(sqrt(vnum))
 
 	## statistics.pvariance(data) - 总体方差 (n)
 	func _stat_pvariance(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if args.size() != 1:
-			raise_exception("TypeError", "pvariance() takes exactly one argument")
-			return null
-		var collected = _collect_nums(args[0])
-		var nums: Array = collected[0]
-		var all_int: bool = collected[1]
-		if nums.size() == 0:
-			raise_exception("StatisticsError", "pvariance() requires at least one data point")
-			return null
-		var mean = 0.0
-		for n in nums:
-			mean += n
-		mean /= nums.size()
-		var sq = 0.0
-		for n in nums:
-			var d = n - mean
-			sq += d * d
-		return _stat_num_result(sq / nums.size(), all_int)
+		return _stat_variance(args, _kwargs, 0, "StatisticsError", "pvariance() requires at least one data point")
 
 	## statistics.pstdev(data) - 总体标准差
 	func _stat_pstdev(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var v = _stat_pvariance(args, _kwargs)
-		var vnum = v.value if (v is DSLInteger or v is DSLFloat) else 0.0
-		return DSLFloat.new(sqrt(float(vnum)))
+		var v = _stat_variance(args, _kwargs, 0, "StatisticsError", "pstdev() requires at least one data point")
+		if v == null:
+			return null
+		var vnum = 0.0
+		if v is DSLFloat:
+			vnum = v.value
+		elif v is DSLInteger:
+			vnum = _stat_int_to_float(v as DSLInteger)
+		return DSLFloat.new(sqrt(vnum))
 
 	## statistics.quantiles(data, n=4) [br]
 	## 按 exclusive 方法返回 n-1 个分位切点, 数据点少于 2 个时抛 StatisticsError
 	func _stat_quantiles(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if args.size() < 1 or args.size() > 2:
-			raise_exception("TypeError", "quantiles() takes 1 or 2 arguments")
+		if args.size() == 0:
+			raise_exception("TypeError", "quantiles() missing 1 required positional argument: 'data'")
+			return null
+		if args.size() > 1:
+			raise_exception("TypeError", "quantiles() takes 1 positional argument but %d were given" % args.size())
 			return null
 		var collected = _collect_nums(args[0])
 		var nums: Array = collected[0]
 		if report.has_error:
 			return null
 		var n = 4
-		if args.size() == 2:
-			n = int(_num_val_or(args[1], 4.0))
 		if kwargs.has("n"):
-			n = int(_num_val_or(kwargs["n"], 4.0))
+			n = _stat_quantiles_n(kwargs["n"])
+			if report.has_error:
+				return null
 		if n < 1:
-			raise_exception("ValueError", "n must be at least 1")
+			raise_exception("StatisticsError", "n must be at least 1")
 			return null
 		if nums.size() < 2:
 			raise_exception("StatisticsError", "must have at least two data points")
 			return null
 		nums.sort()
 		var ld = nums.size()
-		var m = ld + 1
+		var method = "exclusive"
+		var method_display = "exclusive"
+		if kwargs.has("method"):
+			var mraw = DSLObject._unwrap_dsl(kwargs["method"])
+			if mraw is DSLString:
+				method = mraw.value
+				method_display = "'%s'" % mraw.value
+			else:
+				method = DSLObject._py_repr(mraw)
+				method_display = method
 		var result = DSLList.new()
-		for i in range(1, n):
-			var j = int(floor(float(i * m) / float(n)))
-			var delta = i * m - j * n
-			var interpolated = (float(nums[j - 1]) * float(n - delta) + float(nums[j]) * float(delta)) / float(n)
-			result.items.append(DSLFloat.new(interpolated))
+		if method == "inclusive":
+			# CPython: 把 data 视为总体数据, 最小值作 0 分位, 最大值作 100 分位
+			var m = ld - 1
+			for i in range(1, n):
+				var j = (i * m) / n
+				var delta = i * m - j * n
+				var interpolated = (float(nums[j]) * float(n - delta) + float(nums[j + 1]) * float(delta)) / float(n)
+				result.items.append(DSLFloat.new(interpolated))
+		elif method == "exclusive":
+			# CPython: 采样数据, j 需钳制到 1 .. ld-1 (越界保护)
+			var m = ld + 1
+			for i in range(1, n):
+				var j = (i * m) / n
+				if j < 1:
+					j = 1
+				elif j > ld - 1:
+					j = ld - 1
+				var delta = i * m - j * n
+				var interpolated = (float(nums[j - 1]) * float(n - delta) + float(nums[j]) * float(delta)) / float(n)
+				result.items.append(DSLFloat.new(interpolated))
+		else:
+			raise_exception("ValueError", "Unknown method: %s" % method_display)
+			return null
 		return result
+
+	## quantiles 的 n 实参归一: 必须为整数 (bool 按 0/1), 浮点按 CPython 报 TypeError [br]
+	## [param v] n 实参 [br]
+	## [returns] 归一后的整数
+	func _stat_quantiles_n(v: DSLObject) -> int:
+		var raw = DSLObject._unwrap_dsl(v)
+		if raw is DSLBool:
+			return 1 if raw.value else 0
+		if raw is DSLInteger:
+			if (raw as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return 0
+			return (raw as DSLInteger).value
+		if raw is DSLFloat:
+			raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
+			return 0
+		var idxv = DSLObject._seq_index_int(raw, raw)
+		if idxv == DSLObject.INDEX_ERR:
+			if not report.has_error:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return 0
+		return idxv
 
 	## functools.reduce(func, iterable[, initial])
 	func _ft_reduce(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -27465,6 +32767,170 @@ class Interpreter:
 			return null
 		return DSLCmpKey.new(null, cmp_func)
 
+	## functools.wraps(wrapped) - 返回装饰器, 把 wrapped 的元数据复制到被装饰函数 [br]
+	## [param args] [wrapped] [br]
+	## [returns] 装饰器 (接受被装饰函数并返回之)
+	func _ft_wraps(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "wraps() takes exactly one argument")
+			return null
+		# Callable.bind 与 callv 组合在宿主中失效, 经成员暂存传递被包装函数
+		_ft_wraps_src = args[0]
+		var dec = DSLBuiltinFunction.new("wraps", Callable(self, "_ft_wraps_decorate"))
+		dec.func_attrs["__name__"] = DSLString.new("wraps")
+		return dec
+
+	## wraps 装饰器的实际装饰动作: 复制 wrapped 元数据到被装饰函数 [br]
+	## [param args] 装饰器调用实参 (首个为被装饰函数) [br]
+	## [returns] 被装饰函数
+	func _ft_wraps_decorate(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var wrapped = _ft_wraps_src
+		if args.size() == 0 or wrapped == null:
+			return null
+		var g = DSLObject._unwrap_dsl(args[0])
+		if g is DSLFunction:
+			var wname = wrapped._dsl_getattribute("__name__")
+			if wname is DSLString:
+				g.fields["__wrapped_name__"] = (wname as DSLString).value
+			wrapped.last_error = ""
+			var wdoc = wrapped._dsl_getattribute("__doc__")
+			wrapped.last_error = ""
+			g.fields["__wrapped_doc__"] = (wdoc as DSLString).value if wdoc is DSLString else ""
+			g.fields["__wrapped__"] = wrapped
+		return g
+
+	## functools.lru_cache(maxsize=None, typed=False) [br]
+	## 返回带 LRU 语义缓存的函数包装; 直接用 @lru_cache (无括号) 时按默认参数 [br]
+	## [param args] 可空: 直接传函数对象时作装饰器用 [br]
+	## [returns] 装饰器或缓存函数对象
+	func _ft_lru_cache(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		# @lru_cache 无括号形态: 实参为函数对象, 直接当作装饰器 (默认 maxsize=128)
+		if args.size() == 1 and (args[0] is DSLFunction or args[0] is DSLBuiltinFunction or args[0] is DSLPartial or args[0] is DSLClass):
+			var direct = DSLLruFunc.new(args[0], self, 128)
+			return direct
+		var maxsize_val: DSLObject = null
+		if args.size() >= 1:
+			maxsize_val = args[0]
+		if kwargs.has("maxsize"):
+			maxsize_val = kwargs["maxsize"]
+		_ft_lru_maxsize = 128
+		if maxsize_val != null:
+			var mraw = DSLObject._unwrap_dsl(maxsize_val)
+			if mraw is DSLNone:
+				_ft_lru_maxsize = null
+			else:
+				_ft_lru_maxsize = _num_val(maxsize_val)
+				if _ft_lru_maxsize == null:
+					raise_exception("TypeError", "maxsize should be integer or None")
+					return null
+		_ft_lru_typed = false
+		if kwargs.has("typed") and kwargs["typed"] is DSLBool:
+			_ft_lru_typed = kwargs["typed"].value
+		# Callable.bind 与 callv 组合在宿主中失效, 经成员暂存传递参数
+		var dec = DSLBuiltinFunction.new("lru_cache", Callable(self, "_ft_lru_wrap"))
+		dec.func_attrs["__name__"] = DSLString.new("lru_cache")
+		return dec
+
+	## lru_cache 装饰器包装函数: 返回缓存函数对象 [br]
+	## [param args] 装饰器调用实参 (首个为被装饰函数) [br]
+	## [returns] 缓存函数对象
+	func _ft_lru_wrap(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() == 0:
+			return null
+		var obj = DSLLruFunc.new(args[0], self, -1)
+		obj.maxsize = _ft_lru_maxsize
+		obj.typed = _ft_lru_typed
+		return obj
+
+	## functools.singledispatch(func) - 单分派泛型函数 [br]
+	## 返回可分派调用且带 register 方法的函数对象 [br]
+	## [param args] 首个为默认实现函数 [br]
+	## [returns] 分派函数对象
+	func _ft_singledispatch(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 1:
+			raise_exception("TypeError", "singledispatch() takes exactly one argument")
+			return null
+		var id = _sd_counter
+		_sd_counter += 1
+		_sd_registries[id] = {"default": args[0], "regs": {}}
+		# Callable.bind 与 callv 组合在宿主中失效, 经 func_attrs + __self__ 注入传递 id
+		var dispatch = DSLBuiltinFunction.new("singledispatch", Callable(self, "_sd_dispatch"))
+		dispatch.func_attrs["_id"] = DSLInteger.pooled(id)
+		dispatch.__self__ = dispatch
+		var reg = DSLBuiltinFunction.new("register", Callable(self, "_sd_register"))
+		reg.func_attrs["_id"] = DSLInteger.pooled(id)
+		reg.__self__ = reg
+		dispatch.func_attrs["register"] = reg
+		dispatch.func_attrs["__wrapped__"] = args[0]
+		return dispatch
+
+	## 分派调用: 按首实参类型名沿注册表分派, 无匹配回落默认实现 [br]
+	## [param args] 首项为 dispatch 对象 (经 __self__ 注入), 其后为真实实参
+	func _sd_dispatch(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var disp = DSLObject._unwrap_dsl(args[0]) if args.size() > 0 else null
+		var id = 0
+		if disp != null and disp is DSLBuiltinFunction and (disp as DSLBuiltinFunction).func_attrs.has("_id"):
+			id = ((disp as DSLBuiltinFunction).func_attrs["_id"] as DSLInteger).value
+		var regs: Dictionary = _sd_registries[id]["regs"]
+		var default_fn: DSLObject = _sd_registries[id]["default"]
+		var real_args: Array[DSLObject] = []
+		for i in range(1, args.size()):
+			real_args.append(args[i])
+		var av = DSLObject._unwrap_dsl(real_args[0]) if real_args.size() > 0 else null
+		var fn: DSLObject = null
+		if av != null:
+			var tn = av.klass.name if (av.klass != null and not (av is DSLDict)) else av._type_name()
+			if regs.has(tn):
+				fn = regs[tn]
+			elif av.klass != null:
+				for k in av.klass.mro:
+					if regs.has(k.name):
+						fn = regs[k.name]
+						break
+		if fn == null:
+			fn = default_fn
+		return fn.magic_call(real_args, kwargs)
+
+	## register(类型) 入口: 返回注册装饰器 [br]
+	## [param args] 首项为 register 对象 (经 __self__ 注入), 其后为真实实参
+	func _sd_register(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2:
+			raise_exception("TypeError", "register() takes exactly one argument")
+			return null
+		var reg_obj = DSLObject._unwrap_dsl(args[0])
+		var id = 0
+		if reg_obj is DSLBuiltinFunction and (reg_obj as DSLBuiltinFunction).func_attrs.has("_id"):
+			id = ((reg_obj as DSLBuiltinFunction).func_attrs["_id"] as DSLInteger).value
+		var av = DSLObject._unwrap_dsl(args[1])
+		var tn = ""
+		if av is DSLClass:
+			tn = (av as DSLClass).name
+		else:
+			tn = av.klass.name if (av.klass != null and not (av is DSLDict)) else av._type_name()
+		var dec = DSLBuiltinFunction.new("register", Callable(self, "_sd_register_fn"))
+		dec.func_attrs["_id"] = DSLInteger.pooled(id)
+		dec.func_attrs["_tn"] = DSLString.new(tn)
+		dec.__self__ = dec
+		return dec
+
+	## 注册装饰器动作: 把函数登记到类型名下并返回 [br]
+	## [param args] 首项为注册装饰器 (经 __self__ 注入), 其后为被注册函数
+	func _sd_register_fn(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 2:
+			return null
+		var dec_obj = DSLObject._unwrap_dsl(args[0])
+		var id = 0
+		var tn = ""
+		if dec_obj is DSLBuiltinFunction:
+			var fattr = (dec_obj as DSLBuiltinFunction).func_attrs
+			if fattr.has("_id"):
+				id = (fattr["_id"] as DSLInteger).value
+			if fattr.has("_tn"):
+				tn = (fattr["_tn"] as DSLString).value
+		var regs: Dictionary = _sd_registries[id]["regs"]
+		regs[tn] = args[1]
+		return args[1]
+
 	## itertools.chain(*iterables)
 	## itertools.tee(iterable, n=2) - 拆分为 n 个独立游标的迭代器 [br]
 	## 共享一个惰性缓冲, 任一游标越前时驱动源迭代器补位
@@ -27492,47 +32958,53 @@ class Interpreter:
 		var nested = args[0]
 		if nested._wrapped != null:
 			nested = nested._wrapped
-		var result = DSLList.new()
 		var outer = nested._dsl_iter()
 		if outer == null:
 			raise_exception("TypeError", "from_iterable() argument must be iterable")
 			return null
-		while outer.has_next():
-			var item = outer.next()
-			if item == null:
-				if outer.suspended:
-					break
-			var it = item._dsl_iter()
-			if it == null:
-				raise_exception("TypeError", "from_iterable() arguments must be iterable")
-				return null
-			while it.has_next():
-				result.items.append(it.next())
-				if it.suspended:
-					break
-		return result
+		outer.windowed = false
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItChainFromIterableObject.new(outer, self))
 
 	func _it_chain(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var result = DSLList.new()
+		var its: Array = []
 		for arg in args:
 			var it = arg._dsl_iter()
 			if it == null:
 				raise_exception("TypeError", "chain() arguments must be iterable")
 				return null
-			while it.has_next():
-				result.items.append(it.next())
-				if it.suspended:
-					break
-		return result
+			# 源迭代器退出语句消费窗口 (重放轮由本对象日志重读, 续拉按源自身进度推进)
+			it.windowed = false
+			its.append(it)
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItChainObject.new(its, self))
 
 	## itertools.product(*iterables) - 笛卡尔积
 	func _it_product(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var pools: Array = []
 		# repeat=n: 同一可迭代对象重复 n 份 (CPython 语义)
 		if _kwargs.has("repeat"):
-			var rep_n = (_kwargs["repeat"] as DSLInteger).value
+			# repeat 数值实参校验 — 大数报 OverflowError, 浮点/非整数报 TypeError,
+			# 负数报 ValueError (CPython 文案), bool 按 int
+			var rep_arg = DSLObject._unwrap_dsl(_kwargs["repeat"])
+			var rep_n := 0
+			if rep_arg is DSLBool:
+				rep_n = 1 if rep_arg.value else 0
+			elif rep_arg is DSLInteger:
+				var oi = rep_arg as DSLInteger
+				if oi.is_big():
+					raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+					return null
+				rep_n = oi.value
+			elif rep_arg is DSLFloat:
+				raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
+				return null
+			else:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % rep_arg._type_name())
+				return null
 			if rep_n < 0:
-				rep_n = 0
+				raise_exception("ValueError", "repeat argument cannot be negative")
+				return null
 			var orig_args: Array[DSLObject] = []
 			orig_args.append_array(args)
 			args = args.duplicate()
@@ -27550,27 +33022,8 @@ class Interpreter:
 				if it.suspended:
 					break
 			pools.append(items)
-		var result = DSLList.new()
-		var idx: Array = []
-		for i in range(pools.size()):
-			idx.append(0)
-		# 迭代笛卡尔积 (类似多进制计数器)
-		while true:
-			var row: Array[DSLObject] = []
-			for i in range(pools.size()):
-				row.append(pools[i][idx[i]])
-			result.items.append(DSLTuple.new(row))
-			# 递增计数器
-			var carry = pools.size() - 1
-			while carry >= 0:
-				idx[carry] += 1
-				if idx[carry] < pools[carry].size():
-					break
-				idx[carry] = 0
-				carry -= 1
-			if carry < 0:
-				break
-		return result
+		# 惰性迭代器 (组合行逐次产出, 空池立即结束)
+		return _memo_generator(_current_call_node, DSLItProductObject.new(pools, self))
 
 	## itertools.combinations(iterable, r)
 	func _it_combinations(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -27586,25 +33039,28 @@ class Interpreter:
 			items.append(it.next())
 			if it.suspended:
 				break
-		var r = int(_num_val(args[1]))
-		var result = DSLList.new()
-		if r < 0 or r > items.size():
-			return result
-		_combinations_recursive(items, r, 0, [], result)
-		return result
-
-	## 递归生成组合
-	func _combinations_recursive(items: Array, r: int, start: int, cur: Array, result: DSLList):
-		if cur.size() == r:
-			var typed: Array[DSLObject] = []
-			for e in cur:
-				typed.append(e)
-			result.items.append(DSLTuple.new(typed))
-			return
-		for i in range(start, items.size()):
-			cur.append(items[i])
-			_combinations_recursive(items, r, i + 1, cur, result)
-			cur.pop_back()
+		# 数值实参校验 — 大数报 OverflowError, 浮点/非整数报 TypeError, 负数报 ValueError
+		var r_arg = DSLObject._unwrap_dsl(args[1])
+		var r := 0
+		if r_arg is DSLBool:
+			r = 1 if r_arg.value else 0
+		elif r_arg is DSLInteger:
+			var oi = r_arg as DSLInteger
+			if oi.is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return null
+			r = oi.value
+		elif r_arg is DSLFloat:
+			raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
+			return null
+		else:
+			raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % r_arg._type_name())
+			return null
+		if r < 0:
+			raise_exception("ValueError", "r must be non-negative")
+			return null
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItCombinationsObject.new(items, r, self))
 
 	## itertools.permutations(iterable[, r])
 	func _it_permutations(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -27622,32 +33078,24 @@ class Interpreter:
 				break
 		var r = items.size()
 		if args.size() == 2:
-			r = int(_num_val(args[1]))
-		var result = DSLList.new()
-		if r < 0 or r > items.size():
-			return result
-		var used: Array = []
-		for i in range(items.size()):
-			used.append(false)
-		_permutations_recursive(items, r, [], used, result)
-		return result
-
-	## 递归生成排列
-	func _permutations_recursive(items: Array, r: int, cur: Array, used: Array, result: DSLList):
-		if cur.size() == r:
-			var typed: Array[DSLObject] = []
-			for e in cur:
-				typed.append(e)
-			result.items.append(DSLTuple.new(typed))
-			return
-		for i in range(items.size()):
-			if used[i]:
-				continue
-			used[i] = true
-			cur.append(items[i])
-			_permutations_recursive(items, r, cur, used, result)
-			cur.pop_back()
-			used[i] = false
+			# r 数值实参校验 (permutations 浮点文案为 "Expected int as r")
+			var r_arg = DSLObject._unwrap_dsl(args[1])
+			if r_arg is DSLBool:
+				r = 1 if r_arg.value else 0
+			elif r_arg is DSLInteger:
+				var oi = r_arg as DSLInteger
+				if oi.is_big():
+					raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+					return null
+				r = oi.value
+			else:
+				raise_exception("TypeError", "Expected int as r")
+				return null
+		if r < 0:
+			raise_exception("ValueError", "r must be non-negative")
+			return null
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItPermutationsObject.new(items, r, self))
 
 	## itertools.islice(iterable, stop) / (iterable, start, stop[, step]) [br]
 	## 惰性消费源迭代器, 仅取到 stop 为止, 因此可作用于无限迭代器 (repeat/cycle/count)
@@ -27655,36 +33103,65 @@ class Interpreter:
 		if args.size() < 2 or args.size() > 4:
 			raise_exception("TypeError", "islice() takes 2 to 4 arguments")
 			return null
+		# CPython 校验: 三类下标须为 None 或 [0, sys.maxsize] 内整数 (bool 按 int),
+		# 浮点/负数/超界大数一律 ValueError, 文案按 start/stop/step 三形态区分
 		var start = 0
-		var stop = 0
+		var stop = -1
 		var step = 1
 		if args.size() == 2:
-			stop = int(_num_val(args[1]))
+			var sv = _islice_index(args[1], "Stop argument for islice()")
+			if sv == null:
+				return null
+			stop = sv
 		else:
-			start = int(_num_val(args[1]))
-			stop = int(_num_val(args[2]))
+			var sv2 = _islice_index(args[1], "Indices for islice()")
+			if sv2 == null:
+				return null
+			start = sv2
+			var sv3 = _islice_index(args[2], "Stop argument for islice()")
+			if sv3 == null:
+				return null
+			stop = sv3
 			if args.size() == 4:
-				step = int(_num_val(args[3]))
-		if step <= 0:
-			raise_exception("ValueError", "islice() step must be positive")
-			return null
+				if args[3] is DSLNone:
+					step = -1
+				elif args[3] is DSLInteger and not (args[3] as DSLInteger).is_big() and (args[3] as DSLInteger).value > 0:
+					step = (args[3] as DSLInteger).value
+				else:
+					raise_exception("ValueError", "Step for islice() must be a positive integer or None.")
+					return null
+		var has_stop = stop != -1
 		var it = args[0]._dsl_iter()
 		if it == null:
 			raise_exception("TypeError", "islice() argument 1 must be iterable")
 			return null
 		var result = DSLList.new()
 		var idx = 0
-		var lower = max(start, 0)
 		while it.has_next():
 			var v = it.next()
 			if it.suspended:
 				break
-			if idx >= lower and idx < stop and (idx - start) % step == 0:
+			if idx >= start and (not has_stop or idx < stop) and step > 0 and (idx - start) % step == 0:
 				result.items.append(v)
 			idx += 1
-			if idx >= stop:
+			if has_stop and idx >= stop:
 				break
 		return result
+
+	## islice 下标校验: None -> -1 哨兵 (无限), 合法整数 -> 值, 其余按 CPython 文案报错
+	func _islice_index(arg: DSLObject, msg_prefix: String):
+		if arg is DSLNone:
+			return -1
+		if arg is DSLBool:
+			return 1 if (arg as DSLBool).value else 0
+		if arg is DSLInteger:
+			var oi = arg as DSLInteger
+			if oi.is_big() or oi.value < 0 or oi.value > 9223372036854775807:
+				raise_exception("ValueError", "%s must be None or an integer: 0 <= x <= sys.maxsize." % msg_prefix)
+				return null
+			return oi.value
+		raise_exception("ValueError", "%s must be None or an integer: 0 <= x <= sys.maxsize." % msg_prefix)
+		return null
 
 	## itertools.repeat(obj[, times]) - 重复对象, 指定 times 返回列表, 否则返回无限对象 [br]
 	## 无限形式需配合 islice/takewhile 使用
@@ -27694,7 +33171,23 @@ class Interpreter:
 			return null
 		var value = args[0]
 		if args.size() == 2:
-			var times = int(_num_val(args[1]))
+			# times 实参校验 — 大数/超界报 OverflowError, 浮点/非整数报 TypeError, bool 按 int
+			var a = DSLObject._unwrap_dsl(args[1])
+			var times := -1
+			if a is DSLBool:
+				times = 1 if a.value else 0
+			elif a is DSLInteger:
+				var oi = a as DSLInteger
+				if oi.is_big():
+					raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+					return null
+				times = oi.value
+			elif a is DSLFloat:
+				raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
+				return null
+			else:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % a._type_name())
+				return null
 			var result = DSLList.new()
 			for i in range(times):
 				result.items.append(value)
@@ -27726,13 +33219,30 @@ class Interpreter:
 		if args.size() > 2:
 			raise_exception("TypeError", "count() takes at most 2 arguments")
 			return null
-		var start = 0
-		var step = 1
+		var start: DSLObject = DSLInteger.pooled(0)
+		var step: DSLObject = DSLInteger.pooled(1)
 		if args.size() >= 1:
-			start = int(_num_val(args[0]))
+			start = _count_num(args[0])
+			if start == null:
+				return null
 		if args.size() == 2:
-			step = int(_num_val(args[1]))
+			step = _count_num(args[1])
+			if step == null:
+				return null
 		return DSLCount.new(start, step)
+
+	## count 的数值实参: bool 按 int, DSLInteger (含大数) / DSLFloat 保型, 其余报 TypeError
+	func _count_num(arg: DSLObject) -> DSLObject:
+		var a = DSLObject._unwrap_dsl(arg)
+		if a is DSLBool:
+			return DSLInteger.pooled(1 if a.value else 0)
+		if a is DSLInteger:
+			return a
+		if a is DSLFloat:
+			return a
+		# 对齐 CPython 文案 (itertools.count 实参非数值)
+		raise_exception("TypeError", "a number is required")
+		return null
 
 	## itertools.zip_longest(*iterables, fillvalue=None) - 以最长可迭代对象为准并行配对 [br]
 	## 不足处用 fillvalue 填充
@@ -27740,31 +33250,16 @@ class Interpreter:
 		var fillvalue: DSLObject = DSLNone.new()
 		if kwargs.has("fillvalue"):
 			fillvalue = kwargs["fillvalue"]
-		var pools: Array = []
-		var max_len = 0
+		var its: Array = []
 		for arg in args:
-			var items: Array[DSLObject] = []
 			var it = arg._dsl_iter()
 			if it == null:
 				raise_exception("TypeError", "zip_longest() arguments must be iterable")
 				return null
-			while it.has_next():
-				items.append(it.next())
-				if it.suspended:
-					break
-			pools.append(items)
-			if items.size() > max_len:
-				max_len = items.size()
-		var result = DSLList.new()
-		for i in range(max_len):
-			var row: Array[DSLObject] = []
-			for pool in pools:
-				if i < pool.size():
-					row.append(pool[i])
-				else:
-					row.append(fillvalue)
-			result.items.append(DSLTuple.new(row))
-		return result
+			it.windowed = false
+			its.append(it)
+		# 惰性迭代器 (无限源会耗尽步数阀)
+		return _memo_generator(_current_call_node, DSLItZipLongestObject.new(its, fillvalue, self))
 
 	## itertools.takewhile(predicate, iterable) - 取满足谓词的开头元素, 遇首个不满足即止 [br]
 	## 惰性消费, 可作用于无限迭代器
@@ -27777,18 +33272,9 @@ class Interpreter:
 		if it == null:
 			raise_exception("TypeError", "takewhile() argument 2 must be iterable")
 			return null
-		var result = DSLList.new()
-		while it.has_next():
-			var v = it.next()
-			if it.suspended:
-				break
-			var r = pred.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-			if r == null:
-				return null
-			if not r._dsl_bool():
-				break
-			result.items.append(v)
-		return result
+		it.windowed = false
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItTakewhileObject.new(pred, it, self))
 
 	## itertools.dropwhile(predicate, iterable) - 丢弃满足谓词的开头元素, 其余原样返回 [br]
 	## 惰性消费, 可作用于无限迭代器
@@ -27801,21 +33287,51 @@ class Interpreter:
 		if it == null:
 			raise_exception("TypeError", "dropwhile() argument 2 must be iterable")
 			return null
-		var result = DSLList.new()
-		var dropping = true
-		while it.has_next():
-			var v = it.next()
-			if it.suspended:
-				break
-			if dropping:
-				var r = pred.magic_call([v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-				if r == null:
-					return null
-				if r._dsl_bool():
-					continue
-				dropping = false
-			result.items.append(v)
-		return result
+		it.windowed = false
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItDropwhileObject.new(pred, it, self))
+
+	## itertools.filterfalse(predicate, iterable) - 产出谓词判定为假的元素 [br]
+	## 惰性消费, 可作用于无限迭代器; predicate 为 None 时按真值判定
+	func _it_filterfalse(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "filterfalse() takes exactly two arguments")
+			return null
+		var pred = args[0]
+		var it = args[1]._dsl_iter()
+		if it == null:
+			raise_exception("TypeError", "filterfalse() argument 2 must be iterable")
+			return null
+		it.windowed = false
+		return _memo_generator(_current_call_node, DSLItFilterfalseObject.new(pred, it, self))
+
+	## itertools.batched(iterable, n) - 每批 n 个元素组成元组的惰性迭代 [br]
+	## 最后一批不足 n 时按剩余数量
+	func _it_batched(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "batched() takes exactly two arguments")
+			return null
+		var it = args[0]._dsl_iter()
+		if it == null:
+			raise_exception("TypeError", "batched() argument 1 must be iterable")
+			return null
+		it.windowed = false
+		var raw = DSLObject._unwrap_dsl(args[1])
+		var n := 0
+		if raw is DSLBool:
+			n = 1 if raw.value else 0
+		elif raw is DSLInteger:
+			if (raw as DSLInteger).is_big():
+				raise_exception("OverflowError", "Python int too large to convert to C ssize_t")
+				return null
+			n = (raw as DSLInteger).value
+		else:
+			raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return null
+		if n < 1:
+			raise_exception("ValueError", "n must be at least one")
+			return null
+		return _memo_generator(_current_call_node, DSLItBatchedObject.new(it, n, self))
 
 	## itertools.accumulate(iterable[, func][, initial]) [br]
 	## 前缀累积, 默认用加法, 返回物化列表 (含初始值)
@@ -27827,6 +33343,7 @@ class Interpreter:
 		if it == null:
 			raise_exception("TypeError", "accumulate() argument 1 must be iterable")
 			return null
+		it.windowed = false
 		var func_obj: DSLObject = null
 		if args.size() >= 2 and not (args[1] is DSLNone):
 			func_obj = args[1]
@@ -27840,25 +33357,8 @@ class Interpreter:
 		if kwargs.has("initial"):
 			acc = kwargs["initial"]
 			has_initial = true
-		var result = DSLList.new()
-		if has_initial:
-			result.items.append(acc)
-		while it.has_next():
-			var v = it.next()
-			if it.suspended:
-				break
-			if acc == null:
-				acc = v
-			elif func_obj == null:
-				acc = acc.magic_add([acc, v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-				if acc == null:
-					return null
-			else:
-				acc = func_obj.magic_call([acc, v] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-				if acc == null:
-					return null
-			result.items.append(acc)
-		return result
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItAccumulateObject.new(it, func_obj, acc, has_initial, self))
 
 	## itertools.pairwise(iterable) [br]
 	## 相邻元素配对, 返回长度为 n-1 的元组列表
@@ -27870,18 +33370,9 @@ class Interpreter:
 		if it == null:
 			raise_exception("TypeError", "pairwise() argument must be iterable")
 			return null
-		var result = DSLList.new()
-		if not it.has_next():
-			return result
-		var prev = it.next()
-		while it.has_next():
-			var cur = it.next()
-			if it.suspended:
-				break
-			var pair: Array[DSLObject] = [prev, cur]
-			result.items.append(DSLTuple.new(pair))
-			prev = cur
-		return result
+		it.windowed = false
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItPairwiseObject.new(it, self))
 
 	## itertools.groupby(iterable, key=None) [br]
 	## 相邻分组, 返回 [(key, [元素...]), ...] 列表
@@ -27918,25 +33409,9 @@ class Interpreter:
 		if it == null:
 			raise_exception("TypeError", "starmap() argument 2 must be iterable")
 			return null
-		var result = DSLList.new()
-		while it.has_next():
-			var row = it.next()
-			if it.suspended:
-				break
-			var call_args: Array[DSLObject] = []
-			var row_it = row._dsl_iter()
-			if row_it == null:
-				raise_exception("TypeError", "starmap() argument 2 must be an iterable of iterables")
-				return null
-			while row_it.has_next():
-				call_args.append(row_it.next())
-				if row_it.suspended:
-					break
-			var r = fn.magic_call(call_args, {} as Dictionary[String, DSLObject])
-			if r == null:
-				return null
-			result.items.append(r)
-		return result
+		it.windowed = false
+		# 惰性迭代器
+		return _memo_generator(_current_call_node, DSLItStarmapObject.new(fn, it, self))
 
 	## operator 模块: 二元运算通用实现 [br]
 	## 构造等价运算符令牌并复用表达式求值路径, 使自定义类的 dunder 同样生效 [br]
@@ -28232,7 +33707,7 @@ class Interpreter:
 			paths.append(a.value)
 		return DSLAttrGetter.new(paths)
 
-	## operator.methodcaller(name, /, *args, **kwargs) 构造 (I1-81): [br]
+	## operator.methodcaller(name, /, *args, **kwargs) 构造: [br]
 	## 产出可调用对象, 调用时等价 getattr(obj, name)(*args, **kwargs)
 	func _op_methodcaller(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.is_empty():
@@ -28288,46 +33763,58 @@ class Interpreter:
 		var counter = DSLDefaultDict.new()
 		counter.factory = globals.get_val_safe("int")
 		counter.is_counter = true
-		if args.size() == 0:
-			return counter
-		var src_raw = args[0]
-		if src_raw._wrapped != null:
-			src_raw = src_raw._wrapped
-		if src_raw is DSLDict:
-			# 映射实参: 计数直接取自字典值 (CPython 语义)
-			for k in src_raw.dict:
-				var cv = src_raw.dict[k]
-				if cv is DSLInteger and cv.value > 0:
-					counter.inner.dict[k] = DSLInteger.pooled(cv.value)
+		if args.size() == 1:
+			var src_raw = args[0]
+			if src_raw._wrapped != null:
+				src_raw = src_raw._wrapped
+			if src_raw is DSLDict:
+				# 映射实参: 计数直接取自字典值 (CPython 语义; 负数/浮点/大数计数保留,
+				# 过滤只发生在 + - & | 算术与缺省读取, 构造不丢数据)
+				for k in src_raw.dict:
+					counter.inner.dict[k] = src_raw.dict[k]
 					if src_raw._complex_keys.has(k):
 						counter.inner._complex_keys[k] = src_raw._complex_keys[k]
-			return counter
-		var it = args[0]._dsl_iter()
-		if it == null:
-			raise_exception("TypeError", "Counter() argument must be iterable")
-			return null
-		while it.has_next():
-			var v = it.next()
-			if it.suspended:
-				break
-			var vkey = counter.inner._key_to_variant(v)
-			if vkey == null:
+			else:
+				var it = args[0]._dsl_iter()
+				if it == null:
+					raise_exception("TypeError", "Counter() argument must be iterable")
+					return null
+				while it.has_next():
+					var v = it.next()
+					if it.suspended:
+						break
+					var vkey = counter.inner._key_to_variant(v, true)
+					if vkey == null:
+						raise_exception("TypeError", "unhashable type in Counter()")
+						return null
+					if counter.inner.dict.has(vkey):
+						var c = counter.inner.dict[vkey]
+						counter.inner.dict[vkey] = DSLInteger.pooled((c.value if c is DSLInteger else 1) + 1)
+					else:
+						counter.inner.dict[vkey] = DSLInteger.pooled(1)
+		# 关键字实参作为计数 (CPython Counter(**kwargs) 语义)
+		for k in _kwargs:
+			var kw_key = DSLString.new(k)
+			var kw_vkey = counter.inner._key_to_variant(kw_key, true)
+			if kw_vkey == null:
 				raise_exception("TypeError", "unhashable type in Counter()")
 				return null
-			if counter.inner.dict.has(vkey):
-				var c = counter.inner.dict[vkey]
-				counter.inner.dict[vkey] = DSLInteger.pooled((c.value if c is DSLInteger else 1) + 1)
-			else:
-				counter.inner.dict[vkey] = DSLInteger.pooled(1)
+			counter.inner.dict[kw_vkey] = _kwargs[k]
 		return counter
 
 	## collections.namedtuple(typename, field_names) - 生成带命名字段的元组子类 [br]
 	## field_names 接受空白 / 逗号分隔的字符串或字符串可迭代对象 [br]
 	## [param args] [typename, field_names] [br]
 	## [returns] 生成的 DSLClass
-	func _col_namedtuple(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if args.size() != 2:
-			raise_exception("TypeError", "namedtuple() takes exactly 2 arguments (%d given)" % args.size())
+	func _col_namedtuple(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() == 0:
+			raise_exception("TypeError", "namedtuple() missing 2 required positional arguments: 'typename' and 'field_names'")
+			return null
+		if args.size() == 1:
+			raise_exception("TypeError", "namedtuple() missing 1 required positional argument: 'field_names'")
+			return null
+		if args.size() > 2:
+			raise_exception("TypeError", "namedtuple() takes 2 positional arguments but %d were given" % args.size())
 			return null
 		var name = args[0]._dsl_str()
 		var spec = args[1]
@@ -28348,6 +33835,53 @@ class Interpreter:
 		if fields.is_empty():
 			raise_exception("ValueError", "namedtuple() needs at least one field name")
 			return null
+		# defaults 关键字实参 (CPython 语义: 从末尾字段对齐的缺省值)
+		var defaults: Array[DSLObject] = []
+		if kwargs.has("defaults") and not (kwargs["defaults"] is DSLNone):
+			var dobj = kwargs["defaults"]
+			var dit = dobj._dsl_iter()
+			if dit == null:
+				raise_exception("TypeError", "'defaults' parameter must be an iterable")
+				return null
+			while dit.has_next():
+				defaults.append(dit.next())
+				if dit.suspended:
+					return null
+			if defaults.size() > fields.size():
+				raise_exception("TypeError", "Got more default values than field names")
+				return null
+		# 类型名与字段名合法性校验 (CPython 顺序: 标识符 -> 关键字 -> 下划线 -> 重复)
+		var _ident_ok = func(s: String) -> bool:
+			if s.is_empty():
+				return false
+			if not (s[0].is_valid_identifier() or s[0] == "_"):
+				return false
+			for i2 in range(1, s.length()):
+				var ch2 = s[i2]
+				if not (ch2.is_valid_identifier() or ch2.is_valid_int() or ch2 == "_"):
+					return false
+			return true
+		if not _ident_ok.call(name):
+			raise_exception("ValueError", "Type names and field names must be valid identifiers: '%s'" % name)
+			return null
+		if Lexer.keywords.has(name):
+			raise_exception("ValueError", "Type names and field names cannot be a keyword: '%s'" % name)
+			return null
+		var seen_fields: Dictionary = {}
+		for fld in fields:
+			if not _ident_ok.call(fld):
+				raise_exception("ValueError", "Type names and field names must be valid identifiers: '%s'" % fld)
+				return null
+			if Lexer.keywords.has(fld):
+				raise_exception("ValueError", "Type names and field names cannot be a keyword: '%s'" % fld)
+				return null
+			if fld.begins_with("_"):
+				raise_exception("ValueError", "Field names cannot start with an underscore: '%s'" % fld)
+				return null
+			if seen_fields.has(fld):
+				raise_exception("ValueError", "Encountered duplicate field name: '%s'" % fld)
+				return null
+			seen_fields[fld] = true
 		var tuple_class = globals.get_val_safe("tuple")
 		var methods = {}
 		# 覆写 tuple 的 __new__ (其返回 DSLTuple 会绕过命名字段初始化), 用 object 的实例构造
@@ -28367,6 +33901,12 @@ class Interpreter:
 		for f in fields:
 			field_names.append(DSLString.new(f))
 		cls.class_attrs["_fields"] = DSLTuple.new(field_names)
+		if defaults.size() > 0:
+			# 缺省值从末尾字段右对齐 (CPython 的 _field_defaults)
+			var fd = DSLDict.new()
+			for di in range(defaults.size()):
+				fd._dsl_setitem(DSLString.new(fields[fields.size() - defaults.size() + di]), defaults[di])
+			cls.class_attrs["_field_defaults"] = fd
 		cls.class_attrs["_make"] = DSLMethodDescriptor.new("_make", Callable(self, "_nt_make").bind(fields, cls))
 		cls.class_attrs["_replace"] = DSLMethodDescriptor.new("_replace", Callable(self, "_nt_replace").bind(fields, cls))
 		return cls
@@ -28401,8 +33941,19 @@ class Interpreter:
 				raise_exception("TypeError", "%s() got an unexpected keyword argument '%s'" % [wrapper.klass.name, k])
 				return null
 			values[k] = kwargs[k]
+		# 缺失字段先按 _field_defaults 缺省值补齐 (CPython 从末尾右对齐), 仍缺才报错
+		var fd: DSLDict = null
+		if wrapper.klass != null and wrapper.klass.class_attrs.has("_field_defaults"):
+			var fdv = wrapper.klass.class_attrs["_field_defaults"]
+			if fdv is DSLDict:
+				fd = fdv as DSLDict
 		for f in fields:
 			if not values.has(f):
+				if fd != null:
+					var fv = fd._key_to_variant(DSLString.new(f))
+					if fv != null and fd.dict.has(fv):
+						values[f] = fd.dict[fv]
+						continue
 				raise_exception("TypeError", "%s.__new__() missing 1 required positional argument: '%s'" % [wrapper.klass.name, f])
 				return null
 		for f in fields:
@@ -28414,8 +33965,49 @@ class Interpreter:
 		var self_obj = args[0]
 		var idx_obj = args[1]
 		if idx_obj is DSLSlice:
-			raise_exception("TypeError", "slice is not supported on namedtuple fields here")
-			return null
+			# CPython: namedtuple 切片返回普通 tuple
+			var sl = idx_obj as DSLSlice
+			var n = fields.size()
+			var pstep := 1
+			if sl.step != null:
+				pstep = DSLObject._seq_index_int(sl.step, self_obj)
+				if pstep == DSLObject.INDEX_ERR:
+					raise_exception("TypeError", "slice indices must be integers")
+					return null
+			if pstep == 0:
+				raise_exception("ValueError", "slice step cannot be zero")
+				return null
+			var lo := 0
+			var hi: int = n
+			var pstart := lo if pstep > 0 else hi - 1
+			var pstop := hi if pstep > 0 else -1
+			if sl.start != null:
+				var ps = DSLObject._seq_index_int(sl.start, self_obj)
+				if ps == DSLObject.INDEX_ERR:
+					raise_exception("TypeError", "slice indices must be integers")
+					return null
+				if ps < 0:
+					ps += n
+				pstart = clampi(ps, lo, hi) if pstep > 0 else clampi(ps, lo - 1, hi - 1)
+			if sl.stop != null:
+				var pe = DSLObject._seq_index_int(sl.stop, self_obj)
+				if pe == DSLObject.INDEX_ERR:
+					raise_exception("TypeError", "slice indices must be integers")
+					return null
+				if pe < 0:
+					pe += n
+				pstop = clampi(pe, lo, hi) if pstep > 0 else clampi(pe, lo - 1, hi - 1)
+			var vals: Array[DSLObject] = []
+			var i := pstart
+			if pstep > 0:
+				while i < pstop:
+					vals.append(self_obj.fields[fields[i]])
+					i += pstep
+			else:
+				while i > pstop:
+					vals.append(self_obj.fields[fields[i]])
+					i += pstep
+			return DSLTuple.new(vals)
 		if not (idx_obj is DSLInteger):
 			# bool 与用户 __index__ 协议按整数下标处理 (CPython 语义)
 			var idx_box = DSLObject.new()
@@ -28526,10 +34118,14 @@ class Interpreter:
 			raise_exception("TypeError", "defaultdict() takes 1 or 2 arguments")
 			return null
 		var factory = args[0] if args.size() >= 1 else null
+		var factory_raw = DSLObject._unwrap_dsl(factory) if factory != null else null
+		if factory_raw != null and not (factory_raw is DSLNone) and not factory_raw._dsl_is_callable():
+			raise_exception("TypeError", "first argument must be callable or None")
+			return null
 		var dd = DSLDefaultDict.new()
-		dd.factory = factory if (factory != null and not (factory is DSLNone)) else null
+		dd.factory = factory_raw if (factory_raw != null and not (factory_raw is DSLNone)) else null
 		dd.interp = self
-		# 可选初始映射 (字典参数)
+		# 可选初始映射: 字典或任意键值对可迭代序列 (CPython dict 构造语义)
 		if args.size() == 2:
 			var src = DSLObject._unwrap_dsl(args[1])
 			if src is DSLDefaultDict:
@@ -28539,6 +34135,31 @@ class Interpreter:
 					dd.inner.dict[k] = src.dict[k]
 					if src._complex_keys.has(k):
 						dd.inner._complex_keys[k] = src._complex_keys[k]
+			else:
+				# 键值对可迭代序列: 每项为二元序列, 按 dict 构造语义写入
+				var sit = args[1]._dsl_iter()
+				if sit == null:
+					raise_exception("TypeError", "'%s' object is not iterable" % src._type_name())
+					return null
+				var idx2 := 0
+				while sit.has_next():
+					var item = sit.next()
+					if sit.suspended:
+						return null
+					var item_raw = DSLObject._unwrap_dsl(item)
+					if item_raw is DSLTuple or item_raw is DSLList:
+						if item_raw.items.size() != 2:
+							raise_exception("ValueError", "dictionary update sequence element #%d has length %d; 2 is required" % [idx2, item_raw.items.size()])
+							return null
+						var vkey = dd.inner._key_to_variant(item_raw.items[0], true)
+						if vkey == null:
+							raise_exception("TypeError", "unhashable type: '%s'" % item_raw.items[0]._type_name())
+							return null
+						dd.inner.dict[vkey] = item_raw.items[1]
+					else:
+						raise_exception("TypeError", "cannot convert dictionary update sequence element #%d to a sequence" % idx2)
+						return null
+					idx2 += 1
 		return dd
 
 	## 创建内置函数的包装对象 [br]
@@ -28661,7 +34282,7 @@ class Interpreter:
 			var stmt = statements[i]
 			i += 1
 			
-			# 恢复块的第一条语句若是「整句重头重执行」: 其内已完成调用允许短路取缓存。
+			# 恢复块的第一条语句若是「整句重头重执行」: 其内已完成调用允许短路取缓存
 			# 精确续延 (如循环体从挂起语句之后继续) 与其后的语句照常全新执行
 			var saved_stmt_replay = _stmt_replay
 			_stmt_replay = first_stmt and replay_head
@@ -29142,7 +34763,7 @@ class Interpreter:
 				return ExecResult.ERROR
 			var cond_truthy = cond._dsl_bool()
 			if report.has_error:
-				# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+				# __bool__ 返回非 bool, 真值求值报 TypeError
 				return ExecResult.ERROR
 			if cond_truthy:
 				# 设置 resume_info
@@ -29161,7 +34782,7 @@ class Interpreter:
 						return ExecResult.ERROR
 					var branch_truthy = cond._dsl_bool()
 					if report.has_error:
-						# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+						# __bool__ 返回非 bool, 真值求值报 TypeError
 						return ExecResult.ERROR
 					if branch_truthy:
 						var f = _exec_stack.back() if _exec_stack.size() > 0 else null
@@ -29204,7 +34825,7 @@ class Interpreter:
 					if guard_val._dsl_bool():
 						return exec_block(case_clause.body, environment)
 					if report.has_error:
-						# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+						# __bool__ 返回非 bool, 真值求值报 TypeError
 						return ExecResult.ERROR
 					continue
 				return exec_block(case_clause.body, environment)
@@ -29236,7 +34857,7 @@ class Interpreter:
 					if not cond._dsl_bool():
 						break
 					if report.has_error:
-						# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+						# __bool__ 返回非 bool, 真值求值报 TypeError
 						return ExecResult.ERROR
 				skip_cond = false
 				
@@ -29296,11 +34917,13 @@ class Interpreter:
 					return ExecResult.SUSPENDED
 				if iterable == null or iterable is DSLNone:
 					# 可迭代表达式本身失败 (挂起恢复轮重放尤其如此): null 不代表无错,
-					# 在途异常直接向上传播; 此时再抛防御性 RuntimeError 会让 first-wins
+					# 在途异常直接向上传播; 此时再抛防御性错误会让 first-wins
 					# 只保留旧文案而改写 last_exception, 使外层 except 匹配失败
 					if report.has_error:
 						return ExecResult.RAISE if last_exception != null else ExecResult.ERROR
-					raise_exception("RuntimeError", "iterable is null in for loop")
+					# 真 None 值: CPython 报 TypeError 'NoneType' object is not iterable
+					var tname = iterable._type_name() if iterable != null else "NoneType"
+					raise_exception("TypeError", "'%s' object is not iterable" % tname)
 					return ExecResult.RAISE
 				iterator = iterable._dsl_iter()
 				if iterator == null:
@@ -29394,7 +35017,7 @@ class Interpreter:
 			
 		if stmt is TypeAliasStmt:
 			# PEP 695: 别名绑定为 TypeAliasType 对象 (__value__ 惰性求值)
-			# klass 挂 TypeAliasType 类型类 (I2-70): type(别名) 与别名.__class__ 均指向它
+			# klass 挂 TypeAliasType 类型类: type(别名) 与别名.__class__ 均指向它
 			var alias_obj = DSLTypeAlias.new(stmt.name, stmt.value, environment)
 			alias_obj.klass = _builtin_type_classes.get("TypeAliasType")
 			alias_obj.interp = self
@@ -29402,8 +35025,9 @@ class Interpreter:
 			return ExecResult.NORMAL
 
 		if stmt is AnnotatedAssign:
-			# 注解求值语义 (CPython PEP 526): 模块与类体求值并入 __annotations__, 函数体内不求值
-			if not _future_annotations and not environment.is_class_scope and environment.function_locals.is_empty():
+			# 注解求值语义 (PEP 526): 模块与类体求值并入 __annotations__, 函数体内不求值;
+			# 属性/下标目标的注解不求值不存储, 仅值赋值
+			if stmt.target == null and not _future_annotations and not environment.is_class_scope and environment.function_locals.is_empty():
 				var ann_val = evaluate(stmt.annotation)
 				if _suspended:
 					_expr_evaluated = false
@@ -29415,7 +35039,7 @@ class Interpreter:
 					module_ann = DSLDict.new()
 					globals.define("__annotations__", module_ann)
 				module_ann._dsl_setitem(DSLString.new(stmt.name), ann_val)
-			elif not _future_annotations and environment.is_class_scope:
+			elif stmt.target == null and not _future_annotations and environment.is_class_scope:
 				# 类体注解: 注解求值并入类体作用域的 __annotations__
 				# (收集阶段随普通绑定归入类属性); 只查类体自身, 不沿链读到全局同名键
 				var cls_ann_val = evaluate(stmt.annotation)
@@ -29436,7 +35060,35 @@ class Interpreter:
 					return ExecResult.SUSPENDED
 				if ann_v == null:
 					return ExecResult.ERROR
-				environment.set_val(stmt.name, ann_v)
+				if stmt.target != null:
+					# 属性/下标注解目标的值赋值 (SetAttr / SetItem 语义)
+					if stmt.target is GetAttr:
+						var aobj = _eval_target_object(stmt.target.object)
+						if aobj == null:
+							return ExecResult.ERROR
+						aobj._dsl_setattr(stmt.target.name, ann_v)
+						if aobj.last_error != "":
+							raise_exception_from_last_error(aobj.last_error, aobj.last_error_args)
+							aobj.last_error = ""
+							return ExecResult.ERROR
+					elif stmt.target is GetItem:
+						var sobj = _eval_target_object(stmt.target.object)
+						if sobj == null:
+							return ExecResult.ERROR
+						var sidx
+						if stmt.target.index is SliceExpr:
+							sidx = _eval_slice_value(stmt.target.index)
+						else:
+							sidx = evaluate(stmt.target.index)
+						if sidx == null:
+							return ExecResult.ERROR
+						sobj._dsl_setitem(sidx, ann_v)
+						if sobj.last_error != "":
+							raise_exception_from_last_error(sobj.last_error, sobj.last_error_args)
+							sobj.last_error = ""
+							return ExecResult.ERROR
+				else:
+					environment.set_val(stmt.name, ann_v)
 				if report.has_error:
 					return ExecResult.ERROR
 			return ExecResult.NORMAL
@@ -29578,12 +35230,9 @@ class Interpreter:
 			return ExecResult.CONTINUE
 		
 		if stmt is GlobalStmt:
-			var env = environment
-			while env.enclosing:
-				env = env.enclosing
 			for gname in stmt.names:
-				if not env.values.has(gname):
-					env.define(gname, DSLNone.new())
+				# global 声明不绑定名字 (CPython 语义): 声明后未赋值即读取报 NameError,
+				# 写入经 set_val 的 global 重定向创建模块全局
 				environment.mark_global(gname)
 			return ExecResult.NORMAL
 			
@@ -29625,14 +35274,19 @@ class Interpreter:
 				return ExecResult.ERROR
 			var test_truthy = test_val._dsl_bool()
 			if report.has_error:
-				# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+				# __bool__ 返回非 bool, 真值求值报 TypeError
 				return ExecResult.ERROR
 			if not test_truthy:
 				var msg = ""
 				if stmt.message != null:
 					var msg_val = evaluate(stmt.message)
+					if report.has_error:
+						# 消息表达式求值抛出的异常 (NameError 等) 优先传播, 不顶替为 AssertionError
+						return ExecResult.ERROR
 					if msg_val != null:
 						msg = msg_val._dsl_str()
+						if report.has_error:
+							return ExecResult.ERROR
 				raise_exception("AssertionError", msg)
 				return ExecResult.ERROR
 			return ExecResult.NORMAL
@@ -29646,8 +35300,9 @@ class Interpreter:
 					environment.delete(target.name)
 					if report.has_error:
 						# 先清除 delete 写入的报告错误, 否则构造异常时 magic_call 因 has_error 跳过 __init__, str(e) 退化为类型名
+						var del_err = report.last_error
 						report.clear_error()
-						raise_exception("NameError", "name '%s' is not defined" % target.name)
+						raise_exception_from_last_error(del_err)
 						return ExecResult.RAISE
 				elif target is GetAttr:
 					var obj = evaluate(target.object)
@@ -29874,8 +35529,9 @@ class Interpreter:
 							environment.values.erase(clause.as_name)
 						caught = true
 						break
-					if last_exception != match_exc and _invalid_except_type_raised():
-						# I2-65: except 子句类型非法 (非 BaseException 子类), 中止匹配传播 TypeError
+					if last_exception != match_exc:
+						# 类型表达式求值抛出的新异常 (NameError 等) 或非法 except 类型 TypeError
+						# 立即传播, 不落入后续子句
 						caught = false
 						break
 				if not caught:
@@ -29912,7 +35568,7 @@ class Interpreter:
 			for entry in stmt.names:
 				var entry_name = entry.name
 				if entry_name.contains("."):
-					# I2-71: 点分 import 无包支持, 按 CPython 逐级定位失败点报 ModuleNotFoundError
+					# 点分 import 无包支持, 按 CPython 逐级定位失败点报 ModuleNotFoundError
 					_raise_dotted_import_error(entry_name)
 					return ExecResult.RAISE
 				var mod = _get_module(entry_name)
@@ -29922,14 +35578,15 @@ class Interpreter:
 				if mod == null:
 					if report.has_error:
 						return ExecResult.RAISE
-					raise_exception("ImportError", "No module named '%s'" % entry_name)
+					# 简单 import 失败抛 ModuleNotFoundError (ImportError 子类, 可单独捕获, 带 .name)
+					_raise_module_not_found(entry_name)
 					return ExecResult.RAISE
 				var bind_name = entry.alias if entry.alias != "" else entry.name
 				environment.define(bind_name, mod)
 			return ExecResult.NORMAL
 			
 		if stmt is FromImportStmt:
-			# I2-71: 相对导入无父包上下文 (CPython 同文案)
+			# 相对导入无父包上下文
 			if stmt.relative:
 				raise_exception("ImportError", "attempted relative import with no known parent package")
 				return ExecResult.RAISE
@@ -29947,24 +35604,40 @@ class Interpreter:
 			if mod == null:
 				# 内置模块表未命中时按 sys.path 解析用户模块文件
 				mod = _load_user_module(stmt.module)
-			if mod == null:
-				if report.has_error:
+				if mod == null:
+					if report.has_error:
+						return ExecResult.RAISE
+					if stmt.module.contains("."):
+						# 点分 from-import 同样按 CPython 报 ModuleNotFoundError
+						_raise_dotted_import_error(stmt.module)
+						return ExecResult.RAISE
+					# from-import 缺模块同样抛 ModuleNotFoundError
+					_raise_module_not_found(stmt.module)
 					return ExecResult.RAISE
-				if stmt.module.contains("."):
-					# I2-71: 点分 from-import 同样按 CPython 报 ModuleNotFoundError
-					_raise_dotted_import_error(stmt.module)
-					return ExecResult.RAISE
-				raise_exception("ImportError", "No module named '%s'" % stmt.module)
-				return ExecResult.RAISE
 			if stmt.star:
-				# from module import *: 导入所有非下划线开头的公开成员
-				for attr_name in mod.members:
-					if not attr_name.begins_with("_"):
+				# 模块定义 __all__ 时仅导入其中名字 (含下划线前缀, 缺名报 AttributeError),
+				# 无 __all__ 时导入所有非下划线开头的公开成员 (CPython 导出面语义)
+				var star_names: Array[String] = []
+				if mod.members.has("__all__"):
+					var all_obj = DSLObject._unwrap_dsl(mod.members["__all__"])
+					if all_obj is DSLList:
+						for it in all_obj.items:
+							star_names.append(it._dsl_str())
+				if star_names.is_empty():
+					for attr_name in mod.members:
+						if not attr_name.begins_with("_"):
+							environment.define(attr_name, mod.members[attr_name])
+				else:
+					for attr_name in star_names:
+						if not mod.members.has(attr_name):
+							raise_exception("AttributeError", "module '%s' has no attribute '%s'" % [stmt.module, attr_name])
+							return ExecResult.RAISE
 						environment.define(attr_name, mod.members[attr_name])
 			else:
 				for entry in stmt.names:
 					if not mod.members.has(entry.name):
-						raise_exception("ImportError", "cannot import name '%s' from module '%s'" % [entry.name, stmt.module])
+						# from-import 缺名文案对齐 CPython (unknown location 形态)
+						raise_exception("ImportError", "cannot import name '%s' from '%s' (unknown location)" % [entry.name, stmt.module])
 						return ExecResult.RAISE
 					var bind_name = entry.alias if entry.alias != "" else entry.name
 					environment.define(bind_name, mod.members[entry.name])
@@ -29972,9 +35645,9 @@ class Interpreter:
 
 		return ExecResult.NORMAL
 
-	## I2-71: 点分模块名按 CPython 逐级定位失败点报 ModuleNotFoundError [br]
-	## 首段不存在报 No module named '<首段>'; 首段是模块而整名不存在的报 [br]
-	## No module named '<整名>'; '<首段>' is not a package (PyGDS 无包, 命中即此文案)
+	## 点分模块名按 CPython 逐级定位失败点报 ModuleNotFoundError [br]
+	## 首段不存在报 No module named '<首段>', 首段是模块而整名不存在的报 [br]
+	## No module named '<整名>', '<首段>' is not a package (PyGDS 无包, 命中即此文案)
 	func _raise_dotted_import_error(name: String) -> void:
 		var first = name.split(".")[0]
 		var base = _get_module(first)
@@ -29984,9 +35657,19 @@ class Interpreter:
 				# 首段用户模块自身的解析/执行错误优先 (不覆盖为 ModuleNotFoundError)
 				return
 		if base == null:
-			raise_exception("ModuleNotFoundError", "No module named '%s'" % first)
+			_raise_module_not_found(first)
 		else:
 			raise_exception("ModuleNotFoundError", "No module named '%s'; '%s' is not a package" % [name, first])
+			if last_exception != null and last_exception.fields != null:
+				last_exception.fields["name"] = DSLString.new(name)
+				last_exception.fields["path"] = _wrap(null)
+
+	## 抛 ModuleNotFoundError 并带 .name / .path 属性
+	func _raise_module_not_found(name: String) -> void:
+		raise_exception("ModuleNotFoundError", "No module named '%s'" % name)
+		if last_exception != null and last_exception.fields != null:
+			last_exception.fields["name"] = DSLString.new(name)
+			last_exception.fields["path"] = _wrap(null)
 
 	## 执行 with 语句 [br]
 	## 语义等价于逐管理器调用 __enter__ 的 try/finally 脱糖: 进入阶段按序调用 [br]
@@ -30138,7 +35821,7 @@ class Interpreter:
 				report.clear_error()
 				res = ExecResult.NORMAL
 			elif last_exception != exit_exc:
-				# I2-63: __exit__ 真值判定时 __bool__ 返回非 bool 报 TypeError
+				# __exit__ 真值判定时 __bool__ 返回非 bool 报 TypeError
 				# (在途异常时 report.has_error 恒为真不可作判据, 以在途异常身份变化识别)
 				res = ExecResult.ERROR
 			idx -= 1
@@ -30414,19 +36097,19 @@ class Interpreter:
 			TokenType.AT:
 				result = _binary_with_reflect(left, right, "__matmul__", "__rmatmul__", func(): return _matmul_type_error(left, right, "@"))
 			TokenType.LESS_LESS:
-				result = _call_magic_or_fallback(left, "__lshift__", [right], func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__lshift__", "__rlshift__", func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.GREATER_GREATER:
-				result = _call_magic_or_fallback(left, "__rshift__", [right], func(): return left.magic_rshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__rshift__", "__rrshift__", func(): return left.magic_rshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.CARET:
-				result = _call_magic_or_fallback(left, "__xor__", [right], func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__xor__", "__rxor__", func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.PIPE:
 				result = _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.BITAND:
-				result = _call_magic_or_fallback(left, "__and__", [right], func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _binary_with_reflect(left, right, "__and__", "__rand__", func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.EQUAL_EQUAL:
-				result = _call_magic_or_fallback(left, "__eq__", [right], func(): return left.magic_eq([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _compare_with_reflect(left, right, "__eq__", func(): return left.magic_eq([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.NOT_EQUAL:
-				result = _call_magic_or_fallback(left, "__ne__", [right], func(): return left.magic_ne([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				result = _compare_with_reflect(left, right, "__ne__", func(): return left.magic_ne([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 			TokenType.GREATER:
 				result = _compare_with_reflect(left, right, "__gt__", func(): return left.magic_gt([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]), "__lt__")
 			TokenType.GREATER_EQUAL:
@@ -30445,8 +36128,15 @@ class Interpreter:
 				result = DSLBool.new(left._object_id != right._object_id)
 			TokenType.IN:
 				result = _call_magic_or_fallback(right, "__contains__", [left], func(): return right.magic_contains([right, left] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				# __contains__ 结果按真值解释 (CPython 对 in 的结果做真值转换)
+				if result != null and not (result is DSLBool):
+					var cb = result._dsl_bool()
+					result = null if report.has_error else DSLBool.new(cb)
 			TokenType.NOT_IN:
 				result = _call_magic_or_fallback(right, "__contains__", [left], func(): return right.magic_contains([right, left] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+				if result != null and not (result is DSLBool):
+					var cb2 = result._dsl_bool()
+					result = null if report.has_error else DSLBool.new(cb2)
 				if result is DSLBool:
 					result = DSLBool.new(not result.value)
 		return result
@@ -30718,6 +36408,46 @@ class Interpreter:
 			var nullflag = assign_from_targets(expr.targets, items, environment)
 			return null if nullflag == null else val
 			
+		if expr is ChainAssign:
+			# 链式赋值值只求值一次, 目标从左到右依次赋值 (CPython 语义)
+			var cval = evaluate(expr.value)
+			if cval == null:
+				return null
+			for ct in expr.targets:
+				if ct is Variable:
+					environment.set_val(ct.name, cval)
+				elif ct is GetItem:
+					var cobj = _eval_target_object(ct.object)
+					if cobj == null:
+						return null
+					var cidx
+					if ct.index is SliceExpr:
+						cidx = _eval_slice_value(ct.index)
+					else:
+						cidx = evaluate(ct.index)
+					if cidx == null:
+						return null
+					cobj._dsl_setitem(cidx, cval)
+					if cobj.last_error != "":
+						raise_exception_from_last_error(cobj.last_error, cobj.last_error_args)
+						cobj.last_error = ""
+						return null
+				elif ct is GetAttr:
+					var aobj = _eval_target_object(ct.object)
+					if aobj == null:
+						return null
+					aobj._dsl_setattr(ct.name, cval)
+					if aobj.last_error != "":
+						raise_exception_from_last_error(aobj.last_error, aobj.last_error_args)
+						aobj.last_error = ""
+						return null
+				else:
+					raise_exception("TypeError", "invalid assignment target")
+					return null
+				if report.has_error:
+					return null
+			return cval
+
 		if expr is SetItem:
 			# expr.object 可能是普通表达式, 也可能是嵌套的赋值目标 (如 self._data[k] 里的 self._data):
 			# 统一经 _eval_target_object 求值, 使单目标赋值与多重赋值行为一致
@@ -30776,7 +36506,7 @@ class Interpreter:
 				# and: 左为真才取右; or: 左为假才取右
 				var take_right: bool = sc_left._dsl_bool() if expr.operator.type == TokenType.AND else not sc_left._dsl_bool()
 				if report.has_error:
-					# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+					# __bool__ 返回非 bool, 真值求值报 TypeError
 					return null
 				if not take_right:
 					return sc_left
@@ -30821,15 +36551,15 @@ class Interpreter:
 				TokenType.AT:
 					result = _binary_with_reflect(left, right, "__matmul__", "__rmatmul__", func(): return _matmul_type_error(left, right, "@"))
 				TokenType.LESS_LESS:
-					result = _call_magic_or_fallback(left, "__lshift__", [right], func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__lshift__", "__rlshift__", func(): return left.magic_lshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.GREATER_GREATER:
-					result = _call_magic_or_fallback(left, "__rshift__", [right], func(): return left.magic_rshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__rshift__", "__rrshift__", func(): return left.magic_rshift([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.CARET:
-					result = _call_magic_or_fallback(left, "__xor__", [right], func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__xor__", "__rxor__", func(): return left.magic_xor([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.PIPE:
 					result = _binary_with_reflect(left, right, "__or__", "__ror__", func(): return left.magic_or([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.BITAND:
-					result = _call_magic_or_fallback(left, "__and__", [right], func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					result = _binary_with_reflect(left, right, "__and__", "__rand__", func(): return left.magic_and([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.EQUAL_EQUAL:
 					result = _compare_with_reflect(left, right, "__eq__", func(): return left.magic_eq([left, right] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
 				TokenType.NOT_EQUAL:
@@ -30852,8 +36582,15 @@ class Interpreter:
 					result = DSLBool.new(left._object_id != right._object_id)
 				TokenType.IN:
 					result = _call_magic_or_fallback(right, "__contains__", [left], func(): return right.magic_contains([right, left] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					# __contains__ 结果按真值解释 (CPython 对 in 的结果做真值转换)
+					if result != null and not (result is DSLBool):
+						var cb = result._dsl_bool()
+						result = null if report.has_error else DSLBool.new(cb)
 				TokenType.NOT_IN:
 					result = _call_magic_or_fallback(right, "__contains__", [left], func(): return right.magic_contains([right, left] as Array[DSLObject], {} as Dictionary[String, DSLObject]))
+					if result != null and not (result is DSLBool):
+						var cb2 = result._dsl_bool()
+						result = null if report.has_error else DSLBool.new(cb2)
 					if result is DSLBool:
 						result = DSLBool.new(not result.value)
 			# 用户魔术方法 (__eq__ / __add__ 等) 内部发起程序挂起时返回 null:
@@ -30882,6 +36619,7 @@ class Interpreter:
 			if left.last_error != "" or right.last_error != "":
 				raise_exception_from_last_error(left.last_error if left.last_error else right.last_error)
 				left.last_error = ""
+				right.last_error = ""
 				return null
 			if result == null:
 				# 双方都未报错却拿不到结果: 说明该运算符不接受这两个操作数
@@ -30969,7 +36707,7 @@ class Interpreter:
 				return null
 			var cond_truthy = cond._dsl_bool()
 			if report.has_error:
-				# I2-63: __bool__ 返回非 bool, 真值求值报 TypeError
+				# __bool__ 返回非 bool, 真值求值报 TypeError
 				return null
 			if cond_truthy:
 				return evaluate(expr.true_expr)
@@ -31102,6 +36840,12 @@ class Interpreter:
 			var obj = evaluate(expr.object)
 			if obj == null:
 				return null
+			# 用户 __getattribute__ 钩子先行 (CPython 拦截全部显式属性读取)
+			var hooked = _user_getattribute_hook(obj, expr.name)
+			if _suspended or report.has_error:
+				return null
+			if hooked != null:
+				return hooked
 			var result = obj._dsl_getattribute(expr.name)
 			if obj.last_error != "":
 				# klass 为空的内建值与类对象: __class__ 按类型解析, 类的 __dict__ 返回类属性拷贝
@@ -31228,7 +36972,17 @@ class Interpreter:
 		if expr is GenComp:
 			var gen_obj = DSLGenerator.new(expr.elt_expr, expr.clauses, environment, self)
 			gen_obj.interp = self
-			return _memo_generator(expr, gen_obj)
+			var memoized = _memo_generator(expr, gen_obj)
+			# 最外层可迭代在创建时急切求值
+			# 挂起重放轮复用记忆生成器时已求值, 跳过重复求值
+			if expr.clauses.size() > 0 and not memoized.first_evaluated:
+				memoized.first_iterable = evaluate((expr.clauses[0] as CompClause).iterable)
+				if _suspended:
+					return null
+				if memoized.first_iterable == null:
+					return null
+				memoized.first_evaluated = true
+			return memoized
 
 		if expr is DictComp:
 			var result = DSLDict.new()
@@ -31645,11 +37399,25 @@ class Interpreter:
 		else:
 			var send_val = gen._take_send_value()
 			res = sub._dsl_send([send_val] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-		if report.has_error and last_exception != null and last_exception._type_name() == "StopIteration":
+		if report.has_error and _is_stop_iteration(last_exception):
 			# 子生成器正常结束: 不是错误, 交由调用方取 return 值
 			report.clear_error()
 			last_exception = null
 		return res
+
+	## genexpr/推导式内部生成器的 repr 限定名链 [br]
+	## CPython 形态: 类体 A.<genexpr> / 函数内 func.<locals>.<genexpr> / 模块级 <genexpr> [br]
+	## 在生成器对象构造时读取: 闭包环境为类体作用域时用类限定名 (类优先于 _current_function, [br]
+	## 覆盖函数内嵌套类), 否则用当前执行函数; 模块级两皆无则裸 <genexpr>
+	## [param closure] 生成器创建时所在的立即环境 (类体 = 类作用域, 方法/函数 = 局部作用域)
+	func _genexpr_repr_name(closure) -> String:
+		if closure != null and closure.is_class_scope and closure.building_class != null:
+			var cq = closure.building_class.qualname if closure.building_class.qualname != "" else closure.building_class.name
+			return cq + ".<genexpr>"
+		if _current_function != null:
+			var fq = _current_function.qualname if _current_function.qualname != "" else _current_function.declaration.name
+			return fq + ".<locals>.<genexpr>"
+		return "<genexpr>"
 
 	## 急切求值推导式 (列表/集合/字典): 由内部生成器驱动, 使语句重放不重复执行元素表达式 [br]
 	## 生成器对象按节点记忆 (与生成器表达式同一机制), 挂起后重放会取回同一实例 [br]
@@ -31725,6 +37493,13 @@ class Interpreter:
 				target.append(it.next())
 				if it.suspended:
 					return false
+			return true
+		# 元组字面量内的切片分量求值为 DSLSlice (a[0, 1:3] -> (0, slice(1, 3, None)))
+		if e is SliceExpr:
+			var sv = _eval_slice_value(e)
+			if sv == null:
+				return false
+			target.append(sv)
 			return true
 		var element = evaluate(e)
 		if element == null:
@@ -31821,7 +37596,7 @@ class Interpreter:
 			return gen
 		var skey = _sleep_root_key if _sleep_root_key != 0 else _current_stmt_key
 		# 记忆键除节点外还须带上「当前正在执行的生成器」:
-		# 同一节点在不同生成器实例体内求值属于不同的逻辑求值。
+		# 同一节点在不同生成器实例体内求值属于不同的逻辑求值
 		# 例如 [[y for y in b()] for _ in range(2)] 中, 外层推导式第二轮会新建 b,
 		# 新 b 体内调用 a() 必须得到新的 a, 而不能复用上轮已耗尽的 a
 		var nkey: String = str(node.get_instance_id())
@@ -31886,26 +37661,38 @@ class Interpreter:
 	## [returns] 保存的原有绑定数组, 出错时返回 null
 	func _bind_comp_targets(targets: Array, item: DSLObject, env: DSLEnvironment):
 		var saved: Array = []
-		for name in targets:
-			saved.append([name, env.values.get(name)])
-		if targets.size() == 1:
-			env.define(targets[0], item)
+		_collect_comp_target_names(targets, saved, env)
+		# 单裸名目标: 整体绑定 (既有语义)
+		if targets.size() == 1 and targets[0] is Variable:
+			env.define(targets[0].name, item)
 			return saved
-		var seq: Array = []
+		# 多目标 / 嵌套 / 星形: 复用 for 语句的完整解包语义
+		var items: Array[DSLObject] = []
 		if item is DSLList or item is DSLTuple:
-			seq = item.items
+			items = item.items
 		else:
 			raise_exception("TypeError", "cannot unpack non-iterable %s object" % item._type_name())
 			return null
-		if seq.size() != targets.size():
-			if seq.size() > targets.size():
-				raise_exception("ValueError", "too many values to unpack (expected %d)" % targets.size())
-			else:
-				raise_exception("ValueError", "not enough values to unpack (expected %d, got %d)" % [targets.size(), seq.size()])
+		var nullflag = assign_from_targets(targets, items, env)
+		if nullflag == null:
 			return null
-		for i in range(targets.size()):
-			env.define(targets[i], seq[i])
 		return saved
+
+	## 收集推导式目标树中的所有绑定名字, 快照其当前环境值 (供挂起/出错时恢复) [br]
+	## [param targets] 目标节点数组 (Variable / UnpackTarget / StarredTarget) [br]
+	## [param saved] 快照输出数组 ([name, old] 二元组) [br]
+	## [param env] 环境
+	func _collect_comp_target_names(targets: Array, saved: Array, env: DSLEnvironment) -> void:
+		for t in targets:
+			if t == null:
+				continue
+			if t is Variable:
+				saved.append([t.name, env.values.get(t.name)])
+			elif t is StarredTarget:
+				if t.target is Variable:
+					saved.append([t.target.name, env.values.get(t.target.name)])
+			elif t is UnpackTarget:
+				_collect_comp_target_names(t.targets, saved, env)
 
 	## 恢复推导式循环变量的原有环境绑定 [br]
 	## [param env] 环境 [br]
@@ -32006,9 +37793,42 @@ class Interpreter:
 	## [param fmt] 格式说明符 [br]
 	## [returns] 格式化字符串
 	func _format_value(value: DSLObject, conv: String, fmt: String) -> String:
+		# 无转换符且非基本类型先走用户 __format__ 协议 / complex 分量 (与 format() 同族)
+		if conv == "" and not (value is DSLInteger or value is DSLFloat or value is DSLBool or value is DSLString):
+			if value is DSLComplex:
+				var sp0 = _builtin_protos["str"] if _builtin_protos.has("str") else DSLString.new("")
+				sp0.last_error = ""
+				var cres = sp0._format_complex_spec(value as DSLComplex, fmt)
+				if sp0.last_error != "":
+					raise_exception_from_last_error(sp0.last_error)
+					sp0.last_error = ""
+					return ""
+				return cres
+			if value.klass != null:
+				var fmt_m = value.klass._lookup_method("__format__")
+				if fmt_m != null:
+					if fmt_m.has_method("__get__"):
+						fmt_m = fmt_m.__get__(value, value.klass)
+					var fmt_args: Array[DSLObject] = [DSLString.new(fmt)]
+					var fmt_r = value.klass._invoke_func(fmt_m, fmt_args, {} as Dictionary[String, DSLObject])
+					if fmt_r == null:
+						return ""
+					if not (fmt_r is DSLString):
+						raise_exception("TypeError", "__format__ must return a str, not %s" % fmt_r._type_name())
+						return ""
+					return fmt_r.value
+			if fmt == "":
+				var ms0 = value.magic_str([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				return ms0.value if ms0 is DSLString else value._dsl_str()
+			raise_exception("TypeError", "unsupported format string passed to %s.__format__" % value._type_name())
+			return ""
 		if conv == "r" or conv == "a":
 			var r = value.magic_repr([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			value = r if r is DSLString else DSLString.new(value._dsl_str())
+			# !a 转换对 repr 结果做 ASCII 转义 (与 ascii() 同规则)
+			if conv == "a":
+				var asc = _ascii_escape_text(value.value if value is DSLString else value._dsl_str())
+				value = DSLString.new(asc)
 		elif conv == "s":
 			var st = value.magic_str([value] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			value = st if st is DSLString else DSLString.new(value._dsl_str())
@@ -32097,17 +37917,20 @@ class Interpreter:
 			if not s.begins_with(prefix):
 				s = prefix + s
 			s = sign_head + s
-		# 零填充 (符号与进制前缀在填充之前)
+		# 零填充 (符号与进制前缀在填充之前): 数值左补 0, 字符串的 '0' 是填充字符并默认左对齐
 		if zero_pad and align == "" and width > s.length():
-			var pad = width - s.length()
-			var head := ""
-			if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
-				head = s[0]
-				s = s.substr(1)
-			if s.length() >= 2 and s[0] == "0" and s[1] in "xXob":
-				head += s.substr(0, 2)
-				s = s.substr(2)
-			s = head + "0".repeat(pad) + s
+			if is_numeric:
+				var pad = width - s.length()
+				var head := ""
+				if s.length() > 0 and (s[0] == "-" or s[0] == "+" or s[0] == " "):
+					head = s[0]
+					s = s.substr(1)
+				if s.length() >= 2 and s[0] == "0" and s[1] in "xXob":
+					head += s.substr(0, 2)
+					s = s.substr(2)
+				s = head + "0".repeat(pad) + s
+			else:
+				fill = "0"
 		# 对齐与宽度
 		if width > s.length():
 			var pad = width - s.length()
@@ -32200,7 +38023,7 @@ class Interpreter:
 		return value._dsl_str()
 
 	## 数值格式化的浮点取值 (f-string 路径): 大数经 53 位半到偶舍入转 double, [br]
-	## 超出 double 范围时抛 OverflowError (CPython 同文案) 并返回 0.0
+	## 超出 double 范围时抛 OverflowError 并返回 0.0
 	func _fmt_float_of_val(value: DSLObject) -> float:
 		if value is DSLInteger and (value as DSLInteger).is_big():
 			var conv = DSLBigInt.mag_to_float((value as DSLInteger).big_neg, (value as DSLInteger).big_limbs)
@@ -32547,6 +38370,11 @@ class Interpreter:
 			var pre_proto = callee.callback.get_object()
 			if pre_proto is DSLObject:
 				(pre_proto as DSLObject).last_error = ""
+		if callee is DSLMethodWrapper:
+			# dunder 直调的错误通道是 bound_self.last_error, 调用前同样清除残留
+			var pre_wrap_recv = (callee as DSLMethodWrapper).bound_self
+			if pre_wrap_recv is DSLObject:
+				(pre_wrap_recv as DSLObject).last_error = ""
 		var result = callee.magic_call(pos_args, kw_dict)
 		if _suspended:
 			# 挂起发生在嵌套用户调用内部 (调用栈留有帧) 时必须返回 null 使语句整体重放,
@@ -32575,7 +38403,9 @@ class Interpreter:
 				raise_exception_from_last_error(recv_err, recv_args)
 				return null
 		# 实例绑定包装 (method-wrapper): 错误记在绑定的接收者实例上, 同样须转为异常
-		if result == null and callee is DSLMethodWrapper:
+		# magic_call 把 null 结果包成 DSLNone, 故 result is DSLNone 时也须检查,
+		# 否则 __setitem__ 等无返回值方法的错误被静默吞掉
+		if (result == null or result is DSLNone) and callee is DSLMethodWrapper:
 			var wrapper_recv = (callee as DSLMethodWrapper).bound_self
 			if wrapper_recv is DSLObject and wrapper_recv.last_error != "":
 				var w_recv_err = wrapper_recv.last_error
@@ -32700,8 +38530,11 @@ class Interpreter:
 				var alias = entry["alias"]
 				names[alias if alias != "" else entry["name"]] = true
 		elif st is AnnotatedAssign:
-			names[st.name] = true
+			if st.target == null:
+				names[st.name] = true
 			_collect_locals_expr(st.annotation, names, globals_decl)
+			if st.target != null:
+				_collect_locals_expr(st.target, names, globals_decl)
 			if st.value != null:
 				_collect_locals_expr(st.value, names, globals_decl)
 		elif st is GlobalStmt:
@@ -32799,6 +38632,13 @@ class Interpreter:
 		elif expr is SetItem:
 			_collect_locals_expr(expr.object, names, globals_decl)
 			_collect_locals_expr(expr.index, names, globals_decl)
+			_collect_locals_expr(expr.value, names, globals_decl)
+		elif expr is ChainAssign:
+			for ct in expr.targets:
+				if ct is Variable:
+					names[ct.name] = true
+				else:
+					_collect_locals_expr(ct, names, globals_decl)
 			_collect_locals_expr(expr.value, names, globals_decl)
 		elif expr is SliceExpr:
 			_collect_locals_expr(expr.start, names, globals_decl)
@@ -32994,7 +38834,9 @@ class Interpreter:
 			var kw_val = kw_args[kw_name]
 			var matched = false
 			for p in params:
-				if p.is_kwargs:
+				# *args / **kwargs 形参不参与关键字实参的名字匹配,
+				# 名字恰为 args/kwargs 的关键字实参只能落入 **kwargs (CPython 语义)
+				if p.is_kwargs or p.is_args:
 					continue
 				if p.name == kw_name:
 					if p.is_positional_only:
@@ -33127,7 +38969,7 @@ class Interpreter:
 		var saved_pc = 0
 		var saved_cs_stmt_ri = {}
 		var saved_cs_stmt_replay = false
-		# 语句重放会重新求值实参表达式, 像 f(C(1)) 里的 C(1) 会产生结构相同但身份不同的新实例。
+		# 语句重放会重新求值实参表达式, 像 f(C(1)) 里的 C(1) 会产生结构相同但身份不同的新实例
 		# 此时按身份的实参比对必然失败, 函数体会被完整重跑一遍, 导致副作用重复执行, 
 		# 故仅在重放轮 (_sleep_root_key 已置位) 追加一次「按结构」的宽松比对
 		var allow_structural = _sleep_root_key != 0
@@ -33158,11 +39000,8 @@ class Interpreter:
 			_call_stack.remove_at(j)
 			break
 		
-		# 无帧可复用时, 若处于挂起语句的重执行中且该节点已有完成记录,
-		# 直接取缓存的返回值, 不再执行函数体 (兄弟调用的副作用不重复)。
-		# yield 生成器步与推导式元素求值内不短路: 那里的调用是后续元素的新逻辑调用
 		# 无帧可复用时, 若处于「整句重头重执行」的语句中且该节点已有同实参的完成记录,
-		# 直接取缓存的返回值, 不再执行函数体 (兄弟调用的副作用不重复)。
+		# 直接取缓存的返回值, 不再执行函数体 (兄弟调用的副作用不重复)
 		# yield 生成器步与推导式元素求值内不短路: 那里的调用是后续元素的新逻辑调用
 		if saved_env == null and _stmt_replay and _current_generator == null and _gen_walk_depth == 0 and call_node != null and _protocol_call_depth == 0:
 			var retired = _call_retired.get(call_node)
@@ -33322,7 +39161,7 @@ class Interpreter:
 	## [returns] 执行结果状态
 	## 非类基类的元类候选解析 (CPython build_class 语义) [br]
 	## 类基类的候选是其元类 type, 非类基类的候选是其类型对象 (type(value)); [br]
-	## 候选互不为子类时报 metaclass conflict (CPython 同文案), 同一候选重复出现不冲突 [br]
+	## 候选互不为子类时报 metaclass conflict, 同一候选重复出现不冲突 [br]
 	## [param base_val] 已求值的基类值 (类或非类) [br]
 	## [param base_objs] 原始基类值收集表 (含非类值, 供胜出候选调用时透传) [br]
 	## [param state] 解析状态, 键 "winner" 为候选对象或 null [br]
@@ -33485,7 +39324,7 @@ class Interpreter:
 				# type 子类元类, 收尾走 Meta.__new__ / __init__ 建类钩子
 				_meta_class_pending = mv
 		# 非类基类的胜出候选调用 (CPython build_class 语义): 以 (名字, 原始基类元组, 空属性字典)
-		# 调用候选, 调用报错原样传播; 调用成功则按 CPython 同文案报 metaclass conflict;
+		# 调用候选, 调用报错原样传播; 调用成功则报 metaclass conflict;
 		# 全部为类基类时胜出候选即默认 type, 走既有建类机制不发起调用
 		var base_winner = base_meta_state["winner"]
 		if base_winner != null and base_winner != globals.get_val_safe("type"):
@@ -33519,13 +39358,21 @@ class Interpreter:
 		class_obj.module_prefix = "__main__."
 		class_obj._module_name = current_module_name
 		class_obj._doc = stmt.doc
+		# 局部类限定名 (CPython __qualname__): outer.<locals>.Item 链, repr 用
+		if _current_function != null:
+			var cf = _current_function
+			var cprefix = cf.qualname if cf.qualname != "" else cf.declaration.name
+			class_obj.qualname = cprefix + ".<locals>." + stmt.name
 		# 多基类: 记录直接基类并计算 C3 线性化, 冲突与布局检查先于类体执行
 		class_obj.bases = base_objs
 		if not class_obj._recompute_mro():
 			var names: Array = []
-			for b in base_objs:
-				names.append(b.name)
-			raise_exception("TypeError", "Cannot create a consistent method resolution order (MRO) for bases %s" % ", ".join(names))
+			if class_obj._mro_conflict_names.size() > 0:
+				names = class_obj._mro_conflict_names
+			else:
+				for b in base_objs:
+					names.append(b.name)
+			raise_exception("TypeError", "Cannot create a consistent method resolution\norder (MRO) for bases %s" % ", ".join(names))
 			return ExecResult.RAISE
 		if _has_layout_conflict(base_objs):
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
@@ -33693,15 +39540,11 @@ class Interpreter:
 				roots.append(root)
 		return roots.size() > 1
 
-	## 向 preamble 中定义的内置类型类注入对应的方法描述 [br]
-	## 根据 [param cls_name] 匹配目标类型 (str/list/tuple/dict/int) [br]
-	## [param class_obj] 目标 DSLClass [br]
-	## [param cls_name] 类型
-	## I2-73: 类级魔法方法描述符——经 args[0] 分发到实际实例的 magic_<名> 方法, [br]
+	## 类级魔法方法描述符 —— 经 args[0] 分发到实际实例的 magic_<name> 方法, [br]
 	## 使 self 与 last_error 落在实例上 (proto 绑定描述符会让 self/last_error 落在 [br]
 	## 共享 proto 上, 造成错值与错误漏检); owner_name 显式标注供 repr 用 [br]
 	## [param name] 描述符名 (dunder) [br]
-	## [param mname] 实例方法名 (magic_<名>) [br]
+	## [param mname] 实例方法名 (magic_<name>) [br]
 	## [param owner] 归属类名
 	func _make_class_magic_desc(name: String, mname: String, owner: String) -> DSLWrappedDescriptor:
 		var d = DSLWrappedDescriptor.new(name, func(args, kwargs, _mn = mname):
@@ -33713,6 +39556,10 @@ class Interpreter:
 		d.owner_name = owner
 		return d
 
+	## 向 preamble 中定义的内置类型类注入对应的方法描述 [br]
+	## 根据 [param cls_name] 匹配目标类型 [br]
+	## [param class_obj] 目标 DSLClass [br]
+	## [param cls_name] 类型
 	func _inject_builtin_methods(class_obj: DSLClass, cls_name: String):
 		match cls_name:
 			"complex":
@@ -33853,6 +39700,7 @@ class Interpreter:
 				class_obj.methods["bit_count"] = DSLMethodDescriptor.new("bit_count", Callable(proto, "builtin_bit_count"))
 				class_obj.methods["to_bytes"] = DSLMethodDescriptor.new("to_bytes", Callable(proto, "builtin_to_bytes"))
 				class_obj.methods["hex"] = DSLMethodDescriptor.new("hex", Callable(proto, "builtin_hex"))
+				class_obj.methods["conjugate"] = DSLMethodDescriptor.new("conjugate", Callable(proto, "builtin_conjugate"))
 				class_obj.class_attrs["from_bytes"] = DSLClassMethodDescriptor.new("from_bytes", Callable(self, "api_int_from_bytes"))
 			"float":
 				var proto = DSLFloat.new(0.0)
@@ -33878,10 +39726,11 @@ class Interpreter:
 				class_obj.methods["is_integer"] = DSLMethodDescriptor.new("is_integer", Callable(proto, "builtin_is_integer"))
 				class_obj.methods["as_integer_ratio"] = DSLMethodDescriptor.new("as_integer_ratio", Callable(proto, "builtin_as_integer_ratio"))
 				class_obj.methods["hex"] = DSLMethodDescriptor.new("hex", Callable(proto, "builtin_hex"))
+				class_obj.methods["conjugate"] = DSLMethodDescriptor.new("conjugate", Callable(proto, "builtin_conjugate"))
 			"bool":
 				var proto = DSLBool.new(false)
 				_builtin_protos["bool"] = proto
-				# I2-73: 归属类名按 CPython 定义类型 (bool 继承 int 的 slot, __str__ 来自 object,
+				# 归属类名按 CPython 定义类型 (bool 继承 int 的 slot, __str__ 来自 object,
 				# __and__/__or__/__xor__/__invert__/__repr__ 由 bool 自身定义)
 				class_obj.methods["__eq__"] = _make_class_magic_desc("__eq__", "magic_eq", "int")
 				class_obj.methods["__ne__"] = _make_class_magic_desc("__ne__", "magic_ne", "int")
@@ -33917,7 +39766,9 @@ class Interpreter:
 				class_obj.methods["split"] = DSLMethodDescriptor.new("split", Callable(bytes_proto, "builtin_split"))
 				class_obj.methods["replace"] = DSLMethodDescriptor.new("replace", Callable(bytes_proto, "builtin_replace"))
 				class_obj.methods["find"] = DSLMethodDescriptor.new("find", Callable(bytes_proto, "builtin_find"))
+				class_obj.methods["rfind"] = DSLMethodDescriptor.new("rfind", Callable(bytes_proto, "builtin_rfind"))
 				class_obj.methods["index"] = DSLMethodDescriptor.new("index", Callable(bytes_proto, "builtin_index"))
+				class_obj.methods["rindex"] = DSLMethodDescriptor.new("rindex", Callable(bytes_proto, "builtin_rindex"))
 				class_obj.methods["count"] = DSLMethodDescriptor.new("count", Callable(bytes_proto, "builtin_count"))
 				class_obj.methods["startswith"] = DSLMethodDescriptor.new("startswith", Callable(bytes_proto, "builtin_startswith"))
 				class_obj.methods["endswith"] = DSLMethodDescriptor.new("endswith", Callable(bytes_proto, "builtin_endswith"))
@@ -33927,7 +39778,7 @@ class Interpreter:
 				class_obj.methods["rjust"] = DSLMethodDescriptor.new("rjust", Callable(bytes_proto, "builtin_rjust"))
 				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "bytes")
 				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "bytes")
-				# I2-73: bytes 的拼接/重复/取模/包含/比较/repr (proto 具体实现, 按 args[0] 运算)
+				# bytes 的拼接/重复/取模/包含/比较/repr (proto 具体实现, 按 args[0] 运算)
 				class_obj.methods["__add__"] = _make_class_magic_desc("__add__", "magic_add", "bytes")
 				class_obj.methods["__mul__"] = _make_class_magic_desc("__mul__", "magic_mul", "bytes")
 				class_obj.methods["__mod__"] = _make_class_magic_desc("__mod__", "magic_mod", "bytes")
@@ -33951,7 +39802,9 @@ class Interpreter:
 				class_obj.methods["split"] = DSLMethodDescriptor.new("split", Callable(ba_proto, "builtin_split"))
 				class_obj.methods["replace"] = DSLMethodDescriptor.new("replace", Callable(ba_proto, "builtin_replace"))
 				class_obj.methods["find"] = DSLMethodDescriptor.new("find", Callable(ba_proto, "builtin_find"))
+				class_obj.methods["rfind"] = DSLMethodDescriptor.new("rfind", Callable(ba_proto, "builtin_rfind"))
 				class_obj.methods["index"] = DSLMethodDescriptor.new("index", Callable(ba_proto, "builtin_index"))
+				class_obj.methods["rindex"] = DSLMethodDescriptor.new("rindex", Callable(ba_proto, "builtin_rindex"))
 				class_obj.methods["count"] = DSLMethodDescriptor.new("count", Callable(ba_proto, "builtin_count"))
 				class_obj.methods["startswith"] = DSLMethodDescriptor.new("startswith", Callable(ba_proto, "builtin_startswith"))
 				class_obj.methods["endswith"] = DSLMethodDescriptor.new("endswith", Callable(ba_proto, "builtin_endswith"))
@@ -33972,8 +39825,8 @@ class Interpreter:
 				class_obj.methods["__ne__"] = _make_class_magic_desc("__ne__", "magic_ne", "bytearray")
 				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "bytearray")
 				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "bytearray")
-				class_obj.methods["__setitem__"] = DSLWrappedDescriptor.new("__setitem__", Callable(ba_proto, "_dsl_setitem"))
-				# I2-73: bytearray 的拼接/重复/取模/包含/比较/repr (继承 DSLBytes 的具体实现, 按 args[0] 运算)
+				class_obj.methods["__setitem__"] = DSLWrappedDescriptor.new("__setitem__", Callable(ba_proto, "magic_setitem"))
+				# bytearray 的拼接/重复/取模/包含/比较/repr (继承 DSLBytes 的具体实现, 按 args[0] 运算)
 				class_obj.methods["__add__"] = _make_class_magic_desc("__add__", "magic_add", "bytearray")
 				class_obj.methods["__mul__"] = _make_class_magic_desc("__mul__", "magic_mul", "bytearray")
 				class_obj.methods["__mod__"] = _make_class_magic_desc("__mod__", "magic_mod", "bytearray")
@@ -34039,9 +39892,9 @@ class Interpreter:
 				class_obj.methods["__contains__"] = _make_class_magic_desc("__contains__", "magic_contains", "set")
 				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "set")
 				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "set")
-				# I2-73: set.__repr__ (CPython 暴露; __contains__ 为 method 形态, 见下方挂载)
+				# set.__repr__ (CPython 暴露, __contains__ 为 method 形态, 见下方挂载)
 				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "set")
-				# I2-73b: CPython 的 set.__contains__ 是 method_descriptor
+				# CPython 的 set.__contains__ 是 method_descriptor
 				class_obj.methods["__contains__"] = DSLMethodDescriptor.new("__contains__", Callable(proto, "magic_contains"))
 				class_obj.methods["add"] = DSLMethodDescriptor.new("add", Callable(proto, "builtin_add"))
 				class_obj.methods["remove"] = DSLMethodDescriptor.new("remove", Callable(proto, "builtin_remove"))
@@ -34076,7 +39929,7 @@ class Interpreter:
 				class_obj.methods["__contains__"] = _make_class_magic_desc("__contains__", "magic_contains", "frozenset")
 				class_obj.methods["__len__"] = _make_class_magic_desc("__len__", "magic_len", "frozenset")
 				class_obj.methods["__iter__"] = _make_class_magic_desc("__iter__", "magic_iter", "frozenset")
-				# I2-73: frozenset.__repr__ + __contains__ 为 method 形态 (CPython)
+				# frozenset.__repr__ + __contains__ 为 method 形态 (CPython)
 				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "frozenset")
 				class_obj.methods["__contains__"] = DSLMethodDescriptor.new("__contains__", Callable(proto, "magic_contains"))
 				class_obj.methods["copy"] = DSLMethodDescriptor.new("copy", Callable(proto, "builtin_copy"))
@@ -34087,10 +39940,11 @@ class Interpreter:
 				class_obj.methods["issubset"] = DSLMethodDescriptor.new("issubset", Callable(proto, "builtin_issubset"))
 				class_obj.methods["issuperset"] = DSLMethodDescriptor.new("issuperset", Callable(proto, "builtin_issuperset"))
 				class_obj.methods["isdisjoint"] = DSLMethodDescriptor.new("isdisjoint", Callable(proto, "builtin_isdisjoint"))
-		# I2-73: 把 proto 的魔法方法描述符挂到类 (CPython: str.__add__ 等 slot wrapper 类级可访问)
-		# 经反射读取各类型持有的描述符表 (int/float/complex/str/list/tuple/dict/memoryview);
+		
+		# 把 proto 的魔法方法描述符挂到类 (CPython: str.__add__ 等 slot wrapper 类级可访问),
+		# 经反射读取各类型持有的描述符表 (int/float/complex/str/list/tuple/dict/memoryview)
 		# 排除 __str__ (遮蔽派生类如 namedtuple 的 __repr__ 回退, 使其 str() 误走基类
-		# _dsl_str 形态) 与 __hash__/__call__ (派生实例语义不明确); 其余按 args[0] 运算安全
+		# _dsl_str 形态) 与 __hash__/__call__ (派生实例语义不明确), 其余按 args[0] 运算安全
 		var _proto = _builtin_protos.get(cls_name)
 		if _proto != null:
 			var _field_map := {
@@ -34113,7 +39967,7 @@ class Interpreter:
 					if _dn in ["__str__", "__hash__", "__call__"]:
 						continue
 					class_obj.methods[_dn] = _mdict[_dn]
-		# I2-73c: str.__str__ 安全挂载 (str 的 str() 为值语义, 子类与自定义 __repr__ 下也正确);
+		# str.__str__ 安全挂载 (str 的 str() 为值语义, 子类与自定义 __repr__ 下也正确),
 		# 其余类型 (int/float/容器) 的 __str__ 因派生类 __repr__ 回退语义保持不挂载
 		if cls_name == "str":
 			class_obj.methods["__str__"] = _make_class_magic_desc("__str__", "magic_str", "str")
@@ -34305,15 +40159,15 @@ class Interpreter:
 				if report.has_error:
 					return null
 				if res is DSLBool:
-					# bool 是 int 子类 (CPython 同): True → 1, False → 0
+					# bool 是 int 子类: True → 1, False → 0
 					return DSLInteger.pooled(1 if res.value else 0)
 				if res is DSLInteger:
 					if res.is_big():
-						# I2-63: 大数长度无法装入索引位宽 (CPython 同)
+						# 大数长度无法装入索引位宽
 						raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
 						return null
 					if res.value < 0:
-						# I2-63: __len__ 返回负数
+						# __len__ 返回负数
 						raise_exception("ValueError", "__len__() should return >= 0")
 						return null
 					return res
@@ -34369,23 +40223,46 @@ class Interpreter:
 		if args.size() < 1 or args.size() > 3:
 			raise_exception("TypeError", "range expected 1 to 3 arguments, got %d" % args.size())
 			return null
+		# 实参经 __index__ 协议归一 (bool 按 0/1, 大数保留任意精度)
+		var norm: Array[DSLObject] = []
 		for a in args:
-			if not (a is DSLInteger):
+			var na: DSLObject = null
+			if a is DSLInteger:
+				na = a
+			elif a is DSLBool:
+				na = DSLInteger.pooled(1 if a.value else 0)
+			elif a.klass != null:
+				var idx_m = a.klass._lookup_method("__index__")
+				if idx_m != null:
+					var idx_r = a.klass._invoke_func(idx_m, [a] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+					if _suspended:
+						return null
+					if report.has_error:
+						return null
+					if idx_r is DSLInteger:
+						na = idx_r
+					elif idx_r is DSLBool:
+						na = DSLInteger.pooled(1 if idx_r.value else 0)
+					elif idx_r != null:
+						raise_exception("TypeError", "__index__ returned non-int (type %s)" % idx_r._type_name())
+						return null
+			if na == null:
 				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % a._type_name())
 				return null
+			norm.append(na)
 		# 参数保留任意精度 (D4 对齐): 大数不再按索引位收敛, 惰性求值与 CPython 一致
 		var start_o = DSLInteger.pooled(0)
 		var stop_o = DSLInteger.pooled(0)
 		var step_o = DSLInteger.pooled(1)
-		if args.size() == 1:
-			stop_o = args[0]
-		elif args.size() == 2:
-			start_o = args[0]
-			stop_o = args[1]
+		if norm.size() == 1:
+			stop_o = norm[0]
+		elif norm.size() == 2:
+			start_o = norm[0]
+			stop_o = norm[1]
 		else:
-			start_o = args[0]
-			stop_o = args[1]
-			step_o = args[2]
+			start_o = norm[0]
+			stop_o = norm[1]
+			step_o = norm[2]
 		if not step_o.is_big() and step_o.value == 0:
 			raise_exception("ValueError", "range() arg 3 must not be zero")
 			return null
@@ -34396,9 +40273,23 @@ class Interpreter:
 		var sep = " "
 		var end = "\n"
 		if kwargs.has("sep"):
-			sep = kwargs["sep"]._dsl_str()
+			var sep_obj = kwargs["sep"]
+			if sep_obj is DSLNone:
+				sep = " "
+			elif sep_obj is DSLString:
+				sep = sep_obj.value
+			else:
+				raise_exception("TypeError", "sep must be None or a string, not %s" % sep_obj._type_name())
+				return null
 		if kwargs.has("end"):
-			end = kwargs["end"]._dsl_str()
+			var end_obj = kwargs["end"]
+			if end_obj is DSLNone:
+				end = "\n"
+			elif end_obj is DSLString:
+				end = end_obj.value
+			else:
+				raise_exception("TypeError", "end must be None or a string, not %s" % end_obj._type_name())
+				return null
 		
 		var s = ""
 		for i in range(args.size()):
@@ -34406,7 +40297,7 @@ class Interpreter:
 				s += sep
 			var str_result = args[i].magic_str([args[i]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			if report.has_error:
-				# I2-63: 任一模数 __str__/__repr__ 返回非法值已抛错: 整行不输出 (CPython 同)
+				# 任一模数 __str__/__repr__ 返回非法值已抛错: 整行不输出
 				return null
 			s += str_result.value if str_result is DSLString else args[i]._dsl_str()
 		s += end
@@ -34466,18 +40357,26 @@ class Interpreter:
 		var toks = lexer.scan()
 		if report.has_error:
 			var msg = report.last_error
+			var err_type = "SyntaxError"
 			if msg.begins_with("SyntaxError: "):
 				msg = msg.substr(13)
+			elif msg.begins_with("TabError: "):
+				err_type = "TabError"
+				msg = msg.substr(10)
 			report.clear_error()
-			raise_exception("SyntaxError", "%s (%s, line 1)" % [msg, filename])
+			raise_exception(err_type, "%s (%s, line 1)" % [msg, filename])
 			return null
 		var parser = Parser.new(report, toks)
 		parser.unclosed_error = lexer.unclosed_error
 		var body = parser.parse()
 		if report.has_error:
 			var msg = report.last_error
+			var err_type = "SyntaxError"
 			if msg.begins_with("SyntaxError: "):
 				msg = msg.substr(13)
+			elif msg.begins_with("TabError: "):
+				err_type = "TabError"
+				msg = msg.substr(10)
 			report.clear_error()
 			raise_exception("SyntaxError", "%s (%s, line 1)" % [msg, filename])
 			return null
@@ -34492,6 +40391,7 @@ class Interpreter:
 	## (CPython 的活 dict 视图语义简化为快照写回, 差异文档化)
 	func _dynamic_env(globals_arg: DSLObject, locals_arg: DSLObject) -> DSLEnvironment:
 		var env = DSLEnvironment.new(report, _builtin_env)
+		_dynamic_env_snapshot.clear()
 		if globals_arg is DSLDict:
 			for k in (globals_arg as DSLDict).dict:
 				var key = k
@@ -34502,6 +40402,7 @@ class Interpreter:
 				var v = (globals_arg as DSLDict).dict[k]
 				if v != null and key is String:
 					env.define(key, v)
+					_dynamic_env_snapshot.append(key)
 		return env
 
 	## 动态环境顶层绑定写回 globals 实参
@@ -34511,6 +40412,13 @@ class Interpreter:
 		var gd = globals_arg as DSLDict
 		for k in env.values:
 			gd._dsl_setitem(DSLString.new(k), env.values[k])
+		# exec/eval 执行期间被 del 的 globals 键同样删除 (对照快照)
+		for key in _dynamic_env_snapshot:
+			if not env.values.has(key):
+				var vkey = gd._key_to_variant(DSLString.new(key))
+				if vkey != null and gd.dict.has(vkey):
+					gd.dict.erase(vkey)
+		_dynamic_env_snapshot.clear()
 
 	## eval(source[, globals[, locals]]): 单表达式动态求值
 	func builtin_eval(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -34543,7 +40451,7 @@ class Interpreter:
 			raise_exception("SyntaxError", "invalid syntax (%s, line 1)" % filename)
 			return null
 		var expr0 = (code.statements[0] as ExpressionStmt).expression
-		if expr0 is Assign or expr0 is AugAssign or expr0 is AugAssignAttr or expr0 is AugAssignItem:
+		if expr0 is Assign or expr0 is AugAssign or expr0 is AugAssignAttr or expr0 is AugAssignItem or expr0 is ChainAssign:
 			raise_exception("SyntaxError", "invalid syntax (%s, line 1)" % filename)
 			return null
 		# 求值 (活环境: 无 globals 实参时用调用者环境)
@@ -34680,8 +40588,12 @@ class Interpreter:
 				var res = obj.klass._invoke_func(method, [obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if res is DSLInteger:
 					return res
-			# __hash__ = None 显式置空: 不可哈希 (CPython 同, I2-67)
-			if method == null and DSLClass._hash_attr_is_none(obj.klass):
+			# __hash__ = None 显式置空, 或类体定义了 __eq__ 却未定义 __hash__: 不可哈希
+			# (CPython 在类型创建时把 __hash__ 置 None); 内建类型注册的 __eq__ 描述符
+			# 不算类体定义, str/list 等内建子类沿用内建类型的可哈希性 (随后按值哈希)
+			var eq_method = obj.klass._lookup_method("__eq__")
+			var eq_user_defined = eq_method != null and (eq_method is DSLFunction or eq_method is DSLStaticMethodWrapper)
+			if method == null and (DSLClass._hash_attr_is_none(obj.klass) or eq_user_defined):
 				raise_exception("TypeError", "unhashable type: '%s'" % obj._type_name())
 				return null
 		if obj is DSLComplex:
@@ -34696,10 +40608,12 @@ class Interpreter:
 			# 对齐 CPython int 哈希 (模 2^61-1, -1 映射 -2), 快慢路径同算法
 			return DSLInteger.pooled((obj as DSLInteger)._big_hash())
 		if obj is DSLFloat:
-			# 数值相等的值哈希相等 (CPython 不变量): 整值浮点与对应整数同哈希
+			# 数值相等的值哈希相等 (CPython 不变量): 整值浮点与对应整数同哈希,
+			# 含超出 2^53 / int64 的整值浮点 (如 1e20) —— 经精确整数展开后走同一 int 哈希
 			var fv = obj.value
-			if fv == floor(fv) and abs(fv) <= 9007199254740992.0:
-				return DSLInteger.pooled(int(fv))
+			if not is_inf(fv) and fv == floor(fv):
+				var as_int = DSLObject._int_from_float_exact(fv)
+				return DSLInteger.pooled(as_int._big_hash())
 			return DSLInteger.pooled(hash(obj.value))
 		if obj is DSLString:
 			return DSLInteger.pooled(obj.value.hash())
@@ -34751,6 +40665,9 @@ class Interpreter:
 			var method = obj.klass._lookup_method("__abs__")
 			if method != null:
 				return obj.klass._invoke_func(method, [obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		# bool 是 int 子类 (abs(True) == 1)
+		if obj is DSLBool:
+			obj = DSLInteger.pooled(1 if obj.value else 0)
 		if obj is DSLInteger:
 			# 大数与最小整数的绝对值自动升级
 			if obj.is_big():
@@ -34765,9 +40682,51 @@ class Interpreter:
 		raise_exception("TypeError", "bad operand type for abs(): '%s'" % obj._type_name())
 		return null
 	
+	## 解析 open 的模式字符串 [br]
+	## 支持 r/w/a/x 主模式 + b/t 类型 + + 读写组合, 字符顺序不限 (CPython 同) [br]
+	## [param mode] 模式字符串 [br]
+	## [returns] 解析结果字典 (readable/writable/truncate/exclusive/append/binary), 非法模式返回空字典
+	func _parse_file_mode(mode: String) -> Dictionary:
+		var readable = false
+		var writable = false
+		var truncate = false
+		var exclusive = false
+		var append = false
+		var binary = false
+		var saw_main = false
+		for i in range(mode.length()):
+			var c = mode[i]
+			if not saw_main and (c == "r" or c == "w" or c == "a" or c == "x"):
+				saw_main = true
+				if c == "r":
+					readable = true
+				elif c == "w":
+					writable = true
+					truncate = true
+				elif c == "a":
+					writable = true
+					append = true
+				elif c == "x":
+					writable = true
+					exclusive = true
+			elif c == "b":
+				binary = true
+			elif c == "t":
+				binary = false
+			elif c == "+":
+				readable = true
+				writable = true
+			else:
+				return {}
+		if not saw_main:
+			return {}
+		return {"readable": readable, "writable": writable, "truncate": truncate,
+				"exclusive": exclusive, "append": append, "binary": binary}
+
 	## open(path, mode="r") - 文件打开 [br]
-	## 务实子集: r/w/a/rb/wb/ab; utf-8/ascii 编码; 相对路径按工程根解析 (宿主 FileAccess 语义); [br]
-	## 失败报 FileNotFoundError (CPython 同名异常, 已注册 OSError 子类)
+	## 务实子集: r/w/a/x/rb/wb/ab/xb/rt/wt/at/xt 与 + 读写组合; utf-8/ascii 编码; [br]
+	## 相对路径按工程根解析 (宿主 FileAccess 语义); 失败报 FileNotFoundError [br]
+	## 非法模式报 invalid mode, x 模式对已存在文件报 FileExistsError
 	func builtin_open(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 1 or args.size() > 3:
 			raise_exception("TypeError", "open() expected at most 3 arguments, got %d" % args.size())
@@ -34784,8 +40743,9 @@ class Interpreter:
 				raise_exception("TypeError", "open() argument must be str, not %s" % m_obj._type_name())
 				return null
 			mode = (m_obj as DSLString).value
-		var valid_modes = ["r", "w", "a", "rb", "wb", "ab"]
-		if not (mode in valid_modes):
+		# 模式白名单扩展 (r/w/a/x + b/t + + 组合), 非法模式报 invalid mode
+		var mode_info = _parse_file_mode(mode)
+		if mode_info.size() == 0:
 			raise_exception("ValueError", "invalid mode: '%s'" % mode)
 			return null
 		if args.size() == 3:
@@ -34807,22 +40767,38 @@ class Interpreter:
 			fa_path = _sandbox_real_path(vsub)
 		var exists = FileAccess.file_exists(fa_path)
 		var fa: FileAccess = null
-		if mode.begins_with("r"):
+		if mode_info["exclusive"]:
+			# x 模式对已存在文件报 FileExistsError
+			if exists:
+				raise_exception("FileExistsError", "[Errno 17] File exists: '%s'" % path)
+				return null
+		elif mode_info["readable"] and not mode_info["truncate"]:
 			if not exists:
 				raise_exception("FileNotFoundError", "[Errno 2] No such file or directory: '%s'" % path)
 				return null
-			fa = FileAccess.open(fa_path, FileAccess.READ)
+		var fa_mode: FileAccess.ModeFlags = FileAccess.READ
+		if mode_info["readable"] and mode_info["writable"]:
+			fa_mode = FileAccess.READ_WRITE
+		elif mode_info["writable"]:
+			fa_mode = FileAccess.WRITE
 		else:
-			if mode.begins_with("a"):
+			fa_mode = FileAccess.READ
+		if mode_info["writable"]:
+			if mode_info["truncate"]:
+				fa = FileAccess.open(fa_path, fa_mode)
+			elif mode_info["append"]:
+				# 追加模式: 已存在文件用 READ_WRITE 保留内容 (WRITE 会截断), 否则 WRITE 创建
 				fa = FileAccess.open(fa_path, FileAccess.READ_WRITE if exists else FileAccess.WRITE)
 				if fa != null:
 					fa.seek_end()
 			else:
-				fa = FileAccess.open(fa_path, FileAccess.WRITE)
+				fa = FileAccess.open(fa_path, fa_mode)
+		else:
+			fa = FileAccess.open(fa_path, fa_mode)
 		if fa == null:
 			raise_exception("OSError", "[Errno 13] Permission denied: '%s'" % path)
 			return null
-		return DSLFile.new(fa, path, mode)
+		return DSLFile.new(fa, path, mode, mode_info)
 
 	## ascii(obj) - repr 的纯 ASCII 转义形态 [br]
 	## 非 ASCII 字符按码点转义为 \xNN / \uNNNN / \UNNNNNNNN (CPython 同规则)
@@ -34830,7 +40806,11 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "ascii() takes exactly one argument (%d given)" % (args.size() - 1))
 			return null
-		var text = DSLObject._py_repr(args[0])
+		return DSLString.new(_ascii_escape_text(DSLObject._py_repr(args[0])))
+
+	## 文本的纯 ASCII 转义 (ascii() 与 f-string !a 共用): [br]
+	## 非 ASCII 字符按码点转义为 \xNN / \uNNNN / \UNNNNNNNN (CPython 同规则)
+	func _ascii_escape_text(text: String) -> String:
 		var out = ""
 		for i in range(text.length()):
 			var uc: int = text.unicode_at(i)
@@ -34842,7 +40822,7 @@ class Interpreter:
 				out += String.chr(92) + "u%04x" % uc
 			else:
 				out += String.chr(92) + "U%08x" % uc
-		return DSLString.new(out)
+		return out
 
 	## staticmethod(f) - 函数式静态方法包装
 	func builtin_staticmethod(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -34894,9 +40874,9 @@ class Interpreter:
 		return null
 
 	## sys.set_int_max_str_digits(n) - 设置 int↔str 转换的十进制位数上限 [br]
-	## 0 = 无上限; 非零值须 >= 640 (CPython 的 _PY_LONG_MAX_STR_DIGITS_THRESHOLD), [br]
-	## 否则报 ValueError "maxdigits must be 0 or larger than 640" (CPython 3.12 同文案) [br]
-	## 影响十进制 (非 2 的幂进制) 的 int() 解析与 str()/repr() 输出; 2/4/8/16/32 进制不受限
+	## 0 = 无上限, 非零值须 >= 640 (CPython 的 _PY_LONG_MAX_STR_DIGITS_THRESHOLD), [br]
+	## 否则报 ValueError "maxdigits must be 0 or larger than 640" [br]
+	## 影响十进制 (非 2 的幂进制) 的 int() 解析与 str()/repr() 输出, 2/4/8/16/32 进制不受限
 	func _sys_set_int_max_str_digits(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() > 1:
 			raise_exception("TypeError", "set_int_max_str_digits() takes at most 1 argument (%d given)" % args.size())
@@ -34985,7 +40965,25 @@ class Interpreter:
 		mod.members["exit"] = _make_builtin("exit", Callable(self, "_sys_exit"))
 		mod.members["set_int_max_str_digits"] = _make_builtin("set_int_max_str_digits", Callable(self, "_sys_set_int_max_str_digits"))
 		mod.members["get_int_max_str_digits"] = _make_builtin("get_int_max_str_digits", Callable(self, "_sys_get_int_max_str_digits"))
+		mod.members["exc_info"] = _make_builtin("exc_info", Callable(self, "_sys_exc_info"))
 		return mod
+
+	## sys.exc_info() - 返回 (type, value, traceback) 三元素元组 [br]
+	## 无活动异常时全为 None; traceback 恒为 None (PyGDS 无回溯对象)
+	func _sys_exc_info(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if last_exception != null:
+			var exc = last_exception
+			var tp: DSLObject = null
+			if exc.klass != null and exc.klass is DSLClass:
+				tp = exc.klass
+			else:
+				var exc_wrapped = exc._wrapped
+				if exc_wrapped is DSLException:
+					tp = globals.get_val_safe((exc_wrapped as DSLException).error_type)
+			if tp == null:
+				tp = DSLNone.new()
+			return DSLTuple.new([tp, exc, DSLNone.new()])
+		return DSLTuple.new([DSLNone.new(), DSLNone.new(), DSLNone.new()])
 
 	## min(*args, key) - 返回最小值
 	func builtin_min(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -35016,6 +41014,10 @@ class Interpreter:
 	func _minmax_impl(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject], is_min: bool) -> DSLObject:
 		var fname = "min" if is_min else "max"
 		var opname = "<" if is_min else ">"
+		for kw in kwargs.keys():
+			if kw != "key" and kw != "default":
+				raise_exception("TypeError", "'%s' is an invalid keyword argument for %s()" % [kw, fname])
+				return null
 		var key_func = null
 		if kwargs.has("key"):
 			key_func = kwargs["key"]
@@ -35025,6 +41027,10 @@ class Interpreter:
 		var default_val = null
 		var has_default = kwargs.has("default")
 		if has_default:
+			# 多位置实参时禁止 default
+			if args.size() > 1:
+				raise_exception("TypeError", "Cannot specify a default for %s() with multiple positional arguments" % fname)
+				return null
 			default_val = kwargs["default"]
 		if args.size() == 0:
 			raise_exception("TypeError", "%s expected at least 1 argument, got 0" % fname)
@@ -35102,13 +41108,27 @@ class Interpreter:
 		var start = DSLInteger.pooled(0)
 		if args.size() >= 2:
 			start = args[1]
+		# start= 关键字与位置实参同语义
+		if _kwargs.has("start"):
+			start = _kwargs["start"]
+		# CPython 对字符串起始值直接拒绝 (提示用 join)
+		if start is DSLString:
+			raise_exception("TypeError", "sum() can't sum strings [use ''.join(seq) instead]")
+			return null
 		var obj = args[0]
 		if obj._wrapped != null:
 			obj = obj._wrapped
 		var total = start
 		if obj is DSLList or obj is DSLTuple:
 			for item in obj.items:
-				total = total.magic_add([total, item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				var nxt = total.magic_add([total, item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if nxt == null:
+					# 累加失败 (类型不支持 +): 按左操作数残留文案转 TypeError, 不再静默吞掉
+					if report.has_error:
+						return null
+					raise_exception_from_last_error(total.last_error)
+					return null
+				total = nxt
 			return total
 		var iter = obj._dsl_iter()
 		if iter == null:
@@ -35118,7 +41138,13 @@ class Interpreter:
 			var iv = iter.next()
 			if iter.suspended:
 				break
-			total = total.magic_add([total, iv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var nxt2 = total.magic_add([total, iv] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if nxt2 == null:
+				if report.has_error:
+					return null
+				raise_exception_from_last_error(total.last_error)
+				return null
+			total = nxt2
 		return total
 	
 	## pow(x, y, mod) - 幂运算
@@ -35191,7 +41217,19 @@ class Interpreter:
 		var exp_ = args[1]
 		if args.size() >= 3:
 			var mod = args[2]
-			if base is DSLInteger and exp_ is DSLInteger and mod is DSLInteger:
+			# mod 模式下浮点/复数实参报 "3rd argument not allowed", 其它非数字类型走 ** 操作符报 unsupported operand
+			if base is DSLFloat or exp_ is DSLFloat or mod is DSLFloat or base is DSLComplex or exp_ is DSLComplex or mod is DSLComplex:
+				raise_exception("TypeError", "pow() 3rd argument not allowed unless all arguments are integers")
+				return null
+			var all_int = (base is DSLInteger or base is DSLBool) and (exp_ is DSLInteger or exp_ is DSLBool) and (mod is DSLInteger or mod is DSLBool)
+			if all_int:
+				# bool 是 int 子类: 归一为 int 后走整数模幂
+				if base is DSLBool:
+					base = DSLInteger.pooled(1 if base.value else 0)
+				if exp_ is DSLBool:
+					exp_ = DSLInteger.pooled(1 if exp_.value else 0)
+				if mod is DSLBool:
+					mod = DSLInteger.pooled(1 if mod.value else 0)
 				# 任一操作数为大数 -> 大数域模幂 (CPython 同语义, 支持巨指数)
 				var mb = mod as DSLInteger
 				var bb = base as DSLInteger
@@ -35225,9 +41263,9 @@ class Interpreter:
 					cur = (cur * cur) % m_abs
 					e = e >> 1
 				return DSLInteger.pooled(_py_mod(result, m))
-			var result = base.magic_pow([base, exp_] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-			result = result.magic_mod([result, mod] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-			return result
+			# 非整数非浮点实参: 三元 pow 报 unsupported operand (CPython 同, 不做先算后模)
+			raise_exception("TypeError", "unsupported operand type(s) for ** or pow(): '%s', '%s', '%s'" % [base._type_name(), exp_._type_name(), mod._type_name()])
+			return null
 		return base.magic_pow([base, exp_] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 
 	## CPython 语义的取模 (结果符号随除数)
@@ -35293,6 +41331,11 @@ class Interpreter:
 		if args.size() < 1:
 			raise_exception("TypeError", "sorted() takes at least 1 argument")
 			return null
+		for kw in _kwargs.keys():
+			if kw != "key" and kw != "reverse":
+				# CPython 对 sorted() 的未知 kwarg 文案仍写 "for sort()"
+				raise_exception("TypeError", "'%s' is an invalid keyword argument for sort()" % kw)
+				return null
 		var obj = args[0]
 		if obj._wrapped != null:
 			obj = obj._wrapped
@@ -35323,37 +41366,38 @@ class Interpreter:
 					break
 		var reverse_val = false
 		if _kwargs.has("reverse"):
-			var rv = _kwargs["reverse"]
-			if rv is DSLBool:
-				reverse_val = rv.value
+			# reverse 任意真值即生效 (不限于 DSLBool)
+			reverse_val = _kwargs["reverse"]._dsl_bool()
 		if _kwargs.has("key"):
 			var key_func = _kwargs["key"]
-			if key_func._dsl_is_callable():
-				var mapped = []
-				for item in items:
-					var k = key_func.magic_call([item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
-					if k == null:
-						# key 求值挂起或抛异常: 交回上层处理
-						return null
-					mapped.append({"item": item, "key": k})
-				_compare_error = ""
-				if reverse_val:
-					mapped.sort_custom(func(a, b): return not _compare_asc(a["key"], b["key"]))
-				else:
-					mapped.sort_custom(func(a, b): return _compare_asc(a["key"], b["key"]))
-				if _check_compare_error():
+			if not key_func._dsl_is_callable():
+				# 非可调用 key 报 TypeError
+				raise_exception("TypeError", "'%s' object is not callable" % key_func._type_name())
+				return null
+			var mapped = []
+			for item in items:
+				var k = key_func.magic_call([item] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if k == null:
+					# key 求值挂起或抛异常: 交回上层处理
 					return null
-				if _check_compare_error():
-					return null
-				var result_items: Array[DSLObject] = []
-				for m in mapped:
-					result_items.append(m["item"])
-				return DSLList.new(result_items)
+				mapped.append({"item": item, "key": k})
+			_compare_error = ""
+			# 稳定归并: reverse 仍按「更大者在前」比较, 等价元素保持原相对顺序
+			if reverse_val:
+				_stable_sort(mapped, func(a, b): return _compare_desc(a["key"], b["key"]))
+			else:
+				_stable_sort(mapped, func(a, b): return _compare_asc(a["key"], b["key"]))
+			if _check_compare_error():
+				return null
+			var result_items: Array[DSLObject] = []
+			for m in mapped:
+				result_items.append(m["item"])
+			return DSLList.new(result_items)
 		_compare_error = ""
 		if reverse_val:
-			items.sort_custom(_compare_desc)
+			_stable_sort(items, func(a, b): return _compare_desc(a, b))
 		else:
-			items.sort_custom(_compare_asc)
+			_stable_sort(items, func(a, b): return _compare_asc(a, b))
 		if _check_compare_error():
 			return null
 		return DSLList.new(items)
@@ -35366,6 +41410,50 @@ class Interpreter:
 		_compare_error = ""
 		raise_exception("TypeError", msg)
 		return true
+
+	## 稳定归并排序 (宿主 sort_custom 为不稳定 introsort, CPython 的 sorted 为稳定 Timsort) [br]
+	## 等价元素保持原相对顺序: 比较不分胜负时一律取左半 [br]
+	## [param arr] 待排数组 (原地排序) [br]
+	## [param less] 比较器: less(a, b) 为 true 表示 a 应排在 b 之前
+	func _stable_sort(arr: Array, less: Callable) -> void:
+		var n = arr.size()
+		if n < 2:
+			return
+		var src = arr.duplicate()
+		var dst := []
+		dst.resize(n)
+		var width = 1
+		while width < n:
+			var i = 0
+			while i < n:
+				var mid = mini(i + width, n)
+				var hi = mini(i + width * 2, n)
+				var a = i
+				var b = mid
+				var k = i
+				while a < mid and b < hi:
+					if less.call(src[b], src[a]):
+						dst[k] = src[b]
+						b += 1
+					else:
+						dst[k] = src[a]
+						a += 1
+					k += 1
+				while a < mid:
+					dst[k] = src[a]
+					a += 1
+					k += 1
+				while b < hi:
+					dst[k] = src[b]
+					b += 1
+					k += 1
+				i += width * 2
+			var tmp = src
+			src = dst
+			dst = tmp
+			width *= 2
+		for j in range(n):
+			arr[j] = src[j]
 	
 	## 升序比较函数, 用于 sorted [br]
 	## 比较不可用时记录 _compare_error, 由 builtin_sorted 收尾转为 TypeError
@@ -35441,6 +41529,15 @@ class Interpreter:
 		var obj = args[0]
 		if obj._wrapped != null:
 			obj = obj._wrapped
+		# 用户 __reversed__ 协议先行
+		if obj.klass != null:
+			var rev_method = obj.klass._lookup_method("__reversed__")
+			if rev_method != null:
+				var rev_res = obj.klass._invoke_func(rev_method, [obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if _suspended:
+					_needs_replay = true
+					return null
+				return rev_res
 		if obj is DSLList or obj is DSLTuple:
 			# CPython: reversed 返回一次性反向迭代器 (类型名 *_reverseiterator)
 			var rev_items = obj.items.duplicate()
@@ -35478,7 +41575,42 @@ class Interpreter:
 			for i in range(kk.size() - 1, -1, -1):
 				keys.items.append(obj._original_key_obj(kk[i]))
 			return DSLSeqIterator.new(keys, "dict_reversekeyiterator")
-		raise_exception("TypeError", "reversed() arg is not iterable")
+		if obj is DSLDeque:
+			# deque 可反转
+			var dq_items = obj.items.duplicate()
+			dq_items.reverse()
+			return DSLSeqIterator.new(DSLList.new(dq_items), "deque_reverseiterator")
+		if obj is DSLSet:
+			raise_exception("TypeError", "'set' object is not reversible")
+			return null
+		# 通用 __len__ + __getitem__ 序列协议 (用户类)
+		if obj.klass != null and obj.klass._lookup_method("__len__") != null and obj.klass._lookup_method("__getitem__") != null:
+			var len_res = obj.magic_len([obj] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if len_res == null:
+				if _suspended:
+					_needs_replay = true
+				return null
+			var n: int = 0
+			if len_res is DSLBool:
+				n = 1 if len_res.value else 0
+			elif len_res is DSLInteger:
+				if (len_res as DSLInteger).is_big():
+					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
+					return null
+				n = (len_res as DSLInteger).value
+			else:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % len_res._type_name())
+				return null
+			var seq_result = DSLList.new()
+			for i in range(n - 1, -1, -1):
+				var iv = obj.magic_getitem([obj, DSLInteger.pooled(i)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if iv == null or report.has_error or _suspended:
+					if _suspended:
+						_needs_replay = true
+					return null
+				seq_result.items.append(iv)
+			return DSLSeqIterator.new(seq_result, "reversed")
+		raise_exception("TypeError", "'%s' object is not reversible" % obj._type_name())
 		return null
 	
 	## enumerate(iterable, start) - 返回枚举对象
@@ -35491,6 +41623,7 @@ class Interpreter:
 			raise_exception("TypeError", "enumerate() takes at most 2 arguments (%d given)" % args.size())
 			return null
 		var start = 0
+		var start_big: DSLInteger = null
 		for k in kwargs:
 			if k != "start":
 				raise_exception("TypeError", "'%s' is an invalid keyword argument for enumerate()" % k)
@@ -35500,15 +41633,28 @@ class Interpreter:
 				raise_exception("TypeError", "enumerate() takes at most 2 arguments (%d given)" % (args.size() + 1))
 				return null
 			var sv = kwargs["start"]
+			if sv is DSLBool:
+				sv = DSLInteger.pooled(1 if sv.value else 0)
 			if sv is DSLInteger:
-				start = (sv as DSLInteger).value
+				var si = sv as DSLInteger
+				# 大数 start 随步进任意精度计数 (CPython 3.12 同, 不落 int64)
+				if si.is_big():
+					start_big = si
+				else:
+					start = si.value
 			else:
 				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % sv._type_name())
 				return null
 		elif args.size() >= 2:
 			var sv2 = args[1]
+			if sv2 is DSLBool:
+				sv2 = DSLInteger.pooled(1 if sv2.value else 0)
 			if sv2 is DSLInteger:
-				start = (sv2 as DSLInteger).value
+				var si2 = sv2 as DSLInteger
+				if si2.is_big():
+					start_big = si2
+				else:
+					start = si2.value
 			else:
 				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % sv2._type_name())
 				return null
@@ -35526,7 +41672,7 @@ class Interpreter:
 		# 源迭代器退出语句消费窗口 (理由同 builtin_zip): 重放轮由本对象日志
 		# 重读已产出行, 续拉按源自身进度推进, 不回退源游标
 		iter.windowed = false
-		return _memo_generator(_current_call_node, DSLEnumerateObject.new(iter, start, self))
+		return _memo_generator(_current_call_node, DSLEnumerateObject.new(iter, start_big if start_big != null else start, self))
 	
 	## zip(*iterables, strict=False) - 并行惰性迭代对象 (CPython 同为一次性迭代器)
 	func builtin_zip(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -35576,27 +41722,24 @@ class Interpreter:
 				if obj_item._dsl_bool():
 					return DSLBool.new(true)
 			return DSLBool.new(false)
-		if obj is DSLDict:
-			if obj.dict.size() == 0:
-				return DSLBool.new(false)
-			for key in obj.dict.keys():
-				if obj.dict[key]._dsl_bool():
-					return DSLBool.new(true)
-			return DSLBool.new(false)
-		if obj is DSLString:
-			return DSLBool.new(obj.value != "")
 		var iter = obj._dsl_iter()
-		if iter != null:
-			while iter.has_next():
-				var obj_item = iter.next()
-				if iter.suspended:
-					break
-				if obj_item._wrapped != null:
-					obj_item = obj_item._wrapped
-				if obj_item._dsl_bool():
-					return DSLBool.new(true)
-			return DSLBool.new(false)
-		return DSLBool.new(true)
+		if iter == null:
+			# 不可迭代按 CPython 报 TypeError (dict 迭代键, 交由通用迭代路径)
+			if obj.last_error != "":
+				raise_exception_from_last_error(obj.last_error)
+				obj.last_error = ""
+			else:
+				raise_exception("TypeError", "'%s' object is not iterable" % obj._type_name())
+			return null
+		while iter.has_next():
+			var obj_item = iter.next()
+			if iter.suspended:
+				break
+			if obj_item._wrapped != null:
+				obj_item = obj_item._wrapped
+			if obj_item._dsl_bool():
+				return DSLBool.new(true)
+		return DSLBool.new(false)
 	
 	## all(iterable) - 所有元素为真则返回 True
 	func builtin_all(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
@@ -35614,24 +41757,23 @@ class Interpreter:
 				if not obj_item._dsl_bool():
 					return DSLBool.new(false)
 			return DSLBool.new(true)
-		if obj is DSLDict:
-			for key in obj.dict.keys():
-				if not obj.dict[key]._dsl_bool():
-					return DSLBool.new(false)
-			return DSLBool.new(true)
-		if obj is DSLString:
-			return DSLBool.new(obj.value != "")
 		var iter = obj._dsl_iter()
-		if iter != null:
-			while iter.has_next():
-				var obj_item = iter.next()
-				if iter.suspended:
-					break
-				if obj_item._wrapped != null:
-					obj_item = obj_item._wrapped
-				if not obj_item._dsl_bool():
-					return DSLBool.new(false)
-			return DSLBool.new(true)
+		if iter == null:
+			# 不可迭代按 CPython 报 TypeError (dict 迭代键, 交由通用迭代路径)
+			if obj.last_error != "":
+				raise_exception_from_last_error(obj.last_error)
+				obj.last_error = ""
+			else:
+				raise_exception("TypeError", "'%s' object is not iterable" % obj._type_name())
+			return null
+		while iter.has_next():
+			var obj_item = iter.next()
+			if iter.suspended:
+				break
+			if obj_item._wrapped != null:
+				obj_item = obj_item._wrapped
+			if not obj_item._dsl_bool():
+				return DSLBool.new(false)
 		return DSLBool.new(true)
 	
 	## ord(c) - 返回字符的 Unicode 码点
@@ -35645,6 +41787,13 @@ class Interpreter:
 				raise_exception("TypeError", "ord() expected a character, but string of length %d found" % obj.value.length())
 				return null
 			return DSLInteger.pooled(obj.value.unicode_at(0))
+		if obj is DSLBytes or obj is DSLByteArray:
+			# ord 接受 bytes/bytearray 单字节 (按 UTF-8 字节序的单一字节值)
+			var bdata = (obj as DSLBytes).data
+			if bdata.size() != 1:
+				raise_exception("TypeError", "ord() expected a character, but string of length %d found" % bdata.size())
+				return null
+			return DSLInteger.pooled(bdata[0])
 		raise_exception("TypeError", "ord() expected string of length 1")
 		return null
 	
@@ -35686,6 +41835,9 @@ class Interpreter:
 			raise_exception("TypeError", "hex() takes 1 argument")
 			return null
 		var obj = args[0]
+		# bool 是 int 子类 (hex(True) == '0x1')
+		if obj is DSLBool:
+			obj = DSLInteger.pooled(1 if obj.value else 0)
 		if obj is DSLInteger:
 			# 大数十六进制
 			if obj.is_big():
@@ -35693,7 +41845,7 @@ class Interpreter:
 			if obj.value < 0:
 				return DSLString.new("-0x" + _int_to_hex(-obj.value))
 			return DSLString.new("0x" + _int_to_hex(obj.value))
-		raise_exception("TypeError", "hex() argument must be int")
+		raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % obj._type_name())
 		return null
 	
 	## oct(x) - 转换为八进制字符串
@@ -35702,6 +41854,9 @@ class Interpreter:
 			raise_exception("TypeError", "oct() takes 1 argument")
 			return null
 		var obj = args[0]
+		# bool 是 int 子类 (oct(True) == '0o1')
+		if obj is DSLBool:
+			obj = DSLInteger.pooled(1 if obj.value else 0)
 		if obj is DSLInteger:
 			if obj.is_big():
 				return DSLString.new(("-0o" if obj.big_neg else "0o") + DSLBigInt.mag_to_base(obj.big_limbs, 8))
@@ -35717,7 +41872,7 @@ class Interpreter:
 			else:
 				result = "0o" + result
 			return DSLString.new(result)
-		raise_exception("TypeError", "oct() argument must be int")
+		raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % obj._type_name())
 		return null
 	
 	## bin(x) - 转换为二进制字符串
@@ -35726,6 +41881,9 @@ class Interpreter:
 			raise_exception("TypeError", "bin() takes 1 argument")
 			return null
 		var obj = args[0]
+		# bool 是 int 子类 (bin(True) == '0b1')
+		if obj is DSLBool:
+			obj = DSLInteger.pooled(1 if obj.value else 0)
 		if obj is DSLInteger:
 			if obj.is_big():
 				return DSLString.new(("-0b" if obj.big_neg else "0b") + DSLBigInt.mag_to_base(obj.big_limbs, 2))
@@ -35741,7 +41899,7 @@ class Interpreter:
 			else:
 				result = "0b" + result
 			return DSLString.new(result)
-		raise_exception("TypeError", "bin() argument must be int")
+		raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % obj._type_name())
 		return null
 	
 	## isinstance(obj, cls) - 检查类型
@@ -35866,7 +42024,17 @@ class Interpreter:
 			return null
 		var obj = args[0]
 		var name_obj = args[1]
-		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		# 属性名必须为 str
+		if not (name_obj is DSLString):
+			raise_exception("TypeError", "attribute name must be string, not '%s'" % name_obj._type_name())
+			return null
+		var name = name_obj.value
+		# 用户 __getattribute__ 钩子先行 (与 GetAttr 表达式同入口)
+		var hooked = _user_getattribute_hook(obj, name)
+		if _suspended or report.has_error:
+			return null
+		if hooked != null:
+			return hooked
 		var result = obj._dsl_getattribute(name)
 		if result != null and not (result is DSLNone):
 			return result
@@ -35891,7 +42059,16 @@ class Interpreter:
 			return null
 		var obj = args[0]
 		var name_obj = args[1]
-		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		if not (name_obj is DSLString):
+			raise_exception("TypeError", "attribute name must be string, not '%s'" % name_obj._type_name())
+			return null
+		var name = name_obj.value
+		# 用户 __getattribute__ 钩子先行 (与 GetAttr 表达式同入口)
+		var hooked = _user_getattribute_hook(obj, name)
+		if _suspended or report.has_error:
+			return null
+		if hooked != null:
+			return DSLBool.new(not (hooked is DSLNone))
 		var result = obj._dsl_getattribute(name)
 		if obj.last_error != "":
 			var err_msg = obj.last_error
@@ -35914,7 +42091,10 @@ class Interpreter:
 			return null
 		var obj = args[0]
 		var name_obj = args[1]
-		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		if not (name_obj is DSLString):
+			raise_exception("TypeError", "attribute name must be string, not '%s'" % name_obj._type_name())
+			return null
+		var name = name_obj.value
 		obj._dsl_setattr(name, args[2])
 		if obj.last_error != "":
 			raise_exception_from_last_error(obj.last_error, obj.last_error_args)
@@ -35929,7 +42109,10 @@ class Interpreter:
 			return null
 		var obj = args[0]
 		var name_obj = args[1]
-		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		if not (name_obj is DSLString):
+			raise_exception("TypeError", "attribute name must be string, not '%s'" % name_obj._type_name())
+			return null
+		var name = name_obj.value
 		obj._dsl_delattr(name)
 		if obj.last_error != "":
 			raise_exception_from_last_error(obj.last_error, obj.last_error_args)
@@ -36018,11 +42201,13 @@ class Interpreter:
 		return DSLInteger.pooled(0)
 
 	## 按指定进制解析整数字符串 (支持符号与前缀, base=0 时按 0x/0o/0b 前缀自动识别, 否则十进制)
-	func _parse_int_with_base(s: String, base: int) -> DSLInteger:
+	func _parse_int_with_base(s: String, base: int, is_bytes: bool = false) -> DSLInteger:
 		# base 合法域为 0 或 2..36 (base 1 可经 bool 基类到达, CPython 同报 range 文案)
 		if base != 0 and (base < 2 or base > 36):
 			raise_exception("ValueError", "int() base must be >= 2 and <= 36, or 0")
 			return null
+		# bytes 实参的错误文案按 b'...' 形态 (CPython int(bytes) 同构)
+		var lit_repr = ("b'%s'" % s) if is_bytes else ("'%s'" % s)
 		var text = s.strip_edges()
 		var neg = false
 		if text.begins_with("-"):
@@ -36052,17 +42237,17 @@ class Interpreter:
 				text = text.substr(2)
 		# 下划线是视觉分隔符: 不能位于首尾, 也不能连续出现
 		if text.begins_with("_") or text.ends_with("_") or text.contains("__"):
-			raise_exception("ValueError", "invalid literal for int() with base %d: '%s'" % [base, s])
+			raise_exception("ValueError", "invalid literal for int() with base %d: %s" % [base, lit_repr])
 			return null
 		text = text.replace("_", "")
 		if text == "":
-			raise_exception("ValueError", "invalid literal for int() with base %d: '%s'" % [base, s])
+			raise_exception("ValueError", "invalid literal for int() with base %d: %s" % [base, lit_repr])
 			return null
 		# 大数累加 (原 int64 回绕报错被自动升级取代)
 		for i in text.length():
 			var d = _digit_value(text[i])
 			if d < 0 or d >= base:
-				raise_exception("ValueError", "invalid literal for int() with base %d: '%s'" % [base, s])
+				raise_exception("ValueError", "invalid literal for int() with base %d: %s" % [base, lit_repr])
 				return null
 		# int_max_str_digits 上限 (CPython 3.11+ 对齐): 仅限非 2 的幂进制, 位数按去下划线后的
 		# 数字数计 (含前导零, CPython 同); 非法字符先于上限报错, 检查在 O(n²) 累加前立即中止
@@ -36074,13 +42259,18 @@ class Interpreter:
 		var pr = DSLBigInt.from_digits(text, base, neg)
 		return DSLInteger.from_big(pr[0], pr[1])
 
-	## 返回字符的数字值 (0-9a-z), 非法字符返回 -1
+	## 返回字符的数字值 (0-9a-z 及 Nd 十进制数字), 非法字符返回 -1 [br]
+	## Nd 十进制数字 (如阿拉伯-印度数字) 按码位区间定位数值, int() 解析据此对齐 CPython
 	func _digit_value(ch: String) -> int:
 		if ch >= "0" and ch <= "9":
 			return ch.unicode_at(0) - "0".unicode_at(0)
 		var lower = ch.to_lower()
 		if lower >= "a" and lower <= "z":
 			return lower.unicode_at(0) - "a".unicode_at(0) + 10
+		var cp = ch.unicode_at(0)
+		for r in DSLString._ND_RANGES:
+			if cp >= r[0] and cp <= r[1]:
+				return cp - r[0]
 		return -1
 
 	## dict.fromkeys(iterable, value=None) - 以可迭代对象为键构造新字典, 值均为 value
@@ -36315,6 +42505,21 @@ class Interpreter:
 				return DSLInteger.pooled(_round_int_scaled(val.value, -n))
 			return _round_big_scaled(val, -n)
 		if not (val is DSLFloat):
+			# 用户 __round__ 协议 (round(x) 传单参, round(x, n) 传双参)
+			if val.klass != null:
+				var rm = val.klass._lookup_method("__round__")
+				if rm != null and not (rm is DSLBuiltinFunction):
+					if rm.has_method("__get__"):
+						rm = rm.__get__(val, val.klass)
+					var r_args: Array[DSLObject] = []
+					if has_ndigits:
+						r_args.append(args[1])
+					var r_res = val.klass._invoke_func(rm, r_args, {} as Dictionary[String, DSLObject])
+					if _suspended:
+						return null
+					if report.has_error:
+						return null
+					return r_res
 			raise_exception("TypeError", "type %s doesn't define __round__ method" % val._type_name())
 			return null
 		var num = val.value
@@ -36371,10 +42576,14 @@ class Interpreter:
 		# tee 的子迭代器对象同样返回自身
 		if obj is DSLTeeHandle:
 			return obj
-		# 无限迭代器 (repeat / count / cycle) 的驱动状态在内部迭代器上,
-		# 以一等迭代器包装 (快照分支会无限驱动, 绝不可走)
-		if obj is DSLRepeat or obj is DSLCount or obj is DSLCycle:
-			return DSLSeqIterator.new(obj, obj._type_name())
+		# 无限迭代器 (repeat / count / cycle): 对象自身即一等迭代器 (iter(c) is c),
+		# 驱动状态缓存在对象上跨语句共享, 逐分支判定规避编译器跨类挂死
+		if obj is DSLRepeat:
+			return obj
+		if obj is DSLCount:
+			return obj
+		if obj is DSLCycle:
+			return obj
 		# 序列类型返回一等迭代器对象: 持原容器引用 (活动视图)
 		if obj is DSLList:
 			return DSLSeqIterator.new(obj, "range_iterator" if obj.is_range else "list_iterator")
@@ -36404,6 +42613,9 @@ class Interpreter:
 			return obj
 		# 惰性内建消费器对象 (map/zip/enumerate/filter): 返回自身 (iter(x) is x)
 		if obj is DSLLazyIterable:
+			return obj
+		# 用户迭代器对象返回自身 (CPython: iter(it) is it, 零消费; 快照排空会提前耗尽副作用)
+		if obj.klass != null and obj.klass._lookup_method("__next__") != null:
 			return obj
 		# 其余可迭代对象: 维持既有行为 (消费为快照列表)
 		var internal_it = obj._dsl_iter()
@@ -36438,7 +42650,8 @@ class Interpreter:
 		else:
 			var iter = it._dsl_iter()
 			if iter == null:
-				raise_exception("TypeError", "object is not an iterator")
+				# 补类型名对齐 CPython ('int' object is not an iterator)
+				raise_exception("TypeError", "'%s' object is not an iterator" % it._type_name())
 				return null
 			# next() 是消费语义: 语句重放时游标可能被回退到窗口起点,
 			# 此处推进到已确认取走的位置, 避免把交付过的值再交付一次
@@ -36631,7 +42844,7 @@ class Interpreter:
 		elif bases_obj is DSLClass:
 			base_objs.append(bases_obj)
 		else:
-			# I2-69: bases 既非元组也非类对象时报 CPython 同文案 (按实际类型名)
+			# bases 既非元组也非类对象时报 CPython 同文案 (按实际类型名)
 			raise_exception("TypeError", "type.__new__() argument 2 must be tuple, not " + bases_obj._type_name())
 			return null
 		var superclass = base_objs[0] if base_objs.size() > 0 else globals.get_val_safe("object")
@@ -36659,9 +42872,12 @@ class Interpreter:
 		new_cls.class_attrs = class_attrs_dict
 		if not new_cls._recompute_mro():
 			var names: Array = []
-			for b in base_objs:
-				names.append(b.name)
-			raise_exception("TypeError", "Cannot create a consistent method resolution order (MRO) for bases %s" % ", ".join(names))
+			if new_cls._mro_conflict_names.size() > 0:
+				names = new_cls._mro_conflict_names
+			else:
+				for b in base_objs:
+					names.append(b.name)
+			raise_exception("TypeError", "Cannot create a consistent method resolution\norder (MRO) for bases %s" % ", ".join(names))
 			return null
 		if _has_layout_conflict(base_objs):
 			raise_exception("TypeError", "multiple bases have instance lay-out conflict")
@@ -36702,11 +42918,20 @@ class Interpreter:
 				return null
 			var re = DSLComplex._num_part(first)
 			if re == null:
+				if first.last_error != "":
+					# 大数实参转 double 越界 (CPython OverflowError 同型)
+					raise_exception_from_last_error(first.last_error)
+					first.last_error = ""
+					return null
 				raise_exception("TypeError", "complex() first argument must be a string or a number, not '%s'" % first._type_name())
 				return null
 			var second = DSLObject._unwrap_dsl(call_args[1])
 			var im = DSLComplex._num_part(second)
 			if im == null:
+				if second.last_error != "":
+					raise_exception_from_last_error(second.last_error)
+					second.last_error = ""
+					return null
 				if second is DSLString:
 					raise_exception("TypeError", "complex() second arg can't be a string")
 				else:
@@ -36718,6 +42943,11 @@ class Interpreter:
 		var r1 = DSLComplex._num_part(first)
 		if r1 != null:
 			return DSLComplex.new(float(r1), 0.0)
+		if first.last_error != "":
+			# 大数实参转 double 越界 (CPython OverflowError 同型)
+			raise_exception_from_last_error(first.last_error)
+			first.last_error = ""
+			return null
 		if first is DSLString:
 			return _parse_complex_text((first as DSLString).value)
 		if first is DSLBytes:
@@ -36884,10 +43114,16 @@ class Interpreter:
 	## [returns] DSLInteger, 类型或字面量非法时报错并返回 null
 	func _convert_to_int(arg: DSLObject, base_arg = null) -> DSLInteger:
 		if base_arg != null:
-			if not (arg is DSLString):
-				raise_exception("TypeError", "int() can't convert non-string with explicit base")
-				return null
-			return _parse_int_with_base(arg.value, int(base_arg))
+			# bytes 与 str 都可带显式 base (int(b"12", 10) 合法)
+			if arg is DSLString:
+				return _parse_int_with_base(arg.value, int(base_arg))
+			if arg is DSLBytes:
+				var btext_b = ""
+				for b in arg.data:
+					btext_b += char(b)
+				return _parse_int_with_base(btext_b, int(base_arg), true)
+			raise_exception("TypeError", "int() can't convert non-string with explicit base")
+			return null
 		if arg is DSLBool:
 			return DSLInteger.pooled(1 if arg.value else 0)
 		if arg is DSLInteger:
@@ -36903,6 +43139,12 @@ class Interpreter:
 			return DSLObject._int_from_float_exact(arg.value)
 		if arg is DSLString:
 			return _parse_int_with_base(arg.value, 10)
+		if arg is DSLBytes:
+			# int(bytes) 按 ASCII 解码为十进制整数 (前导/尾部空白忽略)
+			var btext = ""
+			for b in arg.data:
+				btext += char(b)
+			return _parse_int_with_base(btext, 10, true)
 		# 用户类 __int__ / __index__ 协议 (与 __len__ 同一桥接模式)
 		if arg.klass != null:
 			var method = arg.klass._lookup_method("__int__")
@@ -36926,7 +43168,7 @@ class Interpreter:
 	## [param args] [cls, value?], cls 为目标类, value 为可选的初始值 [br]
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] DSLFloat 或带 klass 标记的 DSLFloat
-	## float.fromhex(s) (I1-82): 解析十六进制浮点字符串 (CPython METH_CLASS 内建) [br]
+	## float.fromhex(s): 解析十六进制浮点字符串 (CPython METH_CLASS 内建) [br]
 	## 形态: [符号] [0x] 十六进制尾数 [.尾数] [p 十进制指数(带符号)] 及 inf/infinity/nan [br]
 	## 值 = 尾数 × 2^(指数 - 4×小数位数); 大数尾数经 53 位半到偶舍入转 double, [br]
 	## 指数缩放按精确幂乘除 (溢出归 inf, 次规范单次舍入)
@@ -37144,7 +43386,10 @@ class Interpreter:
 				if (raw as DSLInteger).is_big():
 					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
 					return null
-				for i in range(maxi(raw.value, 0)):
+				if raw.value < 0:
+					raise_exception("ValueError", "negative count")
+					return null
+				for i in range(raw.value):
 					out.append(0)
 				return DSLByteArray.new(out)
 			if raw is DSLBytes:
@@ -37159,10 +43404,11 @@ class Interpreter:
 				return null
 			if raw is DSLList or raw is DSLTuple:
 				for it in raw.items:
-					if not (it is DSLInteger):
+					# bool 是 int 子类 (bytearray([True]) == bytearray(b'\\x01'))
+					if not (it is DSLBool or it is DSLInteger):
 						raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % it._type_name())
 						return null
-					var v = it.value
+					var v: int = (1 if it.value else 0) if it is DSLBool else it.value
 					if v < 0 or v > 255:
 						raise_exception("ValueError", "byte must be in range(0, 256)")
 						return null
@@ -37322,7 +43568,7 @@ class Interpreter:
 			var arg = args[1]
 			var raw = arg._wrapped if arg._wrapped != null else arg
 			if raw is DSLInteger:
-				# 分配长度为索引位 (CPython Py_ssize_t 同构); 负数报 CPython 同文案
+				# 分配长度为索引位 (CPython Py_ssize_t 同构)
 				if (raw as DSLInteger).is_big():
 					raise_exception("OverflowError", "cannot fit 'int' into an index-sized integer")
 					return null
@@ -37337,12 +43583,46 @@ class Interpreter:
 				for i in range(raw._offset, raw._offset + raw._size):
 					out.append(raw._obj.data[i])
 			elif raw is DSLString:
-				var buf = raw.value.to_utf8_buffer()
-				for b in buf:
-					out.append(b)
+				# 无 encoding 报 TypeError, 带 encoding 实参 (args[2]) 时按编码转换
+				if args.size() < 3:
+					raise_exception("TypeError", "string argument without an encoding")
+					return null
+				var enc_str = "utf-8"
+				if args[2] is DSLString:
+					enc_str = args[2].value
+				var sval = raw.value
+				if enc_str == "utf-8" or enc_str == "utf8":
+					var buf = sval.to_utf8_buffer()
+					for b in buf:
+						out.append(b)
+				elif enc_str == "ascii" or enc_str == "latin-1" or enc_str == "latin1" or enc_str == "iso-8859-1":
+					var lim = 128 if enc_str == "ascii" else 256
+					for i3 in range(sval.length()):
+						var cp3 = sval.unicode_at(i3)
+						if cp3 >= lim:
+							var esc3 = ""
+							if cp3 < 0x100:
+								esc3 = "\\x%02x" % cp3
+							elif cp3 < 0x10000:
+								esc3 = "\\u%04x" % cp3
+							else:
+								esc3 = "\\U%08x" % cp3
+							raise_exception("UnicodeEncodeError", "'%s' codec can't encode character '%s' in position %d: ordinal not in range(%d)" % [enc_str, esc3, i3, lim])
+							return null
+						out.append(cp3)
+				else:
+					raise_exception("LookupError", "unknown encoding: %s" % enc_str)
+					return null
 			elif raw is DSLList or raw is DSLTuple:
 				for it in raw.items:
-					if it is DSLInteger:
+					# bool 是 int 子类 (bytes([True]) == b'\\x01')
+					if it is DSLBool:
+						var v = 1 if it.value else 0
+						if v < 0 or v > 255:
+							raise_exception("ValueError", "bytes must be in range(0, 256)")
+							return null
+						out.append(v)
+					elif it is DSLInteger:
 						var v = it.value
 						if v < 0 or v > 255:
 							raise_exception("ValueError", "bytes must be in range(0, 256)")
@@ -37386,12 +43666,25 @@ class Interpreter:
 		if byteorder == "little":
 			bytes_data = bytes_data.duplicate()
 			bytes_data.reverse()
-		var v = 0
-		for b in bytes_data:
-			v = (v << 8) | b
-		if signed and bytes_data.size() > 0 and (bytes_data[0] & 0x80) != 0:
-			v -= 1 << (bytes_data.size() * 8)
-		return DSLInteger.pooled(v)
+		# 幅值按 4 字节一组自低位打包成 32 位 limbs (int64 移位在超 8 字节时回绕静默错值)
+		var mag: Array[int] = []
+		var nb = bytes_data.size()
+		var li = nb
+		while li > 0:
+			var lo = maxi(li - 4, 0)
+			var limb = 0
+			for bj in range(lo, li):
+				limb = (limb << 8) | bytes_data[bj]
+			mag.append(limb)
+			li = lo
+		var neg = false
+		if signed and nb > 0 and (bytes_data[0] & 0x80) != 0:
+			# 二补码负数: 幅值 = 2^(8L) - u
+			var one_l: Array[int] = [1]
+			var pow2 = DSLBigInt.mag_shl(one_l, nb * 8)
+			mag = DSLBigInt.mag_sub(pow2, mag)
+			neg = true
+		return DSLInteger.from_big(neg, mag)
 
 	func builtin_format_value(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.is_empty() or args.size() > 2:
@@ -37481,6 +43774,11 @@ class Interpreter:
 				for k in raw.members.keys():
 					if not names.has(k):
 						names.append(k)
+			if not (raw is DSLModule):
+				# 所有对象均含 __class__ (CPython dir() 对任意非空对象含 __class__, 无参 dir 返回作用域名不含
+				# 模块的 dir 仅命名空间 + 模块专属 dunder, 不含 __class__)
+				if not names.has("__class__"):
+					names.append("__class__")
 		names.sort()
 		var out: Array[DSLObject] = []
 		for n in names:

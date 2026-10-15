@@ -48,3 +48,49 @@ try:
 except ValueError as err:
     print("VI:", err)
 print(type(deque()).__name__)
+
+# deque 跨型等值/序列比较与边界
+# 元素相等统一经 _dsl_eq (此前只认同型元素, 其余落引用恒等)
+print(1.0 in deque([1]))
+print(deque([True]) == deque([1]))
+print(deque([10**20]) == deque([10**21]))
+print(deque([10**20]) != deque([10**21]))
+print(deque([1, 2]) == deque([1, 2]))
+print(deque([1]) == [1])
+print(deque([1.0]) == deque([1]))
+
+# 大数下标超界 (此前返回首元素)
+try:
+    print(deque([1, 2, 3])[10**30])
+except IndexError as e:
+    print("IE:", str(e))
+
+# rotate 大数 (此前静默不轮转)
+d = deque([1, 2, 3])
+try:
+    d.rotate(10**30)
+    print(list(d))
+except OverflowError as e:
+    print("OE:", str(e))
+
+# 序列字典序比较吞错修复 (deque 与 list 共享 _seq_lex_compare)
+try:
+    print(deque([1]) < deque(["a"]))
+except TypeError as e:
+    print("TE:", str(e))
+
+# bool 下标按 int
+print(deque([10, 20])[True])
+d2 = deque([1, 2, 3])
+d2[True] = 99
+print(list(d2))
+
+# reversed(deque)
+print(list(reversed(deque([1, 2, 3]))))
+print(list(reversed(deque([]))))
+
+# deque 方法接受 bool 实参 (bool 是 int 子类)
+d149 = deque([1, 2, 3])
+d149.rotate(True)
+print(list(d149))
+print(deque([1, 2, 3]).index(2, True))

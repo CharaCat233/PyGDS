@@ -16,11 +16,11 @@ try:
 except ValueError as e:
     print("STEP:", e)
 try:
-    0 ** -1
+    0**-1
 except ZeroDivisionError as e:
     print("ZD:", e)
 try:
-    0.0 ** -2
+    0.0**-2
 except ZeroDivisionError as e:
     print("ZD2:", e)
 try:

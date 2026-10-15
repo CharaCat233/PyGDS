@@ -2,7 +2,6 @@
 # 比对: same_output
 
 
-
 d = dict()
 d["name"] = "Alice"
 d["age"] = 30
@@ -46,3 +45,13 @@ print(d3)  # {}
 # dict constructor from list of pairs
 d4 = dict([[1, "one"], [2, "two"]])
 print(d4)  # {1: 'one', 2: 'two'}
+
+# dict 视图与集合比较 (items==set / keys==frozenset 双向)
+dv = {(1, 2): "x"}
+print(dv.items() == {(1, 2)})
+print({(1, 2)} == dv.items())
+dv2 = {1: "a"}
+print(dv2.keys() == frozenset({1}))
+print(frozenset({1}) == dv2.keys())
+print(dv2.items() == {(1, 2)})
+print({(1, 2)} == dv2.items())

@@ -1,7 +1,7 @@
 # 职责: bytes % 格式化占位符与对齐填充
 # 比对: same_output
 
-# bytes % 格式化 (PEP 461, alpha.4, P1-65)
+# bytes % 格式化 (PEP 461)
 print(b"%d" % 5, b"%i" % -3, b"%x" % 255, b"%X" % 255, b"%o" % 8, b"%u" % 7)
 print(b"%f" % 1.5, b"%.2f" % 1.5, b"%e" % 150.0, b"%g" % 1500000.0)
 print(b"%s" % b"xyz", b"%b" % b"hi")
@@ -13,9 +13,12 @@ print(b"[%-5d]" % 1, b"[%5d]" % 1, b"[%05d]" % 1)
 print(b"[%-5b]" % b"x", b"[%5b]" % b"x")
 print(b"abc" % ())
 print(b"%(a)s" % {b"a": b"v"}, b"%(n)d" % {b"n": 3})
+
+
 class B:
     def __bytes__(self):
         return b"proto"
+
 
 print(b"%b" % B())
 
@@ -25,7 +28,7 @@ try:
 except TypeError as e:
     print("TE:", e)
 
-# 数值转换实参校验: 字节类/字符串/浮点按 CPython 报 TypeError, 不再静默按 0 (I2-63 连带)
+# 数值转换实参校验: 字节类/字符串/浮点按 CPython 报 TypeError, 不再静默按 0
 try:
     b"%d" % b"5"
 except TypeError as e:
@@ -56,3 +59,9 @@ except OverflowError as e:
     print("TE-c-overflow:", e)
 # 合法数字形态不受影响
 print(b"%d" % True, b"%d" % 1.5, b"%x" % 255, b"%f" % 5)
+
+# bytes %c 大数报 OverflowError
+try:
+    b"%c" % (10**100,)
+except OverflowError as e:
+    print("OE-c:", type(e).__name__, str(e)[:40])

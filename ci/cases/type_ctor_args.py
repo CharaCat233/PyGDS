@@ -1,4 +1,4 @@
-# 职责: 内建类型构造器参数个数 / 关键字 / base 校验文案 (I2-58)
+# 职责: 内建类型构造器参数个数 / 关键字 / base 校验文案
 # 比对: same_output
 # 锚定: CPython 3.12
 
@@ -33,7 +33,7 @@ t("base_kw_str", lambda: int("11", base="2"))
 
 # int: base 合法域 0 或 2..36 (bool base 经索引化收敛)
 t("base_bool", lambda: int("11", True))
-t("base_big", lambda: int("11", 10 ** 30))
+t("base_big", lambda: int("11", 10**30))
 
 # str: 参数个数按位置 + 关键字合计, 上限 3 (CPython takes at most 文案)
 t("str4", lambda: str(1, 2, 3, 4))
@@ -44,7 +44,7 @@ t("bool_kw", lambda: bool(x=1))
 t("list_kw", lambda: list(iterable=[1, 2]))
 t("tuple_kw", lambda: tuple(iterable=(1, 2)))
 
-# 对照组: 通用参数个数文案双端本已一致, 不受本批改动影响
+# 对照组: 通用参数个数文案双端本已一致
 t("dict3", lambda: dict("C", (), {}))
 t("float3", lambda: float("C", (), {}))
 t("bool3", lambda: bool("C", (), {}))

@@ -27,16 +27,19 @@ def t4():
 
 def t5():
     import math
+
     math.factorial(-1)
 
 
 def t6():
     import math
+
     math.comb(3, -1)
 
 
 def t7():
     import math
+
     math.perm(3, -1)
 
 

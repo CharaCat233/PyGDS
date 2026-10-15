@@ -2,7 +2,6 @@
 # 比对: same_output
 
 
-
 class E:
     default = 9
 

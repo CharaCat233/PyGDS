@@ -3,6 +3,7 @@
 
 # yield from 委托与 yield 恢复期子表达式记忆测试
 
+
 # === send 转发到 yield from 子生成器 (PEP 380) ===
 def inner():
     v = yield 1
@@ -72,6 +73,7 @@ def main():
 
 
 print(list(main()))
+
 
 # === yield from 非生成器可迭代对象 ===
 def from_range():
@@ -151,4 +153,3 @@ except StopIteration:
     pass
 print("log2:", log2)
 
-print("done")

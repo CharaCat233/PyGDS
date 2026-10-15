@@ -33,6 +33,7 @@ try:
 except StopIteration as e:
     print("asend-athrow:", e.value)
 
+
 # aclose: 注入 GeneratorExit 走 finally, 返回 None, 之后耗尽
 async def agen2():
     try:
@@ -60,6 +61,7 @@ try:
     c.send(None)
 except StopIteration:
     pass
+
 
 # __anext__ 可等待对象的形态 (asend 族), 与 aiter() 内建
 async def agen3():

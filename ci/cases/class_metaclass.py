@@ -1,4 +1,4 @@
-# 职责: 自定义元类机制 (I1-38): metaclass= 的 __new__/__init__ 建类与 ns 修改回填 / __call__ 定制实例化 / 元类方法与属性查找 / 实例不穿透元类属性 / 双元类 conflict / __prepare__ 调用 / 隐式 __module__ 与 __qualname__
+# 职责: 自定义元类机制: metaclass= 的 __new__/__init__ 建类与 ns 修改回填 / __call__ 定制实例化 / 元类方法与属性查找 / 实例不穿透元类属性 / 双元类 conflict / __prepare__ 调用 / 隐式 __module__ 与 __qualname__
 # 比对: same_output
 # 锚定: CPython 3.12
 def t(label, fn):
@@ -45,6 +45,7 @@ t("call_custom", lambda: X(1, 2))
 class MA(type):
     def m_method(cls):
         return "meta method"
+
     attr = "meta attr"
 
 
@@ -77,6 +78,7 @@ t("conflict", lambda: None)
 try:
     class CC(B1, B2):
         pass
+
 except TypeError as e:
     print("conflict TypeError :", e)
 
@@ -89,6 +91,7 @@ class PC(type):
 
 class G(metaclass=PC):
     y = 2
+
     def m(self):
         pass
 

@@ -6,6 +6,7 @@
 have_warnings = False
 try:
     import warnings
+
     have_warnings = True
 except ImportError:
     pass

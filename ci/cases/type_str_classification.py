@@ -1,11 +1,19 @@
-# 职责: str 字符分类的 Unicode 码位全码段 (isdecimal/isdigit/isnumeric/isprintable/isspace, I2-74)
+# 职责: str 字符分类的 Unicode 码位全码段 (isdecimal/isdigit/isnumeric/isprintable/isspace)
 # 比对: same_output
 
 # Nd 全码段、digit-type 附加、No+Nl 与 CJK 数字表意字、Cf 格式符、Zs 空白
-# 均按 CPython 对齐; 未分配 (Cn) 码位的 isprintable 判定为平台残余 (P4)
+# 均按 CPython 对齐; 未分配 (Cn) 码位的 isprintable 判定为平台残余
+
 
 def t(label, ch):
-    print(label, ch.isdecimal(), ch.isdigit(), ch.isnumeric(), ch.isprintable(), ch.isspace())
+    print(
+        label,
+        ch.isdecimal(),
+        ch.isdigit(),
+        ch.isnumeric(),
+        ch.isprintable(),
+        ch.isspace(),
+    )
 
 
 # Nd 十进制数字 (isdecimal/is digit True)

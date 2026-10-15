@@ -5,8 +5,10 @@
 class P:
     def __init__(self, v):
         self.v = v
+
     def __lt__(self, other):
         return self.v < other.v
+
 
 a = [P(2), P(1)]
 a.sort()
@@ -20,18 +22,20 @@ print(max([P(2), P(1)]).v)
 print(min([P(2), P(1)], key=lambda p: -p.v).v)
 print(sorted([P(2), P(1)], key=lambda p: p.v)[0].v)
 
+
 class Q:
     def __init__(self, v):
         self.v = v
+
     def __gt__(self, other):
         return self.v > other.v
+
 
 print(sorted([Q(2), Q(1)])[0].v)
 print(max([Q(2), Q(1)]).v)
 print([P(1), P(9)] < [P(2), P(9)])
 
 try:
-    sorted([P(1), 'a'])
+    sorted([P(1), "a"])
 except TypeError:
-    print('TypeError')
-print('done')
+    print("TypeError")

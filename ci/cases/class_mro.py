@@ -50,6 +50,7 @@ class Plain:
 try:
     class Conflict(A, B, A):
         pass
+
 except TypeError as e:
     print("conflict bases rejected")
 
@@ -70,3 +71,28 @@ class SubM(LeftM, RightM):
 
 print(SubM().m())
 print([k.__name__ for k in SubM.__mro__])
+
+
+# MRO 冲突文案指向真正冲突基类对
+class C_A:
+    pass
+
+
+class C_B:
+    pass
+
+
+class C_X(C_A, C_B):
+    pass
+
+
+class C_Y(C_B, C_A):
+    pass
+
+
+try:
+    class C_Z(C_X, C_Y):
+        pass
+
+except TypeError as e:
+    print("mro-conflict:", str(e))

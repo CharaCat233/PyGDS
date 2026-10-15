@@ -9,6 +9,7 @@ def trace(fn):
     def wrapper(*args, **kwargs):
         LOG.append("call " + str(args[0]))
         return fn(*args, **kwargs)
+
     return wrapper
 
 
@@ -16,6 +17,7 @@ def tag(t):
     def deco(fn):
         LOG.append("tag " + t)
         return fn
+
     return deco
 
 
@@ -88,6 +90,7 @@ try:
     @5
     def broken():
         pass
+
 except TypeError as e:
     print("deco err:", e)
 
@@ -111,6 +114,7 @@ def slow_deco(fn):
     def wrapper(x):
         time.sleep(0.01)
         return fn(x) + 1
+
     return wrapper
 
 
@@ -143,6 +147,7 @@ def factory(name):
     def deco(fn):
         EVENTS.append("apply " + name)
         return fn
+
     return deco
 
 

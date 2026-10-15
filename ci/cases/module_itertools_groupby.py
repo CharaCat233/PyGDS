@@ -1,8 +1,9 @@
 # 职责: groupby 惰性 grouper 一次性与游标共享
 # 比对: same_output
 
-# groupby 的惰性 grouper (P2-24)
+# groupby 的惰性 grouper
 from itertools import groupby
+
 for k, g in groupby("aabbc"):
     print(k, list(g))
 # 外层推进后, 旧 grouper 立即耗尽且不消费后续组的数据
@@ -36,4 +37,3 @@ print(iter(it2) is it2)
 # 先收集全部 (键, grouper) 再回溯迭代: 源已耗尽, 全为空
 pairs = list(groupby("aabb"))
 print([list(g) for _, g in pairs])
-print("done")

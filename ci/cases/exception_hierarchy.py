@@ -89,7 +89,13 @@ except ValueError as e:
     print("float error caught after prior catch")
 
 # 捕获后类型系统仍正确
-print("types:", type(True).__name__, type(1).__name__, type(1.5).__name__, type("s").__name__)
+print(
+    "types:",
+    type(True).__name__,
+    type(1).__name__,
+    type(1.5).__name__,
+    type("s").__name__,
+)
 print("still works:", 1 + True, 1.5 + True, "a" + "b", [1] + [2])
 
 

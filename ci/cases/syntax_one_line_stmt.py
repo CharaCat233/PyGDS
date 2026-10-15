@@ -21,4 +21,3 @@ for i in range(2): print(i)
 def g():
     if True: return 'inner'
 print(g())
-print('done')

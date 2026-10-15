@@ -32,8 +32,6 @@ print(a, b)                  # 1 []
 *a, = [1, 2, 3]
 print(a)                     # [1, 2, 3]
 
-print("done")
-
 # === 多重赋值目标 ===
 a = [1, 2, 3]
 a[0], a[2] = a[2], a[0]
@@ -67,4 +65,3 @@ bag = Bag()
 bag.put("z", 5)
 print("chained:", bag.data)
 
-print("done")

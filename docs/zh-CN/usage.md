@@ -1946,7 +1946,7 @@ print(clamp(150, 0, 100))  # 100
 - **complex**：`1j` 字面量与 `complex(re, im)` / `complex(str)` 构造，四则运算、比较、`abs` / `conjugate` 与 CPython 对齐；整指数幂精确，非整指数走极坐标（libm 路径，跨平台比对建议 `round(..., N)`）
 - **bytearray**：可变字节序列，支持下标/切片赋值与 `append` / `extend` / `insert` / `pop` / `remove` / `reverse` 等；不可哈希（不能作字典键/集合元素）
 - **memoryview**：一维 B 格式视图，bytes 底层只读、bytearray 底层可写透传；`release()` 后操作报错
-- **open(path, mode)**：基于宿主 FileAccess 的文件对象；无沙箱时相对路径按工程根解析；沙箱实例内收敛到盘符目录并按「盘符虚拟沙箱」小节的路径规则约束。支持 `r` / `w` / `a` / `rb` / `wb` / `ab` 与 `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close`；文本写即时落盘
+- **open(path, mode)**：基于宿主 FileAccess 的文件对象；无沙箱时相对路径按工程根解析；沙箱实例内收敛到盘符目录并按「盘符虚拟沙箱」小节的路径规则约束。支持 `r` / `w` / `a` / `x` 与 `b` / `t` 修饰及 `+` 读写组合（如 `r+` / `wt` / `xb`；缺省 `t`），编码实参 `utf-8` / `ascii`，非法模式报 `ValueError: invalid mode`，`x` 对已存在文件报 `FileExistsError`；另有 `read` / `readline` / `readlines` / `write` / `writelines` / `seek` / `tell` / `close` 方法，文本写即时落盘
 
 ## 限制与注意事项
 

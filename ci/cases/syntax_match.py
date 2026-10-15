@@ -35,6 +35,7 @@ match 2:
     case y:
         print("small", y)
 
+
 # 单例字面量身份语义
 def f_true(x):
     match x:
@@ -42,7 +43,10 @@ def f_true(x):
             return "T"
         case _:
             return "n"
+
+
 print(f_true(1), f_true(True))
+
 
 def f_none(x):
     match x:
@@ -50,7 +54,10 @@ def f_none(x):
             return "N"
         case _:
             return "n"
+
+
 print(f_none(None), f_none(0))
+
 
 # 数字字面量相等语义 (1 == 1.0 == True)
 def f_num(x):
@@ -59,7 +66,10 @@ def f_num(x):
             return "one"
         case _:
             return "n"
+
+
 print(f_num(1), f_num(1.0), f_num(True))
+
 
 # 负数字面量
 def f_neg(x):
@@ -68,6 +78,8 @@ def f_neg(x):
             return "neg"
         case _:
             return "n"
+
+
 print(f_neg(-3), f_neg(3))
 
 # 字符串字面量
@@ -97,6 +109,7 @@ match [1, 9]:
     case [1, y] as whole:
         print("as", y, whole)
 
+
 # 主题表达式元组
 def f_subj(a, b):
     match a, b:
@@ -108,6 +121,8 @@ def f_subj(a, b):
             return ("x", x)
         case _:
             return "other"
+
+
 print(f_subj(0, 0), f_subj(0, 4), f_subj(6, 0), f_subj(6, 4))
 
 # 捕获之后的 case 不可达 (前一无守卫捕获), 语法错误在 err 用例覆盖;
@@ -118,6 +133,7 @@ match 5:
     case y:
         print("pos", y)
 
+
 # 守卫失败后绑定保留
 def f_keep(x):
     msg = ""
@@ -127,6 +143,8 @@ def f_keep(x):
         case _:
             msg = "wild"
     return (msg, y)
+
+
 print(f_keep(5))
 
 # 软关键字: match / case 作普通标识符
@@ -138,8 +156,11 @@ match = [1, 2]
 match[0] = 9
 print(match)
 
+
 def match(x):
     return x * 2
+
+
 print(match(21))
 
 d = {"match": 1, "case": 2}
@@ -157,6 +178,7 @@ for v in [1, "a", None]:
         case _:
             print("other")
 
+
 # 函数内 match 绑定局部变量
 def f_scope(x):
     match x:
@@ -165,6 +187,7 @@ def f_scope(x):
         case _:
             r = -1
     return r
+
+
 print(f_scope([10, 20]), f_scope([1, 2, 3]))
 
-print("done_basic")

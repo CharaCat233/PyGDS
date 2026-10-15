@@ -8,8 +8,12 @@ print(type(r).__name__)
 print(list(reversed("ab")), list(reversed((1, 2))))
 print(list(reversed({"a": 1, "b": 2})))
 print("{0.real}".format(3), "{n.real}".format(n=5))
+
+
 class N:
     v = "attr-val"
+
+
 print("{m.v}".format(m=N()))
 print(b"abc" < b"abd", b"abc" <= b"abc", b"abd" > b"abc")
 print(bytes(range(3)))

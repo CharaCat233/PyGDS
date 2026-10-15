@@ -2,11 +2,13 @@
 # 比对: same_output
 import base64
 
+
 def show(label, fn):
     try:
         print(label, "OK", repr(fn()))
     except Exception as e:
         print(label, type(e).__name__)
+
 
 b64 = base64.b64encode(b"hello world")
 print("b64e", b64)
@@ -21,4 +23,20 @@ print("urld", base64.urlsafe_b64decode(base64.urlsafe_b64encode(b"\xfb\xff\x01")
 print("b16e", base64.b16encode(b"\x01\xab\xff"))
 print("b16d", base64.b16decode(base64.b16encode(b"\x01\xab\xff")))
 print("eb", base64.encodebytes(b"hello world hello world hello world"))
-print("db", base64.decodebytes(base64.encodebytes(b"hello world hello world hello world")))
+print(
+    "db", base64.decodebytes(base64.encodebytes(b"hello world hello world hello world"))
+)
+
+
+# base64 解码接受 ASCII str (编码侧仍拒绝 str)
+print("bd:", base64.b64decode("YWJj"))
+print("bd2:", base64.b64decode("YQ=="))
+print("bd3:", base64.b16decode("6162"))
+try:
+    base64.b64decode("你")
+except ValueError as e:
+    print("bd-uni:", str(e))
+try:
+    base64.b64encode("ab")
+except TypeError as e:
+    print("be-str:", str(e))

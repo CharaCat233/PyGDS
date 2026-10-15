@@ -62,3 +62,21 @@ obj.increment_class_var()
 print("class_var:", MyClass.class_var)  # 103
 MyClass.increment_class_var()
 print("class_var:", MyClass.get_class_var())  # 104
+
+
+# 嵌套/局部类的默认 repr 用限定名 (CPython __main__.fn.<locals>.Item)
+def _mk_local():
+    class Item:
+        pass
+
+    return Item()
+
+
+_mk_local_inst = _mk_local()
+print(str(_mk_local_inst))  # 归一后 <_mk_local.<locals>.Item object>
+print(repr(_mk_local_inst))
+print(_mk_local_inst.__class__.__qualname__)  # _mk_local.<locals>.Item
+
+# 类级 repr 与 __name__ 不变
+print(type(_mk_local_inst).__name__)
+print(repr(type(_mk_local_inst)))  # <class '__main__._mk_local.<locals>.Item'>

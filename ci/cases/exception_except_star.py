@@ -1,6 +1,7 @@
 # 职责: except* 语义 (子组匹配与形态, 自动包装, 多子句消费余量, else/finally, 处理器异常)
 # 比对: same_output
 
+
 # 裸异常自动包装: 消息空串的 ExceptionGroup, as 直接绑定组 (恒为组, CPython 同)
 def t2():
     try:
@@ -66,6 +67,7 @@ try:
 except Exception as e:
     print("t6-rest:", type(e).__name__, str(e))
 
+
 # finally 与 else
 def t7():
     try:
@@ -105,6 +107,7 @@ try:
 except NameError:
     print("t9-deleted: NameError")
 
+
 # 处理器内新异常: 余量丢弃, __context__ 链记录
 def t10():
     try:
@@ -118,6 +121,7 @@ try:
 except Exception as ex:
     print("t10:", type(ex).__name__, "ctx:", type(ex.__context__).__name__)
 
+
 # 元组类型过滤器; 余量传播
 def t11():
     try:
@@ -130,3 +134,38 @@ try:
     t11()
 except Exception as e:
     print("t11-rest:", str(e), len(e.exceptions))
+
+
+# except* 块内 return/break/continue 编译期 SyntaxError (PEP 654)
+def _t_cs(label, fn):
+    try:
+        fn()
+        print(label, "OK")
+    except SyntaxError:
+        print(label, "SYNTAX")
+
+
+_t_cs(
+    "cs_return",
+    lambda: compile(
+        "try:\n    raise TypeError('x')\nexcept* TypeError:\n    return 1",
+        "<t>",
+        "exec",
+    ),
+)
+_t_cs(
+    "cs_break",
+    lambda: compile(
+        "for i in range(1):\n    try:\n        pass\n    except* TypeError:\n        break",
+        "<t>",
+        "exec",
+    ),
+)
+_t_cs(
+    "cs_ok",
+    lambda: compile(
+        "def f():\n    try:\n        pass\n    except* TypeError:\n        pass\n    return 1",
+        "<t>",
+        "exec",
+    ),
+)

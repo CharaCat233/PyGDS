@@ -1,7 +1,7 @@
 # 职责: issubclass/isinstance 元组嵌套短路
 # 比对: same_output
 
-# issubclass 元组第二参 (alpha.4)
+# issubclass 元组第二参
 print(issubclass(bool, (int, str)))
 print(issubclass(bool, (str, dict)))
 print(issubclass(bool, int))

@@ -1,4 +1,4 @@
-# 职责: random 模块的 MT19937 对齐 (D1): int 种子的 init_by_array 路径 / random / randint / randrange / choice / shuffle / sample / uniform / gauss / getrandbits / getstate / setstate 与 CPython 序列逐值一致, 无参种子用引擎随机源, 字符串种子序列与 CPython 不对齐 (sha512 差异文档化)
+# 职责: random 模块的 MT19937 对齐: int 种子的 init_by_array 路径 / random / randint / randrange / choice / shuffle / sample / uniform / gauss / getrandbits / getstate / setstate 与 CPython 序列逐值一致, 无参种子用引擎随机源, 字符串种子序列与 CPython 不对齐 (sha512 差异文档化)
 # 比对: same_output
 # 锚定: CPython 3.12
 import random

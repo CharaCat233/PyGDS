@@ -41,22 +41,22 @@ print(i2)
 try:
     a[1:3] = 5
 except TypeError:
-    print('TE')
+    print("TE")
 try:
     b[::2] = [1, 2, 3]
 except ValueError as ex:
-    print('VE')
+    print("VE")
 try:
     del t3
 except NameError:
-    print('NE')
+    print("NE")
 t3 = (1, 2, 3)
 try:
     del t3[1:2]
 except TypeError:
-    print('TT')
-s = 'abc'
+    print("TT")
+s = "abc"
 try:
     del s[1:2]
 except TypeError:
-    print('TS')
+    print("TS")

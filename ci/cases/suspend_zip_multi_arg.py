@@ -1,6 +1,5 @@
 # 职责: zip 多参消费包装迭代器类的挂起重放
 # 比对: same_output
-# ref: I2-61
 
 # zip 对每个参数各自取迭代器后逐参消费: 某参数消费中途挂起时必须立即传播
 # 挂起并放弃本次调用 (语句重放后逐参续读), 不得在 _suspended 置位下继续取
@@ -10,6 +9,7 @@
 
 import time
 
+
 def g():
     yield 1
     time.sleep(0)
@@ -17,27 +17,34 @@ def g():
     time.sleep(0)
     yield 3
 
+
 class W:
     def __iter__(self):
         return iter(g())
 
+
 class WF:
     def __init__(self, v):
         self.v = v
+
     def __iter__(self):
         return iter(g())
+
 
 class SelfIter:
     def __init__(self):
         self.n = 0
+
     def __iter__(self):
         return self
+
     def __next__(self):
         time.sleep(0)
         self.n += 1
         if self.n > 3:
             raise StopIteration
         return self.n
+
 
 # 单参对照: 消费挂起后重放续读
 print(list(W()))

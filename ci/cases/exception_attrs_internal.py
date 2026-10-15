@@ -5,7 +5,7 @@ import random
 
 random.seed(7)
 try:
-    random.choice({'a': 1})
+    random.choice({"a": 1})
 except KeyError as e:
     print(type(e).__name__)
     print(e)
@@ -20,7 +20,7 @@ except KeyError as e:
 
 try:
     d = {}
-    d.pop('k')
+    d.pop("k")
 except KeyError as e:
     print(e)
     print(repr(e))

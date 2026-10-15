@@ -1,4 +1,4 @@
-# 职责: with 体与 __exit__ 内挂起的重放 (进入标记不重复执行, P0-22 暂存叠加)
+# 职责: with 体与 __exit__ 内挂起的重放 (进入标记不重复执行)
 # 比对: same_output
 
 import time
@@ -33,6 +33,7 @@ with CM("a"), CM("b"):
     print("body2")
 print(log)
 
+
 # 场景 3: __enter__ 内挂起: 重放续延进入, 完成后不重复调用
 class SlowEnter:
     def __enter__(self):
@@ -51,7 +52,8 @@ with SlowEnter() as v:
     print("body3", v)
 print(log)
 
-# 场景 4: __exit__ 内挂起且异常在途: P0-22 暂存, 恢复后异常继续传播
+
+# 场景 4: __exit__ 内挂起且异常在途: 暂存, 恢复后异常继续传播
 class SlowExit:
     def __enter__(self):
         return self
@@ -70,6 +72,7 @@ try:
 except ValueError as e:
     print("caught4", e)
 print(log)
+
 
 # 场景 5: 抑制 + __exit__ 挂起叠加: 恢复后真值返回仍抑制
 class SupSleep:

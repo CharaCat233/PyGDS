@@ -1,7 +1,7 @@
 # 职责: format 嵌套格式规格动态宽度与精度
 # 比对: same_output
 
-# .format() 嵌套格式规格 (alpha.5, P0-26)
+# .format() 嵌套格式规格
 w = 6
 print("{:{w}}".format(5, w=6))
 print("{0:{w}}".format(5, w=6))

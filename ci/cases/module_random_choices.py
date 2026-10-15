@@ -7,9 +7,11 @@ import random
 
 random.seed(3)
 
+
 def g():
     for i in range(6):
         yield i
+
 
 try:
     print(random.choices(g(), k=2))

@@ -12,6 +12,7 @@ g = agen()
 print("type:", type(g).__name__)
 print("repr-prefix:", repr(g)[:22])
 
+
 # async for 驱动: 产出值即元素, 耗尽以 StopAsyncIteration 结束 (return 值不交付)
 async def drive():
     out = []
@@ -29,6 +30,7 @@ try:
     c.send(None)
 except StopIteration as e:
     print("afor:", e.value)
+
 
 # 裸 return 合法; yield 后被 await 的值不被自动 await
 async def inner():

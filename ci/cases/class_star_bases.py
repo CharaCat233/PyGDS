@@ -1,7 +1,7 @@
 # 职责: 星参基类展开、重复与非类基类报错
 # 比对: same_output
 
-# class C(*bases) 星参基类 (PEP 448 类侧泛化, P1-60)
+# class C(*bases) 星参基类 (PEP 448 类侧泛化)
 
 
 class A:
@@ -16,13 +16,19 @@ class B:
 
 
 bs = [object]
-class C(*bs,):
+
+
+class C(
+    *bs,
+):
     pass
 
 
 print(isinstance(C(), object))
 
 bs2 = [A]
+
+
 class D(*bs2, B):
     def greet(self):
         return "D+" + super().greet()
@@ -31,7 +37,11 @@ class D(*bs2, B):
 print(D().greet(), D.x)
 
 bs3 = [B, A]
-class E(*bs3,):
+
+
+class E(
+    *bs3,
+):
     pass
 
 
@@ -41,6 +51,7 @@ print(E.x, E().greet())
 try:
     class F(*[A, A]):
         pass
+
 except TypeError as e:
     print("TE:", e)
 
@@ -48,6 +59,7 @@ except TypeError as e:
 try:
     class G(*[1]):
         pass
+
 except TypeError:
     print("TE2")
 
@@ -55,7 +67,9 @@ except TypeError:
 base_list = [A]
 
 
-class H(*base_list,):
+class H(
+    *base_list,
+):
     y = 3
 
 

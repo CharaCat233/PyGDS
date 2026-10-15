@@ -8,36 +8,6 @@
 
 语句与表达式文法构造及其编译期 SyntaxError。边界原则：用例归入引入该行为的构造——`for` 内拆包属 `syntax_for`，推导式内的 `for` 属推导式家族；`match` 的重复绑定等编译期检查挂在 `syntax_match_*` 名下。
 
-### class_protocol_validate
-
-- 职责: 用户类魔法方法返回类型校验 (`__len__`/`__bool__`/`__init__`/`__repr__`/`__str__` 非法返回报 TypeError/ValueError)
-- 比对: `same_output`
-- 源文件: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
-
-### exception_bool_rare
-
-- 职责: `__bool__` 非 bool 在稀路径的错误传播 (异常组 filter 类型校验 / 惰性谓词 / operator / any / all)
-- 比对: `same_output`
-- 源文件: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
-
-### exception_except_bad_type
-
-- 职责: except 子句类型非法 (非 `BaseException` 子类) 报 `TypeError`
-- 比对: `same_output`
-- 源文件: [ci/cases/exception_except_bad_type.py](../../ci/cases/exception_except_bad_type.py)
-
-### exception_str_uninit
-
-- 职责: 自定义异常未调 `super().__init__` 时 `str(e)` 按 `args` 格式化
-- 比对: `same_output`
-- 源文件: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
-
-### module_repr
-
-- 职责: 模块 repr 形态 (内置 `<module 'x' (built-in)>`)
-- 比对: `same_output`
-- 源文件: [ci/cases/module_repr.py](../../ci/cases/module_repr.py)
-
 ### syntax_annotation
 
 - 职责: 函数参数/返回值/变量的类型注解
@@ -164,6 +134,12 @@
 - 比对: `same_error`
 - 源文件: [ci/cases/syntax_call_err1.py](../../ci/cases/syntax_call_err1.py)
 
+### syntax_chain_assign
+
+- 职责: 链式下标/属性赋值解析 (`d["a"]=d["b"]=5` 等, I1-40), 值只求值一次、目标从左到右赋值
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_chain_assign.py](../../ci/cases/syntax_chain_assign.py)
+
 ### syntax_closure
 
 - 职责: 闭包捕获、`nonlocal` 与多闭包共享环境
@@ -223,6 +199,18 @@
 - 职责: `...` 字面量、真值、默认值与注解位置
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_ellipsis.py](../../ci/cases/syntax_ellipsis.py)
+
+### syntax_error_wording
+
+- 职责: 解析错误统一为 SyntaxError 类 (字面量赋值/裸 else/不完整表达式/非法 del 目标等, I2-1)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_error_wording.py](../../ci/cases/syntax_error_wording.py)
+
+### syntax_except_star
+
+- 职责: `except*` 块内 `return` 触发编译期 `SyntaxError`
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_except_star.py](../../ci/cases/syntax_except_star.py)
 
 ### syntax_except_star_mixed
 
@@ -338,11 +326,23 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_global.py](../../ci/cases/syntax_global.py)
 
+### syntax_global_prior
+
+- 职责: `global` 声明后置（名字先被使用）触发编译期 `SyntaxError`
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_global_prior.py](../../ci/cases/syntax_global_prior.py)
+
 ### syntax_if
 
 - 职责: 连续 `if`/`elif` 条件各自独立求值
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_if.py](../../ci/cases/syntax_if.py)
+
+### syntax_illegal_source2
+
+- 职责: 编译期约束缺失批 (非法参数形态/非法 del 目标/空括号导入/比较后一元 not/yield from 元组/else 体 break/条件表达式裸 lambda, I1-44)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_illegal_source2.py](../../ci/cases/syntax_illegal_source2.py)
 
 ### syntax_import
 
@@ -395,6 +395,12 @@
 - 职责: `lambda` 定义/默认参数/闭包/`sort` `key`
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_lambda.py](../../ci/cases/syntax_lambda.py)
+
+### syntax_leading_zero
+
+- 职责: 十进制前导零字面量触发编译期 `SyntaxError`
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_leading_zero.py](../../ci/cases/syntax_leading_zero.py)
 
 ### syntax_line_cont
 
@@ -560,8 +566,8 @@
 
 ### syntax_nonlocal_unbound
 
-- 职责: `nonlocal` 无绑定错误文案 (CPython 编译期 / PyGDS 调用时运行期, 消息对齐)
-- 比对: `same_error`
+- 职责: `nonlocal` 无绑定与模块级声明在编译期报 `SyntaxError` (消息按 CPython 对齐)
+- 比对: `same_output`
 - 源文件: [ci/cases/syntax_nonlocal_unbound.py](../../ci/cases/syntax_nonlocal_unbound.py)
 
 ### syntax_number_literal
@@ -569,6 +575,12 @@
 - 职责: 进制/下划线/科学计数法字面量
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_number_literal.py](../../ci/cases/syntax_number_literal.py)
+
+### syntax_octal_escape
+
+- 职责: 超范围八进制转义发 SyntaxWarning (I2-14, 值仍解码, -W error 时升 SyntaxError)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_octal_escape.py](../../ci/cases/syntax_octal_escape.py)
 
 ### syntax_one_line_stmt
 
@@ -653,6 +665,18 @@
 - 职责: 相邻字符串字面量隐式连接
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_str_concat.py](../../ci/cases/syntax_str_concat.py)
+
+### syntax_subscript_tuple_slice
+
+- 职责: 下标中"元组 + 切片"混合形态解析 (`M()[0, 1:3]` / `a[:, 1]` / `d[*a, 1]`, I1-41)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_subscript_tuple_slice.py](../../ci/cases/syntax_subscript_tuple_slice.py)
+
+### syntax_tab_mix
+
+- 职责: tab/空格混用缩进触发编译期 `TabError`
+- 比对: `same_error`
+- 源文件: [ci/cases/syntax_tab_mix.py](../../ci/cases/syntax_tab_mix.py)
 
 ### syntax_ternary
 
@@ -934,6 +958,12 @@
 
 列表、字典、集合推导式与生成器表达式。与 `syntax_for` 的边界：推导式是独立构造，其内层 `for`/`if`、多 `for` 嵌套（`comprehension_multi`）等行为都归本家族。
 
+### comprehension_await
+
+- 职责: 推导式内 await (async 函数体内 list / dict / set 推导式的元素 / 键值 / 条件 / 嵌套推导式 / 首子句可迭代中的 await 合法, 同步上下文报 `asynchronous comprehension outside of an asynchronous function`, sleep 挂起重放)
+- 比对: `same_output`
+- 源文件: [ci/cases/comprehension_await.py](../../ci/cases/comprehension_await.py)
+
 ### comprehension_dict
 
 - 职责: 字典推导式的键值构造、过滤与多重 for
@@ -992,6 +1022,14 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_ascii.py](../../ci/cases/builtin_ascii.py)
 
+### builtin_bigint_fastpath
+
+- 职责: 大数快速路径一致性回归安全网 (I2-13 确认项)
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_bigint_fastpath.py](../../ci/cases/builtin_bigint_fastpath.py)
+
+大数作字典键的 in/取键/相等分桶、`10**40`/`10**400` 量级四则/取模/移位/位运算/进制/divmod/round、负数与混合符号、int/str 转换往返，双端全同
+
 ### builtin_open
 
 - 职责: `open()` 的文本/二进制读写、行迭代、seek 与异常文案
@@ -1026,11 +1064,23 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_convert.py](../../ci/cases/builtin_convert.py)
 
+### builtin_enumerate_start
+
+- 职责: enumerate 的大数起始编号与 bool 起始 (I0-42): 任意精度递增计数 (CPython 3.12 实测对齐)
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_enumerate_start.py](../../ci/cases/builtin_enumerate_start.py)
+
 ### builtin_getattr
 
 - 职责: `getattr`/`setattr`/`delattr` 属性操作
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_getattr.py](../../ci/cases/builtin_getattr.py)
+
+### builtin_globals
+
+- 职责: globals() 活视图四方法与删除 (I0-52): get/pop/setdefault/update 直写活字典, del 字符串键判定
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_globals.py](../../ci/cases/builtin_globals.py)
 
 ### builtin_hasattr
 
@@ -1136,6 +1186,12 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_sorted_zip.py](../../ci/cases/builtin_sorted_zip.py)
 
+### builtin_sum_start
+
+- 职责: sum() 的 start= 关键字实参与类型校验 (I0-41): 关键字实参生效, 字符串起始值拒绝, 类型错误传播
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_sum_start.py](../../ci/cases/builtin_sum_start.py)
+
 ### builtin_type_dir
 
 - 职责: `type` 三参建类/`dir`/`float.hex`
@@ -1151,6 +1207,18 @@
 ## 内置类型（type_*）
 
 内建类型的构造、运算符语义（如负数整除取整）与方法。方法族较大时按方面拆分（`type_str_format`、`type_dict_view_live` 等）。
+
+### type_augassign_inplace
+
+- 职责: 增强赋值对内建容器的原地变更别名语义 (I0-38): dict |= / set |= / bytearray += 原地 update/extend, list += extend
+- 比对: `same_output`
+- 源文件: [ci/cases/type_augassign_inplace.py](../../ci/cases/type_augassign_inplace.py)
+
+### type_bool_bigint
+
+- 职责: bool 与大整数比较/相等 (I0-26) 与 bool 幂/移位边界 (I0-35): 大数比较经大数分派, |底数|<=1 大指数结果平凡, 移位出大数/右移 64 位恒 0
+- 比对: `same_output`
+- 源文件: [ci/cases/type_bool_bigint.py](../../ci/cases/type_bool_bigint.py)
 
 ### type_bool_shortcircuit
 
@@ -1185,6 +1253,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 源文件: [ci/cases/type_complex.py](../../ci/cases/type_complex.py)
 
 `1+0j` 与 `1` 为同键同哈希, 序比较报 `'<' not supported...`, 复数幂的整数指数走精确重复乘法, 非整数指数 (含 `**0.5`) 为 libm 极坐标路径, 比对须 `round(..., N)` (ci.md 规则 4)
+
+### type_complex_bigint
+
+- 职责: complex 与大整数混算/比较与除法中间量溢出 (I0-29/I0-36): 大数实参 53 位舍入转 double 越界报 OverflowError, Smith 缩放除法
+- 比对: `same_output`
+- 源文件: [ci/cases/type_complex_bigint.py](../../ci/cases/type_complex_bigint.py)
 
 ### type_ctor_three_args
 
@@ -1296,6 +1370,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 比对: `same_output`
 - 源文件: [ci/cases/type_dunder_methods.py](../../ci/cases/type_dunder_methods.py)
 
+### type_float_mod
+
+- 职责: float 取模/整除的双舍入修复 (I0-27): 精确 fmod 后按除数符号校正, 商先取 Python 语义 mod 再一次舍入, 负零形态
+- 比对: `same_output`
+- 源文件: [ci/cases/type_float_mod.py](../../ci/cases/type_float_mod.py)
+
 ### type_float_parse
 
 - 职责: 浮点字符串解析的正确舍入: 难例字面量 / float() 语法校验与下划线 / 次规格数与 inf 边界 / repr 最短往返
@@ -1303,6 +1383,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 源文件: [ci/cases/type_float_parse.py](../../ci/cases/type_float_parse.py)
 
 浮点字面量与 `float()` 字符串走自研的正确舍入解析 (大整数比值 + 半到偶舍入), 难例 (`9007199254740993.0` / `1e23` / 次规格数 `5e-324`) 与 CPython 逐位一致; repr 的最短往返验证亦经同一解析器, 次规格数不再退 17 位兜底; `math.copysign` 补负零的符号位语义
+
+### type_float_ratio
+
+- 职责: float.as_integer_ratio 大数缩放与 is_integer 边界 (I0-31/I0-34): 大数承载缩放, 零值 (0,1), NaN/inf 报错类型, ±inf 非整数
+- 比对: `same_output`
+- 源文件: [ci/cases/type_float_ratio.py](../../ci/cases/type_float_ratio.py)
 
 ### type_frozenset
 
@@ -1327,6 +1413,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 职责: `int(str, base)` 进制解析与 `base=0` 前缀
 - 比对: `same_output`
 - 源文件: [ci/cases/type_int_base.py](../../ci/cases/type_int_base.py)
+
+### type_int_bytes
+
+- 职责: int.to_bytes 二补码与 from_bytes 大数 (I0-32/I0-43): 负数二补码输出, 边界值放行, byteorder/负长度校验, 超 8 字节精确
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_bytes.py](../../ci/cases/type_int_bytes.py)
 
 ### type_int_floordiv_mod
 
@@ -1392,6 +1484,18 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 
 `x`/`X`/`o`/`b` (含 `#` 备用形式与 `_` 分组)、`c`、`f`/`e`/`g`/`%` 分支对大数此前误取快路径 `value` (恒 0) 静默输出 `"0"` 或 `chr(0)`, 改为输出正确进制/定点或按 CPython 报错 (`c` 与超出 double 范围报 `OverflowError`, 类名比对规避 C long 平台边界); 连带修复 `_fixed_format_parts` 对超出 int64 的定点化补零 (此前 `f"{1e30:f}"` 越界) 与 `format()` 内建吞 `last_error` 的错误传播
 
+### type_int_repr
+
+- 职责: 大整数在异常消息/KeyError 文案的 repr 渲染 (I0-33): 大数 value 恒 0 此前渲染为 0, 改为完整十进制串
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_repr.py](../../ci/cases/type_int_repr.py)
+
+### type_int_truediv
+
+- 职责: int/int 真除的单次舍入与除零 (I0-28/I0-30): 54~55 位整商加粘位余数一次舍入, 大数除零报 ZeroDivisionError
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_truediv.py](../../ci/cases/type_int_truediv.py)
+
 ### type_list
 
 - 职责: `list` 构造、增删改查方法与 `+`/`*` 运算
@@ -1409,6 +1513,18 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 职责: `sort` 的 `key`/`reverse` 与 `sorted`
 - 比对: `same_output`
 - 源文件: [ci/cases/type_list_sort.py](../../ci/cases/type_list_sort.py)
+
+### type_nan_compare
+
+- 职责: NaN 参与有序比较全部为 False (I0-25): 无序哨兵此前被当比较结果, `1 < nan` 恒为 True, 改按 IEEE/CPython 语义
+- 比对: `same_output`
+- 源文件: [ci/cases/type_nan_compare.py](../../ci/cases/type_nan_compare.py)
+
+### type_range_len
+
+- 职责: range 大数长度 ceil 尾差、快路径 len 回绕与 True in range (I0-57/58/65)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_range_len.py](../../ci/cases/type_range_len.py)
 
 ### type_seq_compare
 
@@ -1441,6 +1557,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 源文件: [ci/cases/type_range_big.py](../../ci/cases/type_range_big.py)
 
 range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPython 的惰性语义一致); 长度超出索引位宽度的物化 (list / tuple / sorted) 与 len 报 CPython 同文案 OverflowError; 小 range 的越界大数切片钳制与 `start` / `stop` / `step` 只读属性同步对齐
+
+### type_setitem_dunder
+
+- 职责: `__setitem__` dunder 直调路径的切片赋值与类型/越界校验 (I0-8): 语句路径正常而 dunder 直调静默 no-op, 改共用语句路径实现
+- 比对: `same_output`
+- 源文件: [ci/cases/type_setitem_dunder.py](../../ci/cases/type_setitem_dunder.py)
 
 ### type_slice
 
@@ -1546,6 +1668,12 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 - 比对: `same_output`
 - 源文件: [ci/cases/type_tuple.py](../../ci/cases/type_tuple.py)
 
+### type_type_alias_type
+
+- 职责: type(类型别名实例) 返回 TypeAliasType
+- 比对: `same_output`
+- 源文件: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)
+
 ## 标准库模块（module_*）
 
 PyGDS 内置的标准库模块（`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys` / `time` / `contextlib` / `bisect` / `heapq` / `base64` / `json` / `logging`），完整列表见 [builtin.md](./builtin.md)。单一函数行为多到值得独立时拆出子文件（如 `module_math_sqrt`）
@@ -1628,6 +1756,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/module_collections.py](../../ci/cases/module_collections.py)
 
+### module_collections_counter
+
+- 职责: Counter 构造保留计数/kwargs/相等比较/most_common 保真 (I0-50): 负/浮点/大数计数保留, kwargs 生效, 按底层映射比较
+- 比对: `same_output`
+- 源文件: [ci/cases/module_collections_counter.py](../../ci/cases/module_collections_counter.py)
+
 ### module_collections_defaultdict
 
 - 职责: `defaultdict` 的 `repr` 与映射式构造
@@ -1658,6 +1792,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/module_functools_cmp_to_key.py](../../ci/cases/module_functools_cmp_to_key.py)
 
+### module_import_star
+
+- 职责: `from m import *` 遵守模块 `__all__` 导出面
+- 比对: `same_output`
+- 源文件: [ci/cases/module_import_star.py](../../ci/cases/module_import_star.py)
+
 ### module_itertools
 
 - 职责: `chain`/`product`/组合排列与 `islice`
@@ -1681,6 +1821,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: `repeat`/`cycle`/`count`/`takewhile`
 - 比对: `same_output`
 - 源文件: [ci/cases/module_itertools_infinite.py](../../ci/cases/module_itertools_infinite.py)
+
+### module_itertools_lazy
+
+- 职责: itertools 惰性迭代器类型名/空池保护/无限源惰性
+- 比对: `same_output`
+- 源文件: [ci/cases/module_itertools_lazy.py](../../ci/cases/module_itertools_lazy.py)
 
 ### module_itertools_tee
 
@@ -1752,6 +1898,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/module_random_types.py](../../ci/cases/module_random_types.py)
 
+### module_repr
+
+- 职责: 模块 repr 形态 (内置 `<module 'x' (built-in)>`)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_repr.py](../../ci/cases/module_repr.py)
+
 ### module_statistics
 
 - 职责: `mean`/`median`/`stdev` 等统计量
@@ -1822,12 +1974,6 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_error`
 - 源文件: [ci/cases/class_dup_kw.py](../../ci/cases/class_dup_kw.py)
 
-### comprehension_await
-
-- 职责: 推导式内 await (async 函数体内 list / dict / set 推导式的元素 / 键值 / 条件 / 嵌套推导式 / 首子句可迭代中的 await 合法, 同步上下文报 `asynchronous comprehension outside of an asynchronous function`, sleep 挂起重放)
-- 比对: `same_output`
-- 源文件: [ci/cases/comprehension_await.py](../../ci/cases/comprehension_await.py)
-
 ### class_metaclass
 
 - 职责: 自定义元类机制 (metaclass= 的 `__new__` / `__init__` 建类钩子与 ns 修改回填 / `__call__` 定制实例化 / 元类方法与属性经 type(cls) 查找 / 实例属性不穿透元类 / 双元类 conflict / `__prepare__` 调用副作用 / 隐式 `__module__` 与 `__qualname__` 进 ns)
@@ -1882,6 +2028,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/class_diamond.py](../../ci/cases/class_diamond.py)
 
+### class_dict_key_eq
+
+- 职责: 用户类 dict/set 键的哈希+相等分桶 (I0-44): 同哈希槽位逐个 __eq__ 甄别, 不等者开新槽, __hash__ 返回大数不再全员同键
+- 比对: `same_output`
+- 源文件: [ci/cases/class_dict_key_eq.py](../../ci/cases/class_dict_key_eq.py)
+
 ### class_hooks
 
 - 职责: 类创建钩子触发次序、链式调用与失败回滚
@@ -1899,6 +2051,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: 类与对象的内省属性及异常 traceback
 - 比对: `same_output`
 - 源文件: [ci/cases/class_introspect.py](../../ci/cases/class_introspect.py)
+
+### class_len_eq_protocol
+
+- 职责: 用户 __len__ 返回 bool 与 __eq__ 返回整数的协议校验 (I0-37): bool 按 int 子类, 整值真值判定, 负 len 报 ValueError
+- 比对: `same_output`
+- 源文件: [ci/cases/class_len_eq_protocol.py](../../ci/cases/class_len_eq_protocol.py)
 
 ### class_magic_attr
 
@@ -1990,6 +2148,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/class_protocol_numconv.py](../../ci/cases/class_protocol_numconv.py)
 
+### class_protocol_validate
+
+- 职责: 用户类魔法方法返回类型校验 (`__len__`/`__bool__`/`__init__`/`__repr__`/`__str__` 非法返回报 TypeError/ValueError)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_protocol_validate.py](../../ci/cases/class_protocol_validate.py)
+
 ### class_scope
 
 - 职责: 类体作用域、类内推导式与 `property` 内 `super`
@@ -2007,6 +2171,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: 星参基类展开、重复与非类基类报错
 - 比对: `same_output`
 - 源文件: [ci/cases/class_star_bases.py](../../ci/cases/class_star_bases.py)
+
+### class_stopiteration
+
+- 职责: 用户 __next__ 抛 StopIteration 子类终止迭代 (I0-61): 子类视为耗尽信号, 生成器 PEP 479 同型
+- 比对: `same_output`
+- 源文件: [ci/cases/class_stopiteration.py](../../ci/cases/class_stopiteration.py)
 
 ### class_super
 
@@ -2054,6 +2224,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_base_match.py](../../ci/cases/exception_base_match.py)
 
+### exception_bool_rare
+
+- 职责: `__bool__` 非 bool 在稀路径的错误传播 (异常组 filter 类型校验 / 惰性谓词 / operator / any / all)
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
+
 ### exception_divzero
 
 - 职责: 裸 `except` 捕获除零异常
@@ -2065,6 +2241,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: `format`/切片/幂/`setattr` 错误形态合集
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_err_shapes.py](../../ci/cases/exception_err_shapes.py)
+
+### exception_except_bad_type
+
+- 职责: except 子句类型非法 (非 `BaseException` 子类) 报 `TypeError`
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_except_bad_type.py](../../ci/cases/exception_except_bad_type.py)
 
 ### exception_finally_after_except
 
@@ -2179,6 +2361,12 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: 异常 `str`/`args` 与 `KeyError` 文案特例
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_str.py](../../ci/cases/exception_str.py)
+
+### exception_str_uninit
+
+- 职责: 自定义异常未调 `super().__init__` 时 `str(e)` 按 `args` 格式化
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_str_uninit.py](../../ci/cases/exception_str_uninit.py)
 
 ### exception_tuple_except
 
@@ -2321,9 +2509,3 @@ PyGDS 特有的挂起/恢复机制（`time.sleep` 触发 SLEEPING 挂起后的�
 - 源文件: [ci/cases/suspend_zip_multi_arg.py](../../ci/cases/suspend_zip_multi_arg.py)
 
 zip 逐参消费, 某参数消费中途挂起时立即传播挂起并放弃本次调用, 不在 `_suspended` 置位下继续取下一个参数的迭代器 (用户 `__iter__` 会假挂起返回 null, 被误报 `zip() arg is not iterable`); 重放轮各参数经生成器记忆按出现次序复用 (I2-61)。附单参对照与实例带字段、三参、混合序列形态; 协议驱动的 `__iter__` / `__next__` 不借用 ambient 调用节点参与 retired 完成记录
-
-### type_type_alias_type
-
-- 职责: type(类型别名实例) 返回 TypeAliasType
-- 比对: `same_output`
-- 源文件: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)

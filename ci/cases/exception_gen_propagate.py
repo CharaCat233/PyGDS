@@ -3,6 +3,7 @@
 
 # 生成器抛异常时的求值传播测试 (与 CPython 行为一致)
 
+
 # 调用表达式抛异常时不得把半成品值交给外层求值
 def bad_iter():
     yield 1
@@ -18,6 +19,7 @@ try:
     print("TUPLE:", tuple(bad_iter()))
 except ValueError as e:
     print("caught:", e)
+
 
 # 类构造抛异常时同理
 class C:
@@ -53,4 +55,3 @@ try:
 except ValueError as e:
     print("caught:", e)
 
-print("done")

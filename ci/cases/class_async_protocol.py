@@ -31,6 +31,7 @@ try:
 except StopIteration as e:
     print("afor:", e.value)
 
+
 # async for + break 与元组目标解包
 class APairIter:
     def __init__(self):
@@ -60,6 +61,7 @@ try:
     c.send(None)
 except StopIteration as e:
     print("afor2:", e.value)
+
 
 # async for 协议缺失文案
 async def afor_bad():
@@ -155,6 +157,7 @@ try:
 except StopIteration as e:
     print("asup:", e.value)
 
+
 # async with 协议缺失文案 (退出侧带 missed 后缀)
 class NoAenter:
     pass
@@ -207,6 +210,7 @@ try:
     c.send(None)
 except TypeError as e:
     print("sync-aenter:", e)
+
 
 # aiter() / anext() 内建: anext 返回 __anext__ 的协程, 默认值形态吞 StopAsyncIteration
 async def anext_chain():

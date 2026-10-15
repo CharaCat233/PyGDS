@@ -3,15 +3,19 @@
 
 # match 类模式: isinstance, __match_args__, 关键字, 值模式, 运行时错误
 
+
 class Point:
     __match_args__ = ("x", "y")
+
     def __init__(self, x, y):
         self.x = x
         self.y = y
 
+
 class Color:
     RED = 1
     BLUE = 2
+
 
 # 位置子模式
 match Point(0, 5):
@@ -30,18 +34,23 @@ match Point(3, 4):
     case Point(3, y=4):
         print("mixed")
 
+
 # 无参类模式只做 isinstance
 class Shape:
     pass
 
+
 class Circle(Shape):
     __match_args__ = ("r",)
+
     def __init__(self, r):
         self.r = r
+
 
 class Square(Shape):
     def __init__(self, s):
         self.s = s
+
 
 def f_cls(x):
     match x:
@@ -55,7 +64,10 @@ def f_cls(x):
             return "shape"
         case _:
             return "n"
+
+
 print(f_cls(Circle(0)), f_cls(Circle(5)), f_cls(Square(2)), f_cls(Shape()))
+
 
 # 继承 __match_args__
 class Point3(Point):
@@ -63,6 +75,8 @@ class Point3(Point):
         self.x = x
         self.y = y
         self.z = z
+
+
 match Point3(1, 2, 3):
     case Point3(a, b):
         print("inherit", a, b)
@@ -114,13 +128,17 @@ try:
 except TypeError as e:
     print("T-int:", e)
 
+
 # 内建类型单位置子模式直接绑定主题 (match_self 语义, 含 bool 是 int 子类)
 def f_int(x):
     match x:
         case int(v):
             return ("int", v is x)
     return "no"
+
+
 print(f_int(True), f_int(5), f_int("s"), f_int(2.5))
+
 
 def f_cont(x):
     match x:
@@ -135,27 +153,38 @@ def f_cont(x):
         case bytes(b):
             return "bytes"
     return "no"
-print(f_cont([1]), f_cont((1,)), f_cont({1: 2}), f_cont({1}), f_cont(b'AB'))
+
+
+print(f_cont([1]), f_cont((1,)), f_cont({1: 2}), f_cont({1}), f_cont(b"AB"))
+
 
 # 用户类与内建同名时不具备单位置绑定
 class list:
     pass
+
+
 def f_same(x):
     match x:
         case list(v):
             return "m"
     return "no"
+
+
 try:
     f_same(list())
 except TypeError as e:
     print("same-name:", e)
 
+
 # 位置子模式与关键字重复属性 (运行时 TypeError)
 class Dup:
     __match_args__ = ("x", "y")
+
     def __init__(self, x, y):
         self.x = x
         self.y = y
+
+
 try:
     match Dup(1, 2):
         case Dup(x, x=1):
@@ -163,11 +192,14 @@ try:
 except TypeError as e:
     print("T-dup:", e)
 
+
 # __match_args__ 数量不足报错
 class P1:
     __match_args__ = ("x",)
+
     def __init__(self, x):
         self.x = x
+
 
 try:
     match P1(1):
@@ -176,10 +208,12 @@ try:
 except TypeError as e:
     print("T-args:", e)
 
+
 # 无 __match_args__ 报错
 class P0:
     def __init__(self, x):
         self.x = x
+
 
 try:
     match P0(1):
@@ -195,14 +229,18 @@ match P1(1):
     case _:
         print("attr-miss-no-match")
 
+
 # 属性 getter 抛非 AttributeError 异常仍然传播
 class G:
     __match_args__ = ("v",)
+
     def __init__(self):
         self._v = 1
+
     @property
     def v(self):
         raise ValueError("boom")
+
 
 try:
     match G():
@@ -211,11 +249,14 @@ try:
 except ValueError as e:
     print("prop-raise:", e)
 
+
 # __match_args__ 不是元组
 class L1:
     __match_args__ = ["a"]
+
     def __init__(self, a):
         self.a = a
+
 
 try:
     match L1(1):
@@ -224,24 +265,48 @@ try:
 except TypeError as e:
     print("T-type:", e)
 
+
 # 位置子模式递归
 class Line:
     __match_args__ = ("a", "b")
+
     def __init__(self, a, b):
         self.a = a
         self.b = b
+
+
 match Line(Point(1, 2), Point(3, 4)):
     case Line(Point(1, y1), Point(x2, 4)):
         print("nested-cls", y1, x2)
+
 
 # isinstance 语义: 用户类实例不参与序列匹配
 class Seq:
     def __init__(self):
         self.data = [1, 2]
+
+
 match Seq():
     case [a, b]:
         print("no")
     case _:
         print("user-cls-no-seq")
 
-print("done_class")
+
+
+# 类模式尾逗号
+def ck(x):
+    match x:
+        case int(
+            1,
+        ):
+            return "one"
+        case int(
+            5,
+        ):
+            return "five"
+        case _:
+            return "other"
+
+
+print(ck(1), ck(5), ck(3))

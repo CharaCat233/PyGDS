@@ -5,8 +5,10 @@
 class Empty:
     pass
 
+
 def noop():
     pass
+
 
 if True:
     pass
@@ -31,4 +33,3 @@ except:
 finally:
     pass
 
-print("done")              # done

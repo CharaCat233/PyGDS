@@ -1,4 +1,4 @@
-# 职责: 残余内建类型构造器 kwargs 与 deque maxlen 语义 (I2-59)
+# 职责: 残余内建类型构造器 kwargs 与 deque maxlen 语义
 # 比对: same_output
 # 锚定: CPython 3.12
 from collections import deque
@@ -63,9 +63,12 @@ t("deque_extendleft_over", lambda: list(d12))
 t("deque_neg", lambda: deque([1], maxlen=-1))
 t("deque_float", lambda: deque([1], maxlen=1.5))
 t("deque_str", lambda: deque([1], maxlen="2"))
-t("deque_bool", lambda: (list(deque([1, 2], maxlen=True)), deque([1, 2], maxlen=True).maxlen))
-t("deque_big", lambda: deque([1], maxlen=2 ** 63))
-t("deque_huge", lambda: deque([1], maxlen=2 ** 64))
+t(
+    "deque_bool",
+    lambda: (list(deque([1, 2], maxlen=True)), deque([1, 2], maxlen=True).maxlen),
+)
+t("deque_big", lambda: deque([1], maxlen=2**63))
+t("deque_huge", lambda: deque([1], maxlen=2**64))
 
 # deque: 构造参数合计计数与未知关键字
 t("deque_int_iter", lambda: deque(1))
@@ -75,14 +78,20 @@ t("deque_kw_and_pos", lambda: deque([1], 2, maxlen=3))
 t("deque_none_arg", lambda: deque(None))
 
 # deque: 拼接 / 重复 / 增强赋值保留左侧 maxlen
-t("deque_add", lambda: (list(deque([1], maxlen=3) + deque([2, 3])), (deque([1], maxlen=3) + deque([2, 3])).maxlen))
+t(
+    "deque_add",
+    lambda: (
+        list(deque([1], maxlen=3) + deque([2, 3])),
+        (deque([1], maxlen=3) + deque([2, 3])).maxlen,
+    ),
+)
 d10 = deque([1], maxlen=2)
 d10 += deque([5, 6])
 t("deque_iadd", lambda: (list(d10), d10.maxlen))
 t("deque_iadd_str", lambda: (lambda d: (d.__iadd__("ab"), list(d)))(deque([0])))
 t("deque_mul", lambda: list(deque([1]) * 2))
 t("deque_mul_maxlen", lambda: (deque([1, 2], maxlen=3) * 2).maxlen)
-t("deque_mul_big", lambda: deque([1]) * 2 ** 63)
+t("deque_mul_big", lambda: deque([1]) * 2**63)
 t("deque_mul_neg", lambda: list(deque([1]) * -1))
 t("deque_mul_str", lambda: deque([1]) * "a")
 t("str_mul_d", lambda: "a" * deque([1]))
@@ -107,10 +116,16 @@ t("deque_eq_list", lambda: deque([1]) == [1])
 t("deque_insert_full", lambda: (lambda d: d.insert(1, 9))(deque([1, 2], maxlen=2)))
 t("deque_insert_mid", lambda: (lambda d: (d.insert(1, 9), list(d)))(deque([1, 2, 3])))
 t("deque_insert_neg", lambda: (lambda d: (d.insert(-1, 9), list(d)))(deque([1, 2, 3])))
-t("deque_insert_clamp", lambda: (lambda d: (d.insert(100, 9), list(d)))(deque([1, 2, 3])))
-t("deque_insert_negclamp", lambda: (lambda d: (d.insert(-100, 9), list(d)))(deque([1, 2, 3])))
+t(
+    "deque_insert_clamp",
+    lambda: (lambda d: (d.insert(100, 9), list(d)))(deque([1, 2, 3])),
+)
+t(
+    "deque_insert_negclamp",
+    lambda: (lambda d: (d.insert(-100, 9), list(d)))(deque([1, 2, 3])),
+)
 t("deque_insert_float", lambda: (lambda d: d.insert(0.5, 9))(deque([1])))
-t("deque_insert_big", lambda: (lambda d: d.insert(2 ** 63, 9))(deque([1])))
+t("deque_insert_big", lambda: (lambda d: d.insert(2**63, 9))(deque([1])))
 t("deque_insert_1arg", lambda: (lambda d: d.insert(1))(deque([1])))
 t("deque_copy_maxlen", lambda: deque([1], maxlen=3).copy().maxlen)
 t("deque_iter_init", lambda: list(deque(iter([1, 2]))))

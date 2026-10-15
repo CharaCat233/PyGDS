@@ -40,3 +40,19 @@ except ValueError as e:
     print("VE1:", e)
 print(memoryview(bytearray(b"ab")).tobytes())
 print(memoryview(b"ab").cast("B")[0])
+
+# 显式步长切片 (此前负步长触发引擎级 SCRIPT ERROR, 非平凡步长按长度 0 处理)
+# CPython 1-D B 格式视图支持任意步长, 负步长反转内容
+print(bytes(memoryview(b"abc")[1:2:-1]))
+print(bytes(memoryview(b"abc")[::-1]))
+print(bytes(memoryview(b"abc")[::2]))
+print(bytes(memoryview(b"abc")[1:]))
+print(len(memoryview(b"abc")[3:1]))
+print(bytes(memoryview(b"abc")[3:1]))
+print(memoryview(b"abc")[1])
+print(bytes(memoryview(b"abc")[0:3:2]))
+print(bytes(memoryview(b"abcde")[::-2]))
+print(bytes(memoryview(b"abcde")[4:0:-1]))
+
+# memoryview 下标接受 bool (bool 是 int 子类)
+print(memoryview(b"abc")[True])

@@ -1,6 +1,5 @@
 # 职责: 旧式 __getitem__ 迭代协议的挂起重放
 # 比对: same_output
-# ref: I2-62
 
 # 仅定义 __getitem__ 的对象按连续下标迭代: __getitem__ 体内 sleep 挂起时,
 # 下标迭代器必须置 suspended 交消费器传播并交语句重放 (此前 null 返回被
@@ -9,10 +8,12 @@
 
 import time
 
+
 class OldStyle:
     def __getitem__(self, i):
         time.sleep(0)
         return [10, 20, 30][i]
+
 
 # 内建消费器
 print(list(OldStyle()))

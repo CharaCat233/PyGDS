@@ -51,6 +51,7 @@ match [1]:
     case _:
         print("too-short")
 
+
 # 无括号序列 (open sequence)
 def f_open(x):
     match x:
@@ -58,7 +59,10 @@ def f_open(x):
             return (a, b)
         case _:
             return "n"
+
+
 print(f_open([7, 8]), f_open((7, 8)), f_open([7, 8, 9]))
+
 
 # 无括号序列带星号
 def f_open_star(x):
@@ -67,17 +71,22 @@ def f_open_star(x):
             return (a, rest)
         case _:
             return "n"
+
+
 print(f_open_star([1, 2, 3]), f_open_star([1]))
 
 # 单元素尾逗号构成序列
 match [9]:
-    case [v, ]:
+    case [
+        v,
+    ]:
         print("trailing", v)
 
 # 字面量无括号序列
 match [1, 2]:
     case 1, 2:
         print("lit-open")
+
 
 # 嵌套序列
 def f_nest(x):
@@ -86,12 +95,15 @@ def f_nest(x):
             return (a, b, c)
         case _:
             return "n"
+
+
 print(f_nest([1, [2, 3], 4]), f_nest([1, 2, 3]))
 
 # 嵌套带星号
 match [1, [2, 3, 4], 5]:
     case [1, [b, *inner], e]:
         print("nest-star", b, inner, e)
+
 
 # 字符串与 bytes 不参与序列匹配
 def f_seq(x):
@@ -100,7 +112,9 @@ def f_seq(x):
             return "seq"
         case _:
             return "n"
-print(f_seq("ab"), f_seq(b'AB'), f_seq([1, 2]), f_seq((1, 2)))
+
+
+print(f_seq("ab"), f_seq(b"AB"), f_seq([1, 2]), f_seq((1, 2)))
 
 # 空序列
 match []:
@@ -131,4 +145,3 @@ match [5]:
     case (v,):
         print("one-tuple")
 
-print("done_seq")

@@ -1,7 +1,7 @@
 # 职责: list[int] 等泛性别名对象与哈希相等
 # 比对: same_output
 
-# 泛性别名 list[int] 等 (PEP 585, alpha.4, P1-64)
+# 泛性别名 list[int] 等 (PEP 585)
 print(list[int] is list[int])
 print(list[int] == list[int], list[int] == list[str])
 ga = list[int]
@@ -14,9 +14,11 @@ print(list[int].__origin__.__name__)
 print(hash(list[int]) == hash(list[int]))
 print(list[int] != list[str], list[int] != 5)
 
+
 # 用户类 __class_getitem__ 协议
 class Box:
     def __class_getitem__(cls, item):
         return (cls.__name__, item)
+
 
 print(Box[int], Box["x"])

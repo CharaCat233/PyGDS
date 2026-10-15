@@ -23,14 +23,14 @@ class Proxy:
         elif name in self._data:
             del self._data[name]
 
+
 p = Proxy()
 p.foo = 42
 p.bar = "hello"
-print(p.foo)                 # 42
-print(p.bar)                 # hello
-print(p.baz)                 # N/A (default from __getattr__)
+print(p.foo)  # 42
+print(p.bar)  # hello
+print(p.baz)  # N/A (default from __getattr__)
 
 del p.foo
-print(p.foo)                 # N/A (已删除)
+print(p.foo)  # N/A (已删除)
 
-print("done")

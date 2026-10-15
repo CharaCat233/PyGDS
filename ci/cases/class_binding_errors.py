@@ -59,6 +59,7 @@ except TypeError as e:
 def outer():
     def inner(x):
         return x
+
     return inner
 
 

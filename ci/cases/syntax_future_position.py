@@ -1,4 +1,4 @@
-# 职责: 文件中部 from __future__ 导入的 CPython 位置报错 (I2-41)
+# 职责: 文件中部 from __future__ 导入的 CPython 位置报错
 # 比对: same_error
 # 锚定: CPython 3.12
 

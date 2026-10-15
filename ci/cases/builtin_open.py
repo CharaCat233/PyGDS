@@ -78,3 +78,93 @@ try:
 except ValueError as e:
     print("CL:", e)
 print(fh.name, fh.mode)
+
+# 二进制 readline 返回 bytes; writelines 返回 None; 大数 read size 报 OverflowError
+fb = open("i89_case_data.tmp", "wb")
+fb.write(b"ab\ncd\n")
+print(fb.writelines([b"x", b"y"]))
+fb.close()
+fb = open("i89_case_data.tmp", "rb")
+print(fb.readline())
+print(fb.readline())
+print(fb.readline())
+fb.close()
+fb = open("i89_case_data.tmp", "rb")
+try:
+    print(fb.read(10**30))
+except OverflowError as e:
+    print("OE:", e)
+fb.close()
+ft = open("i89_case_data.tmp", "w")
+print(ft.writelines(["z"]))
+ft.close()
+print(repr(open("i89_case_data.tmp").read()))
+fb = open("i89_case_data.tmp", "rb")
+print(fb.read(2))
+fb.close()
+
+
+# 模式白名单 (r+/wt) 与文件对象权限模型
+p47 = "i147_data.tmp"
+fh = open(p47, "w")
+fh.write("hello")
+print(fh.tell())
+print(fh.seek(0))
+print(fh.seekable())
+print(fh.isatty())
+print(fh.readable(), fh.writable())
+fh.close()
+# r+ 合法且可读可写 (文本读缓冲模型的写后读不走, 只验证权限与读)
+fh = open(p47, "r+")
+print(fh.readable(), fh.writable())
+print(fh.read())
+print(fh.seek(0))
+print(fh.tell())
+fh.close()
+# wt 合法
+fh = open(p47, "wt")
+print(fh.writable(), fh.readable())
+fh.write("abc")
+fh.close()
+print(open(p47).read())
+# x 模式对已存在文件报 FileExistsError
+fh = open(p47, "w")
+fh.close()
+try:
+    open(p47, "x")
+except FileExistsError as e:
+    print("FEE:", type(e).__name__)
+# closed 后 readable/writable 报 ValueError
+fh = open(p47)
+fh.close()
+try:
+    fh.readable()
+except ValueError as e:
+    print("VE-r:", e)
+print("W-closed:", fh.writable())
+# 文本模式 seek(1,1) 拒
+fh = open(p47)
+try:
+    fh.seek(1, 1)
+except OSError as e:
+    print("OS-seek:", type(e).__name__)
+print(fh.seek(0, 1))
+fh.close()
+# truncate
+fh = open(p47, "w")
+fh.write("0123456789")
+fh.close()
+fh = open(p47, "r+")
+print(fh.truncate(4))
+print(open(p47).read())
+fh.close()
+# writelines 接受生成器
+fh = open(p47, "w")
+fh.writelines(x + "\n" for x in ["a", "b"])
+fh.close()
+print(open(p47).read())
+# 非法模式
+try:
+    open(p47, "zq")
+except ValueError as e:
+    print("VE-mode:", e)

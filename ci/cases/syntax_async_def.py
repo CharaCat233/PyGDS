@@ -26,6 +26,7 @@ try:
 except RuntimeError as e:
     print("finished:", e)
 
+
 # 未启动首发非 None: TypeError
 async def simple():
     return 5
@@ -41,6 +42,7 @@ try:
 except StopIteration as e:
     print("simple:", e.value)
 
+
 # 未启动 throw: 异常直接外抛, 体不执行
 async def never():
     return "unreached"
@@ -51,6 +53,7 @@ try:
     c3.throw(ValueError("early"))
 except ValueError as e:
     print("throw-early:", e)
+
 
 # close 未启动: 体不执行且不发 never-awaited; 已启动后 close 走 finally 且 GeneratorExit 静默
 async def fin():
@@ -73,6 +76,7 @@ try:
 except RuntimeError as e:
     print("after-close:", e)
 
+
 # throw 进挂起中的协程: 体内可捕获, 捕获并 return 后 throw 以 StopIteration(返回值) 收尾
 class Aw:
     def __await__(self):
@@ -94,6 +98,7 @@ try:
     c6.throw(ValueError("v"))
 except StopIteration as e:
     print("throw-suspended:", e.value)
+
 
 # 协程方法形式: 限定名进入 repr 与 warning (此处只验驱动)
 class M:

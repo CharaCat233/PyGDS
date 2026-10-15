@@ -45,6 +45,7 @@ Pair = namedtuple("Pair", ["left", "right"])
 pr = Pair("L", "R")
 print(pr.left, pr.right, repr(pr))
 
+
 # 作方法返回值与遍历
 class Shape:
     def corners(self):
@@ -54,3 +55,43 @@ class Shape:
 s = Shape()
 for coord in s.corners():
     print("corner", coord)
+
+
+# namedtuple 字段名合法性校验
+try:
+    namedtuple("P", ["1x"])
+except ValueError as e:
+    print("VE:", str(e))
+try:
+    namedtuple("P", ["class"])
+except ValueError as e:
+    print("VE2:", str(e))
+try:
+    namedtuple("P", ["_x"])
+except ValueError as e:
+    print("VE3:", str(e))
+try:
+    namedtuple("P", ["x", "x"])
+except ValueError as e:
+    print("VE4:", str(e))
+try:
+    namedtuple("1P", ["x"])
+except ValueError as e:
+    print("VE5:", str(e))
+print(namedtuple("P", ["x", "y"])._fields)
+
+
+# namedtuple defaults 缺省值 (从末尾右对齐) 与实例切片
+P = namedtuple("P", "x y", defaults=[0])
+print("nt-d:", P(1), P(1, 2))
+try:
+    namedtuple("Q", "x y", [0])
+except TypeError as e:
+    print("nt-pos:", str(e))
+try:
+    namedtuple("R", "x", defaults=[1, 2])
+except TypeError as e:
+    print("nt-len:", str(e))
+P2 = namedtuple("P2", "a b c")
+print("nt-slice:", P2(1, 2, 3)[0:2], P2(1, 2, 3)[1:])
+print("nt-fd:", namedtuple("S", "x y", defaults=[7])._field_defaults)

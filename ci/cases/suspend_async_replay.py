@@ -23,6 +23,7 @@ try:
 except StopIteration as e:
     print("nested-sleep:", e.value)
 
+
 # async for 迭代器 __anext__ 内挂起 (陷阱 #9 探针变体: 协程 + sleep + 驱动重放)
 class SlowAIter:
     def __init__(self, n):
@@ -52,6 +53,7 @@ try:
     c.send(None)
 except StopIteration as e:
     print("afor-sleep:", e.value)
+
 
 # __aenter__ / __aexit__ 内挂起: 进入标记防重复进入, 退出按状态续延
 class SlowCtx:

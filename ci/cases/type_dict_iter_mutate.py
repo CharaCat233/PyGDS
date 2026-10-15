@@ -8,7 +8,7 @@ d["b"] = 2
 try:
     list(it)
 except RuntimeError as e:
-    print('caught:', str(e))
+    print("caught:", str(e))
 
 d2 = {"x": 1, "y": 2}
 caught = False
@@ -25,4 +25,3 @@ n = 0
 for k in d3:
     n += d3[k]
 print(n)
-print('done')

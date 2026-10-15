@@ -1,4 +1,4 @@
-# 职责: 类定义基类关键字参数 (P1-72, PEP 487): kw= 与 ** 解包转发 __init_subclass__, 默认钩子拒绝, metaclass 边界
+# 职责: 类定义基类关键字参数 (PEP 487): kw= 与 ** 解包转发 __init_subclass__, 默认钩子拒绝, metaclass 边界
 # 比对: same_output
 
 rec = []
@@ -10,38 +10,49 @@ class B:
 
 
 # 类头关键字转发 __init_subclass__
-class C(B, k=1, m='x'):
+class C(B, k=1, m="x"):
     pass
+
+
 print(rec)
 
 # type() 三参的关键字同样转发
-T = type('D', (B,), {}, k=5)
+T = type("D", (B,), {}, k=5)
 print(rec)
 
+
 # ** 字典解包与多 ** 合并 (源码序)
-class F(B, **{'j': 2}):
+class F(B, **{"j": 2}):
     pass
-class G(B, **{'j': 2}, **{'h': 3}):
+
+
+class G(B, **{"j": 2}, **{"h": 3}):
     pass
+
+
 print(rec)
 
 # 关键字值的求值先于钩子检查 (副作用发生)
 order = []
 try:
-    class E(*[], k=order.append('k')):
+    class E(*[], k=order.append("k")):
         pass
+
 except TypeError as e:
     print("nohook:", e)
 print(order)
+
 
 # 空 ** 解包
 class R(B, **{}):
     print("empty-starkw ok")
 
+
 # 运行期重复 (字面 kw 与 ** 键冲突)
 try:
-    class RDup(B, k=1, **{'k': 2}):
+    class RDup(B, k=1, **{"k": 2}):
         pass
+
 except TypeError as e:
     print("runtimedup:", e)
 
@@ -49,6 +60,7 @@ except TypeError as e:
 try:
     class NoHook(k=1):
         pass
+
 except TypeError as e:
     print("nohook2:", e)
 
@@ -57,9 +69,12 @@ except TypeError as e:
 class P:
     def __init_subclass__(cls):
         pass
+
+
 try:
     class Q(P, k=1):
         pass
+
 except TypeError as e:
     print("no-kw-hook:", e)
 
@@ -67,6 +82,7 @@ except TypeError as e:
 try:
     class MM(metaclass=type):
         pass
+
     print("meta-type ok")
 except TypeError as e:
     print("meta-type:", e)
@@ -75,6 +91,7 @@ except TypeError as e:
 try:
     class MC(metaclass=123):
         pass
+
 except TypeError as e:
     print("meta-custom:", e)
 
@@ -95,5 +112,6 @@ class Mid(Base1):
 
 class Leaf(Mid, tag=3):
     pass
+
+
 print(chain)
-print("done")

@@ -1,7 +1,7 @@
 # 职责: round 银行家舍入的二进制精确性
 # 比对: same_output
 
-# round 的二进制精确银行家舍入 (P2-25)
+# round 的二进制精确银行家舍入
 print(round(2.675, 2))
 print(round(0.5))
 print(round(1.5))
@@ -26,7 +26,7 @@ print(round(15, -1))
 print(round(25, -1))
 print(round(-15, -1))
 print(round(12350, -1))
-print(round(2 ** 52 + 1.0))
+print(round(2**52 + 1.0))
 print(int(round(2.675, 2) * 100) == 267)
 # 零值与负零: 返回值保留符号, 无 ndigits 时转为 int
 print(round(0.0, 6))
@@ -51,4 +51,3 @@ try:
 except TypeError as e:
     print("TE:", e)
 
-print("done")

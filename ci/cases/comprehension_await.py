@@ -28,7 +28,6 @@ try:
     main().send(None)
 except StopIteration:
     pass
-print("done")
 
 
 # 同步上下文的编译期 SyntaxError 经 exec 动态编译触发 (编译期错误不可捕获)

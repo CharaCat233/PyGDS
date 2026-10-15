@@ -1,4 +1,4 @@
-# 职责: eval / exec / compile 动态求值与 globals / locals / vars / sys.modules (I1-32): 表达式求值与语句执行 / code 对象元数据 / globals 实参快照写回 / globals() 活视图与函数内 locals 快照 / vars 的实例字典 / 动态代码顶层禁挂起 (exec 内定义的函数体挂起正常)
+# 职责: eval / exec / compile 动态求值与 globals / locals / vars / sys.modules: 表达式求值与语句执行 / code 对象元数据 / globals 实参快照写回 / globals() 活视图与函数内 locals 快照 / vars 的实例字典 / 动态代码顶层禁挂起 (exec 内定义的函数体挂起正常)
 # 比对: same_output
 # 锚定: CPython 3.12
 import sys
@@ -68,3 +68,19 @@ def g():
 """)
 print("slow:", slow(3))
 print("gen:", list(g()))
+
+
+# exec 的 globals 写回支持 del (删除 globals 键)
+g = {"a": 1}
+exec("del a", g)
+print("ed-a:", "a" in g)
+g2 = {}
+exec("x = 1", g2)
+exec("del x", g2)
+print("ed-x:", "x" in g2)
+g3 = {"a": 1, "b": 2}
+exec("del a\nb = 9", g3)
+print("ed-3:", "a" in g3, g3["b"])
+g4 = {"a": 1}
+exec("a = 5", g4)
+print("ed-4:", g4["a"])

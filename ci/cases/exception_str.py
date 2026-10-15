@@ -78,7 +78,6 @@ except TypeError as e:
     print("13", str(e), repr(e))
 
 
-
 # range 对象不可变 (与 CPython 一致)
 r = range(3)
 try:
@@ -96,4 +95,3 @@ lst2[0] = 9
 del lst2[0]
 print("16", lst2)
 
-print("done")

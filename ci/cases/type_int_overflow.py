@@ -1,18 +1,20 @@
 # 职责: 64 位整数边界、移位与溢出报错类型
 # 比对: same_output
 
-# 整数边界与移位语义 (P0-13)
+
+# 整数边界与移位语义
 def check(label, fn):
     try:
         print(label, fn())
     except Exception as e:
         print(label, type(e).__name__, e)
 
-check("pow62", lambda: 2 ** 62)
+
+check("pow62", lambda: 2**62)
 check("powneg63", lambda: (-2) ** 63)
 check("powodd", lambda: (-1) ** 9223372036854775807)
 check("poweven", lambda: (-1) ** 9223372036854775806)
-check("pow0", lambda: 0 ** 0)
+check("pow0", lambda: 0**0)
 check("mulbig", lambda: 3037000499 * 3037000499)
 check("mulmix", lambda: 123456789 * 987654321)
 check("submax", lambda: 9223372036854775807 - 1)
@@ -22,7 +24,7 @@ check("lshift62", lambda: 1 << 62)
 check("lshiftneg1", lambda: -1 << 63)
 check("rshiftbig", lambda: 1 >> 100)
 check("rshiftnegbig", lambda: -1 >> 200)
-check("shift10e18", lambda: 10 ** 18)
+check("shift10e18", lambda: 10**18)
 try:
     print(1 << -1)
 except ValueError as e:
@@ -53,4 +55,3 @@ try:
     print(divmod(7, 0))
 except ZeroDivisionError as e:
     print(e)
-print("done")

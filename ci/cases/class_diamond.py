@@ -2,7 +2,6 @@
 # 比对: same_output
 
 
-
 class Base:
     def __init__(self):
         self.steps = ["base"]

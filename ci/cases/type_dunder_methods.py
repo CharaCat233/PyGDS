@@ -1,7 +1,7 @@
 # 职责: 内建容器 dunder 方法直调与元组不可删
 # 比对: same_output
 
-# 内建容器 dunder 协议方法 (alpha.5, P1-67)
+# 内建容器 dunder 协议方法
 print([1, 2].__len__(), (1,).__len__(), {"a": 1}.__len__())
 print("ab".__len__(), b"ab".__len__(), range(5).__len__())
 print({1}.__len__(), frozenset([1]).__len__())

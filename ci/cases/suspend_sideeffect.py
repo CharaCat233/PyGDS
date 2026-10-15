@@ -169,12 +169,14 @@ def wrap():
 print([[y for y in wrap()] for _ in range(2)])
 print("log10:", log10)
 
+
 # 闭包工厂
 def make(cnt):
     def gen():
         for i in range(cnt):
             time.sleep(0)
             yield i * 2
+
     return gen()
 
 
@@ -216,4 +218,3 @@ print("first:", list(p()))
 print("second:", list(p()))
 print("log12:", log12)
 
-print("done")

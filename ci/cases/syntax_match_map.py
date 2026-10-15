@@ -97,4 +97,21 @@ match {"a": 1}:
     case {"a": 1}:
         print("yes")
 
-print("done_map")
+
+
+# 映射模式尾逗号
+def mk(x):
+    match x:
+        case {
+            "a": v,
+        }:
+            return "a=" + str(v)
+        case {
+            "b": v,
+        }:
+            return "b=" + str(v)
+        case _:
+            return "none"
+
+
+print(mk({"a": 1}), mk({"b": 2}), mk({}))

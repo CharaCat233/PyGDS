@@ -1,7 +1,7 @@
 # 职责: BaseException 捕获语义与自定义直接子类
 # 比对: same_output
 
-# BaseException 注册为可引用名 (P1-62)
+# BaseException 注册为可引用名
 print(issubclass(ValueError, BaseException))
 print(issubclass(BaseException, BaseException))
 print(issubclass(Exception, BaseException))
@@ -43,6 +43,7 @@ except Exception:
 except Fatal as e:
     print("as-fatal:", e)
 
+
 # GeneratorExit 经 except BaseException 可见 (生成器 close 场景)
 def gen():
     try:
@@ -58,6 +59,7 @@ it = gen()
 print(next(it))
 it.close()
 print("closed")
+
 
 # 用户子类继承 GeneratorExit
 class MyExit(GeneratorExit):

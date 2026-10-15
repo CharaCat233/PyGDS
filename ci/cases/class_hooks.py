@@ -1,7 +1,7 @@
 # 职责: 类创建钩子触发次序、链式调用与失败回滚
 # 比对: same_output
 
-# __init_subclass__ 与 __set_name__ 类创建钩子 (alpha.4)
+# __init_subclass__ 与 __set_name__ 类创建钩子
 log = []
 
 
@@ -155,6 +155,7 @@ try:
 
     class YFail(XFail):
         pass
+
 except ValueError as e:
     print("VE:", e)
 try:
@@ -173,6 +174,7 @@ class SNFail:
 try:
     class ZFail:
         a = SNFail()
+
 except RuntimeError as e:
     print("RE:", e)
 try:

@@ -10,8 +10,7 @@ print(... is ...)
 print(str(...), repr(...))
 
 
-def stub():
-    ...
+def stub(): ...
 
 
 print(stub())

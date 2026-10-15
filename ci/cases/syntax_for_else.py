@@ -9,7 +9,7 @@ for i in range(3):
         found = True
         break
 else:
-    print("not found")        # not found
+    print("not found")  # not found
 
 # else 在 break 时不执行
 found = False
@@ -24,6 +24,5 @@ else:
 for i in []:
     print("loop")
 else:
-    print("empty else")       # empty else
+    print("empty else")  # empty else
 
-print("done")

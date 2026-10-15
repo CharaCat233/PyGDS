@@ -1,4 +1,4 @@
-# 职责: method_descriptor / wrapper_descriptor 的 repr 归属类名 (I2-72)
+# 职责: method_descriptor / wrapper_descriptor 的 repr 归属类名
 # 比对: same_output
 
 # 方法描述符 repr 显示定义类型名 (str.upper → of 'str' objects), 不再为 ?? 占位;

@@ -1,4 +1,4 @@
-# 职责: contextlib 模块 (I1-71): contextmanager 生成器驱动与异常注入 / closing / suppress 多异常 / ExitStack 栈序与 pop_all / nullcontext, 生成器各阶段 sleep 挂起重放
+# 职责: contextlib 模块: contextmanager 生成器驱动与异常注入 / closing / suppress 多异常 / ExitStack 栈序与 pop_all / nullcontext, 生成器各阶段 sleep 挂起重放
 # 比对: same_output
 # 锚定: CPython 3.12
 import time
@@ -85,6 +85,7 @@ except TypeError as e:
 def cb(name):
     def _cb():
         print("cb", name)
+
     return _cb
 
 
@@ -92,7 +93,6 @@ with ExitStack() as stack:
     stack.callback(cb("first"))
     stack.callback(cb("second"))
     stack.enter_context(closing(C()))
-print("stack done")
 
 with ExitStack() as stack:
     stack.callback(cb("x"))
@@ -169,4 +169,73 @@ def slow_enter():
 with ExitStack() as stack:
     c = stack.enter_context(closing(slow_enter()))
     print("stack body")
-print("stack done")
+
+# ExitStack + suppress 抑制传播; closing 的 close() 返回值不当抑制; 独立 suppress
+try:
+    with ExitStack() as s:
+        s.enter_context(suppress(ValueError))
+        raise ValueError("boom")
+    print("suppressed-ok")
+except ValueError as e:
+    print("propagated:", e)
+
+
+class C82:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+        return True
+
+
+try:
+    with closing(C82()) as c:
+        raise ValueError("x")
+except ValueError as e:
+    print("propagated2:", e)
+
+c82 = C82()
+with closing(c82):
+    pass
+print("closed:", c82.closed)
+
+try:
+    with suppress(ValueError):
+        raise ValueError("boom2")
+    print("suppress-indep-ok")
+except ValueError:
+    print("suppress-indep-fail")
+
+
+# contextmanager 产物作装饰器 (ContextDecorator)
+@contextmanager
+def cm_deco():
+    print("deco-enter")
+    yield 7
+    print("deco-exit")
+
+
+@cm_deco()
+def deco_func(x):
+    return x * 2
+
+
+print(deco_func(3))
+print("deco-after")
+
+
+# ExitStack.callback 返回回调 / push
+events = []
+
+
+def cleanup(tag, *a):
+    events.append(tag)
+
+
+with ExitStack() as stack:
+    ret = stack.callback(cleanup, "c1")
+    print(ret is cleanup)
+    stack.push(lambda *a: events.append("p"))
+    stack.callback(cleanup, "c2")
+print(sorted(events))

@@ -5,37 +5,40 @@
 try:
     x = 1
 except ValueError:
-    print('exc')
+    print("exc")
 else:
-    print('else')
+    print("else")
 
 try:
     x = 1
 except ValueError:
-    print('exc2')
+    print("exc2")
 else:
-    print('else2')
+    print("else2")
 finally:
-    print('fin2')
+    print("fin2")
 
 try:
-    raise ValueError('boom')
+    raise ValueError("boom")
 except ValueError:
-    print('caught')
+    print("caught")
 else:
-    print('not-reached')
+    print("not-reached")
 finally:
-    print('fin3')
+    print("fin3")
+
 
 def f():
     try:
-        return 'ret'
+        return "ret"
     except ValueError:
         pass
     else:
-        print('else-not-on-return')
+        print("else-not-on-return")
     finally:
-        print('fin-on-return')
+        print("fin-on-return")
+
+
 print(f())
 
 try:
@@ -52,8 +55,7 @@ try:
     except ValueError:
         pass
     else:
-        raise ValueError('inner-else')
+        raise ValueError("inner-else")
 except ValueError as e:
-    print('outer caught:', e)
+    print("outer caught:", e)
 
-print('done')

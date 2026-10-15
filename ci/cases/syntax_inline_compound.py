@@ -1,7 +1,7 @@
 # 职责: 行内复合语句分号归属与 else 接续
 # 比对: same_output
 
-# 行内复合语句体: 分号归属与 else/elif 接续 (alpha.5, P1-66)
+# 行内复合语句体: 分号归属与 else/elif 接续
 if False: a = 1; b = 2
 print("a" in dir(), "b" in dir())
 x = 1

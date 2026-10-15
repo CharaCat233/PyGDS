@@ -9,6 +9,6 @@ print(None in d)
 print(list(d))
 d[None] = 2
 print(d[None], len(d))
-d2 = {'n': 1}
+d2 = {"n": 1}
 print(d2)
-print({None: 1} == {'n': 1})
+print({None: 1} == {"n": 1})

@@ -1,4 +1,4 @@
-# 职责: 内建类型子类的用户 __init__ 与构造分层 (I1-73): 可变子类 __new__ 纯分配由 init 填充, 不可变子类 __new__ 严格消费实参后 init 仍调用, init 签名错误带限定名, 子类实例字典与 set/deque 子类 repr 带类名, bool/range/slice/memoryview/NoneType 不可继承, init 内挂起重放副作用不重复
+# 职责: 内建类型子类的用户 __init__ 与构造分层: 可变子类 __new__ 纯分配由 init 填充, 不可变子类 __new__ 严格消费实参后 init 仍调用, init 签名错误带限定名, 子类实例字典与 set/deque 子类 repr 带类名, bool/range/slice/memoryview/NoneType 不可继承, init 内挂起重放副作用不重复
 # 比对: same_output
 # 锚定: CPython 3.12
 from collections import deque
@@ -186,24 +186,30 @@ class D5b(deque):
 t("D5b_nofwd", lambda: (list(D5b([1, 2], maxlen=1)), D5b([1, 2], maxlen=1).tag))
 t("D5b_maxlen_attr", lambda: D5b([1], maxlen=3).maxlen)
 
+
 # 不可继承内建类型 (CPython tp_flags 无 BASETYPE)
 def try_base(name):
     try:
         if name == "bool":
             class XB(bool):
                 pass
+
         elif name == "range":
             class XR(range):
                 pass
+
         elif name == "slice":
             class XS(slice):
                 pass
+
         elif name == "memoryview":
             class XM(memoryview):
                 pass
+
         else:
             class XN(type(None)):
                 pass
+
         return "ok"
     except TypeError as e:
         return str(e)
@@ -247,6 +253,7 @@ class D2s(list):
 d = D2s(g())
 print(d.n)
 
+
 # 生成器构造与 genexp 挂起重放 (构造器可迭代实参经 __new__ 挂起)
 def gs(v):
     time.sleep(0)
@@ -259,7 +266,7 @@ print(tuple(gs(3)))
 print(list(deque(gs(4))))
 
 
-# __iter__ 返回非迭代对象的严格文案 (I2-43): for/iter/推导式/list/星形/消费器
+# __iter__ 返回非迭代对象的严格文案: for/iter/推导式/list/星形/消费器
 # 双端同文案, 重放轮宽松回退
 class BadIter:
     def __iter__(self):
@@ -280,6 +287,7 @@ t("bad_in", lambda: 1 in BadIter())
 t("ok_iter", lambda: [x for x in OkIter()])
 t("bad_sorted", lambda: sorted(BadIter()))
 t("bad_genexp", lambda: list(x for x in BadIter()))
+
 
 # 挂起消费下的 __iter__ 再入 (重放轮宽松回退不循环)
 def g():

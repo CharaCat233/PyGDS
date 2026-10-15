@@ -25,6 +25,7 @@ try:
 except StopIteration as e:
     print("chain:", e.value)
 
+
 # await 用户 __await__: 产出值外抛 (经 send 逐个取出), return 值为 await 结果
 class Awaitable:
     def __await__(self):
@@ -44,6 +45,7 @@ try:
     c.send(None)
 except StopIteration as e:
     print("aw-done:", e.value)
+
 
 # await 不可等待对象: object X can't be used in 'await' expression (类型名小写形态)
 async def bad_int():
@@ -75,6 +77,7 @@ except TypeError as e:
 async def bad_gen():
     def gen():
         yield 1
+
     await gen()
 
 
@@ -83,6 +86,7 @@ try:
     c.send(None)
 except TypeError as e:
     print("await-gen:", e)
+
 
 # __await__ 返回非迭代器: TypeError
 class BadAwait:
@@ -99,6 +103,7 @@ try:
     c.send(None)
 except TypeError as e:
     print("badawait:", e)
+
 
 # 协程体内异常经 await 链传播并可捕获
 async def raiser():
@@ -118,10 +123,12 @@ try:
 except StopIteration as e:
     print("nested-exc:", e.value)
 
+
 # async def 内嵌套 async def: 内层调用返回协程, await 驱动
 async def outermost():
     async def inner():
         return 7
+
     return await inner()
 
 

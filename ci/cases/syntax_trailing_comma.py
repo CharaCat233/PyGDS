@@ -1,7 +1,7 @@
 # 职责: def/lambda 参数表尾随逗号
 # 比对: same_output
 
-# 参数表尾随逗号 (def / lambda, P1-57)
+# 参数表尾随逗号 (def / lambda)
 
 
 def f1(a,):

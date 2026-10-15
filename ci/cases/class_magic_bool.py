@@ -3,6 +3,7 @@
 
 # 用户类真值判定测试: __bool__ / __len__ 参与 bool() 与真值语境
 
+
 # === __bool__ 决定真值 ===
 class F:
     def __bool__(self):
@@ -25,6 +26,7 @@ if T():
 else:
     print("T falsy")
 
+
 # === __len__ 回退 (无 __bool__ 时以非 0 为真) ===
 class E:
     def __len__(self):
@@ -40,6 +42,7 @@ print("len zero:", bool(E()))
 print("len three:", bool(N()))
 while E():
     print("E loop body")
+
 
 # === __bool__ 优先于 __len__ (CPython 的判定优先级) ===
 class Both:
@@ -61,6 +64,7 @@ print("any:", any([F(), F()]), any([F(), T()]))
 print("all:", all([T(), T()]), all([T(), F()]))
 print("sum-ish:", len([x for x in [F(), T()] if x]))
 
+
 # === 两种 dunder 都未定义时保持默认真 ===
 class Plain:
     pass
@@ -72,7 +76,13 @@ print("plain:", bool(Plain()))
 print("builtin:", bool([]), bool([0]), bool(""), bool("x"))
 print("builtin2:", bool({}), bool({1: 2}), bool(set()), bool(0), bool(1))
 print("builtin3:", bool(()), bool((1,)), bool(frozenset()), bool(b""), bool(b"x"))
-print("builtin4:", bool(range(0)), bool(range(3)), bool(range(3, 0)), bool(range(0, 3, -1)))
+print(
+    "builtin4:",
+    bool(range(0)),
+    bool(range(3)),
+    bool(range(3, 0)),
+    bool(range(0, 3, -1)),
+)
 print("views:", bool({}.keys()), bool({1: 2}.keys()))
 print("views2:", bool({}.values()), bool({1: 2}.values()))
 print("truthy-objs:", bool(print), bool(int), bool(len), bool(max(1, 2)))

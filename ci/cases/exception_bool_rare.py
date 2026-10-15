@@ -1,4 +1,4 @@
-# 职责: __bool__ 非 bool 在稀路径的错误传播 (异常组 filter / 惰性谓词 / operator, I2-63)
+# 职责: __bool__ 非 bool 在稀路径的错误传播 (异常组 filter / 惰性谓词 / operator)
 # 比对: same_output
 
 # __bool__ 返回非 bool 时: 异常组 filter 类型校验 (非可调用报 TypeError)、

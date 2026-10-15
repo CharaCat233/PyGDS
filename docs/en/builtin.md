@@ -202,6 +202,17 @@ repr(42)                 # "42"
 repr([1, 2, 3])          # "[1, 2, 3]"
 ```
 
+### `ascii(obj)`
+
+Corresponds to Python `ascii()`; returns the object's `repr` string with non-ASCII characters escaped as `\x` / `\u` / `\U`
+
+```python
+ascii("abc")        # "'abc'"
+ascii("é")          # "'\xe9'"
+ascii("中")         # "'\u4e2d'"
+ascii([1, "é"])     # "[1, '\xe9']"
+```
+
 ### `hash(obj)`
 
 Corresponds to Python `hash()`, returning the hash value of an object.
@@ -327,6 +338,17 @@ def g():
     yield 1
 it3 = iter(g())
 print(list(it3), list(it3))     # [1] [] (a generator cannot be consumed again once exhausted)
+```
+
+### `next(iterator[, default])`
+
+Corresponds to Python `next()`; returns the next item of an iterator. When exhausted, returns `default` if supplied, otherwise raises `StopIteration`; a non-iterator argument (no `__next__`) raises `TypeError: '<t>' object is not an iterator`
+
+```python
+it = iter([1, 2])
+next(it)            # 1
+next(it, 99)        # 2
+next(it, 99)        # 99 (exhausted, default returned)
 ```
 
 ### `zip(*iterables, strict=False)`
@@ -565,6 +587,43 @@ print(type(f).__name__)                        # filter
 
 ---
 
+### Dynamic Evaluation and Scope Dictionaries
+
+The functions below (`eval` / `exec` / `compile` / `globals` / `locals` / `vars`) follow CPython; deviations are noted inline
+
+#### `eval(source[, globals])`
+
+Evaluates a string as a single expression and returns the result; multiple statements or an assignment raise `SyntaxError` (`invalid syntax (<string>, line 1)`); a `dict` second argument builds an isolated environment for it (deviation: CPython uses a live dict view, PyGDS snapshots and writes back); builtins are visible in that environment
+
+#### `exec(source[, globals])`
+
+Executes a string as a statement set and returns `None`; a `dict` `globals` argument builds an isolated environment and writes top-level bindings back (including keys removed by `del`). Dynamic code cannot suspend at the top level (hitting `time.sleep` etc. raises `RuntimeError: dynamic code top-level cannot be suspended`); functions / generators defined inside `exec` suspend normally when called from the main script
+
+#### `compile(source, filename, mode)`
+
+Returns a code object (`mode` limited to `"exec"` / `"eval"` / `"single"`, anything else raises `ValueError`); the code object carries `co_name` / `co_filename` / `co_firstlineno` metadata and can be passed to `eval` / `exec`; `co_code` bytecode is not implemented (PyGDS holds the AST)
+
+#### `globals()` / `locals()` / `vars(obj)`
+
+- `globals()`: live view of the global environment (dict form; reads and writes take effect immediately, `del` removes names)
+- `locals()`: snapshot of local bindings inside a function; equivalent to `globals()` at module level
+- `vars(obj)`: the instance dictionary; objects without `__dict__` (e.g. `5`) raise `TypeError: vars() argument must have __dict__ attribute`
+
+```python
+eval("1 + 2")                                # 3
+exec("y = 7")                                # y bound in the current scope
+g = {}
+exec("q = 9", g)
+print(g["q"])                                # 9 (written back to the globals argument)
+
+eval(compile("3+4", "<s>", "eval"))          # 7
+c = compile("1", "<x>", "eval")
+print(c.co_name, c.co_filename)              # <module> <x>
+
+globals()["gv"] = 42
+print(gv)                                    # 42 (live-view read/write)
+```
+
 ## Built-in Modules (import)
 
 PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the built-in modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys`, `contextlib`, `bisect`, `heapq`, `base64`, `json` and `logging` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
@@ -585,7 +644,8 @@ from math import *                # import all public members (non-underscore)
 | :--- | :--- |
 | Constants | `pi` `e` `tau` `inf` `nan` |
 | Basics | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
-| Exponential/log | `exp` `log` `log2` `log10` |
+| Exponential/log | `exp` `log` `log1p` `expm1` `log2` `log10` |
+| Geometry | `dist` |
 | Trigonometry | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
 | Angles | `degrees` `radians` |
 | Integer | `factorial` `gcd` `comb` `perm` `prod` `lcm` |
@@ -605,9 +665,13 @@ math.lcm(4, 6)       # 12   (least common multiple)
 math.cbrt(-8)        # -2.0 (cube root, negative inputs supported)
 math.remainder(7, 3) # 1.0  (IEEE 754 remainder, quotient rounded to nearest even)
 math.remainder(1.5, 1)  # -0.5
+math.log1p(0.5)      # 0.4054651081081644 (ln(1+x), accurate for small x)
+math.expm1(0.5)      # 0.6487212707001282 (e**x - 1, accurate for small x)
+math.dist([1, 2], [4, 6])   # 5.0 (Euclidean distance; lengths must match)
 ```
 
 > `math.remainder(x, y)` returns `x - n*y` where `n` is `x/y` rounded to the nearest even integer. a zero divisor or an infinite `x` raises `ValueError`.
+> `math.gcd()` / `math.lcm()` with no arguments return `0` / `1`; `math.hypot(x)` with a single argument returns `abs(x)`; `math.dist` raises `ValueError` for sequences of unequal length
 
 ### `random` Module
 
@@ -623,6 +687,8 @@ math.remainder(1.5, 1)  # -0.5
 | `shuffle(seq)` | Shuffle a list in place |
 | `sample(population, k)` | k distinct random elements |
 | `gauss(mu=0.0, sigma=1.0)` | Normal-distribution sample (Box-Muller transform) |
+| `triangular(low=0.0, high=1.0, mode=None)` | Triangular-distribution sample |
+| `randbytes(n)` | Returns n random `bytes` |
 | `getrandbits(k)` | Random integer with k random bits |
 | `getstate()` / `setstate(state)` | Save and restore the generator's internal state |
 
@@ -636,6 +702,7 @@ random.gauss(0, 1)     # a float drawn from N(0, 1)
 
 > **Note**: PyGDS's `random` module implements the same MT19937 (Mersenne Twister) as CPython: integer seeds follow CPython's `init_by_array` seeding path and the value sequence matches CPython (guarded by the `random_mt` case); string seeds are expanded through PyGDS's own hash and their sequence differs from CPython (a documented difference). `seed()` guarantees reproducible sequences within PyGDS.
 > **Note**: the sampling functions follow CPython. `choice` / `shuffle` take `len(seq)` and index/assign by integer, so a generator raises `TypeError: object of type`generator`has no len()`, a set raises `not subscriptable`, and `shuffle` raises `does not support item assignment` for tuples/strings/`range`; `choice` accepts strings and `range`, and a dict is indexed by key (raising `KeyError` when the key is not in `0..n-1`). `sample` accepts only lists/tuples/strings. The `weights` argument of `choices` only needs to be iterable, so a generator is accepted.
+> **`Random` class**: `random.Random(seed)` creates an instance holding its own MT state (`r.random()` / `r.randint()` etc. match the module-level names), which isolates random sequences; two instances with the same seed produce identical sequences
 
 ### `statistics` Module
 
@@ -648,6 +715,9 @@ random.gauss(0, 1)     # a float drawn from N(0, 1)
 | `pstdev(data)` | Population standard deviation (n) |
 | `variance(data)` | Sample variance (n-1) |
 | `pvariance(data)` | Population variance (n) |
+| `fmean(data)` | Floating-point arithmetic mean (always returns a float) |
+| `geometric_mean(data)` | Geometric mean (data must be positive) |
+| `harmonic_mean(data)` | Harmonic mean (data must be non-negative) |
 | `quantiles(data, n=4)` | Quantile cut points (exclusive method, returns n-1 values; fewer than 2 data points raises `StatisticsError`) |
 
 ```python
@@ -668,6 +738,9 @@ statistics.quantiles([1, 2, 3, 4], n=2)  # [2.5] (median cut point)
 | :--- | :--- |
 | `reduce(func, iterable[, initial])` | Left-to-right accumulation |
 | `partial(func, *args, **kwargs)` | Partial function (pre-binds some arguments) |
+| `wraps(wrapped)` | Decorator: copies `__name__` / `__doc__` and other metadata from the wrapped function onto the wrapper |
+| `lru_cache(maxsize=128, typed=False)` | LRU-caching decorator; the bare `@lru_cache` form uses the default `maxsize=128`; the wrapper exposes `cache_info()` / `cache_clear()` |
+| `singledispatch(func)` | Single-dispatch generic function; register implementations with `@f.register(type)`; unmatched calls use the default implementation |
 | `cmp_to_key(func)` | Turns an old-style `cmp(a, b)` function into a key factory usable with `key=` |
 
 ```python
@@ -681,6 +754,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 > `cmp_to_key(func)` returns a key factory; wrapping an element with it makes
 > `sorted(key=...)` / `list.sort(key=...)` order by the sign of `func(a, b)`
 > (negative sorts first, zero means equal, positive sorts last).
+> `partial` objects are introspectable: `.func` (the original function) / `.args` (positional-argument tuple) / `.keywords` (keyword-argument dict)
+> `maxsize=None` means an unbounded cache; with `typed=True` arguments of different types are cached separately
 
 ### `itertools` Module (Common Subset)
 
@@ -701,6 +776,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `pairwise(iterable)` | Adjacent pairs; returns n-1 tuples |
 | `groupby(iterable, key=None)` | Adjacent grouping; yields `(key, grouper)` pairs where each grouper is a lazy one-shot iterator sharing a cursor with the outer iteration, and a grouper is exhausted as soon as the outer iteration advances |
 | `starmap(func, iterable)` | Calls `func` with each row unpacked as arguments; returns a list of results |
+| `filterfalse(predicate, iterable)` | Keeps elements for which the predicate is false (`predicate` of `None` keeps falsy elements); returns a lazy iterator |
+| `batched(iterable, n)` | Splits into a stream of tuples of length n (lazy); `n < 1` raises `ValueError` |
 | `tee(iterable, n=2)` | Derives n independent cursors from one iterable (returns an n-tuple) |
 | `chain.from_iterable(iterable)` | Concatenates the sub-iterables inside one iterable |
 
@@ -725,7 +802,8 @@ list(pairwise([1, 2, 3]))              # [(1, 2), (2, 3)]
 list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 ```
 
-> **Note**: These functions currently return a full `list` (`list(chain(...))` directly gives the result; no extra `list()` wrap is needed). The infinite objects (`repeat`/`cycle`/`count`) must be consumed lazily via `islice`/`takewhile`; do not call `list()` directly on them.
+> **Note**: these functions return **lazy iterators** (same shape as CPython; `type(...).__name__` is the function name such as `'chain'` / `'product'`, and `iter` consistency holds). They can be consumed by `list()` / `for` / `islice` and advance lazily over infinite sources (`islice(chain(count(), [1, 2]), 5)` works)
+> Calls with an empty pool such as `product([])` return an empty iterator (no error); `repeat` with an explicit `times` also returns an iterator (`list(repeat(5, 3))` gives `[5, 5, 5]`)
 > `groupby` keeps adjacent-grouping semantics (the same key split by other keys yields several groups); each grouper is a lazy iterator consumed via `list(g)` and can be consumed only once.
 
 ### `collections` Module
@@ -770,6 +848,7 @@ Exposes the built-in operators as ordinary functions, which pairs well with func
 | Logic | `not_` `truth` |
 | Sequence | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
 | Getters | `itemgetter` `attrgetter` |
+| Call | `methodcaller(name, *args, **kwargs)` (calls a method on the target object) |
 | Matrix multiply | `matmul` |
 | Index | `index` (integer-protocol conversion, equivalent to `__index__`) |
 
@@ -786,6 +865,9 @@ operator.attrgetter("x")(obj)       # obj.x
 # with sorted
 pairs = [(2, "b"), (1, "a")]
 sorted(pairs, key=operator.itemgetter(0))   # [(1, 'a'), (2, 'b')]
+
+operator.methodcaller("upper")("abc")     # 'ABC' (calls the target's method)
+operator.methodcaller("pop")([1, 2, 3])  # 3 (the target is not duplicated as a trailing argument)
 ```
 
 > `itemgetter(k1, k2, ...)` / `attrgetter("a", "b")` return callables: a single argument returns one value, several arguments return a tuple of values; `attrgetter` accepts dotted `a.b` paths.
@@ -835,6 +917,8 @@ print(list(counter()))                                  # [0, 1, 2]
 - A non-numeric argument raises `TypeError`; a negative one raises `ValueError` (messages match CPython)
 - Supported inside generator function bodies, comprehensions, and nested generators (a generator body iterating another generator), matching CPython
 
+> **Unimplemented members**: `strftime` / `strptime` / `gmtime` / `localtime` / `mktime` / `ctime` / `asctime` are not provided (`from time import strftime` raises `ImportError`)
+
 ### `string` Module (String Constants)
 
 | Constant | Value |
@@ -847,13 +931,163 @@ print(list(counter()))                                  # [0, 1, 2]
 | `octdigits` | `'01234567'` |
 | `punctuation` | ASCII punctuation (32 characters) |
 | `whitespace` | `' \t\n\r\v\f'` |
+| `capwords(s, sep=None)` | Splits on the separator, capitalizes each word, then rejoins (`sep=None` splits on whitespace and joins with a single space) |
 | `printable` | `digits + ascii_letters + punctuation + whitespace` |
 
 ```python
 import string
 string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 string.digits          # '0123456789'
+string.capwords("the quick brown fox")   # 'The Quick Brown Fox'
+string.capwords("a_b-c", "-")           # 'A_b-C' (split on '-')
 ```
+
+### `sys` Module
+
+Interpreter and runtime information
+
+| Member | Description |
+| :--- | :--- |
+| `version` / `version_info` | Version string and version tuple (CPython 3.12 shape) |
+| `maxsize` | Platform integer limit (`2**63 - 1`) |
+| `byteorder` | Host byte order (`'little'` / `'big'`) |
+| `platform` | Host platform (`win32` / `linux` / `darwin`) |
+| `argv` | Command-line argument list (readable and writable from scripts) |
+| `executable` | Interpreter executable path |
+| `path` | User-module search directory list (initially `[""]`; see [usage.md](usage.md)) |
+| `modules` | Live view of the module cache; `del sys.modules["x"]` evicts a module (a later `import` reloads it) |
+| `intern(s)` | Interns a string (non-`str` raises `TypeError`) |
+| `exc_info()` | Active-exception triple `(type, value, traceback)`; `(None, None, None)` when none is active |
+| `exit([code])` | Raises `SystemExit` (uncaught, it enters the error terminal state with the code) |
+| `set_int_max_str_digits(n)` / `get_int_max_str_digits()` | Decimal conversion limit (`0` disables it, non-zero must be ≥ 640) |
+
+```python
+import sys
+sys.maxsize                        # 9223372036854775807
+sys.platform                       # 'win32' / 'linux' / 'darwin'
+type(sys.modules["sys"]).__name__  # 'module'
+del sys.modules["string"]          # evict the cache (a later import reloads it)
+sys.intern("a" + "bc")             # 'abc' (interned)
+```
+
+> `sys.exit` deviation: uncaught, PyGDS enters the interpreter error terminal state and reports; CPython silently ends the process (`SystemExit` is caught normally and `.args` holds the argument tuple)
+
+### `contextlib` Module
+
+| Member | Description |
+| :--- | :--- |
+| `contextmanager(func)` | Turns a generator function into a context-manager factory; the yielded value binds to the `as` target, body exceptions are thrown into the generator, suppression exits without an exception; the product is also a `ContextDecorator` |
+| `closing(thing)` | Calls `thing.close()` on exit |
+| `suppress(*exceptions)` | Suppresses the listed exceptions; others propagate |
+| `nullcontext(enter_result=None)` | Empty context manager (`as` target is `enter_result`) |
+| `ExitStack()` | Callback stack: `enter_context(cm)` / `callback(fn, *a, **kw)` (returns the callback itself, usable as a decorator) / `push(cm)` / `pop_all()` / `close()`; unwinds in reverse order |
+
+```python
+from contextlib import contextmanager, suppress
+
+@contextmanager
+def cm(tag):
+    print("enter", tag)
+    try:
+        yield tag
+    finally:
+        print("exit", tag)
+
+with cm("a") as v:          # enter a / exit a
+    print("body", v)
+
+with suppress(ValueError):
+    int("x")                 # not raised
+
+@cm("deco")                 # contextmanager product as a decorator (ContextDecorator)
+def f():
+    return 1
+f()                         # enter deco / exit deco
+```
+
+> `time.sleep` and the explicit suspension APIs work in every generator stage (before entry / at a yield point / during exit) and replay without duplicating side effects
+
+### `bisect` Module
+
+| Member | Description |
+| :--- | :--- |
+| `bisect_left(a, x[, lo[, hi]][, key=])` | Insertion point of x in a sorted sequence (equal values take the left boundary) |
+| `bisect_right(a, x[, lo[, hi]][, key=])` / `bisect` | Right-side insertion point (`bisect` is the standard alias) |
+| `insort_left(a, x[, lo[, hi]][, key=])` | Inserts at the left boundary, in place |
+| `insort_right(a, x[, lo[, hi]][, key=])` / `insort` | Inserts at the right boundary (`insort` is the standard alias) |
+
+```python
+import bisect
+a = [1, 3, 5, 7, 9]
+bisect.bisect_left(a, 5)         # 2
+bisect.bisect_right(a, 5)        # 3
+bisect.bisect_left(a, 5, 0, 3)   # 2 (lo / hi bounds)
+b = [1, 3, 5, 7]
+bisect.insort_left(b, 5)         # b -> [1, 3, 5, 5, 7]
+```
+
+> `key=` applies to list elements only, never to the search value (CPython semantics); incomparable elements propagate `TypeError`; a non-callable `key` or invalid index arguments are validated as in CPython
+
+### `heapq` Module
+
+| Member | Description |
+| :--- | :--- |
+| `heappush(heap, item)` / `heappop(heap)` | Push / pop the smallest element (maintains a min-heap in place) |
+| `heapify(heap)` | Builds a heap in place |
+| `heapreplace(heap, item)` | Pops the smallest element and pushes the new one (`IndexError` on an empty heap) |
+| `heappushpop(heap, item)` | Pushes and then pops the smallest element |
+| `nsmallest(n, iterable[, key=])` / `nlargest(n, iterable[, key=])` | List of the n smallest / n largest elements |
+| `merge(*iterables[, key=][, reverse=])` | Multi-way merge (inputs must be sorted), a lazy iterator |
+
+```python
+import heapq
+h = []
+heapq.heappush(h, 3)
+heapq.heappush(h, 1)
+heapq.heappop(h)                          # 1
+heapq.nsmallest(3, [5, 1, 8, 2, 9, 3])    # [1, 2, 3]
+list(heapq.merge([1, 3, 5], [2, 4, 6]))   # [1, 2, 3, 4, 5, 6]
+```
+
+### `base64` Module
+
+| Member | Description |
+| :--- | :--- |
+| `b64encode(data[, altchars])` / `b64decode(s[, altchars[, validate]])` | Standard Base64 codec (`altchars` replaces `+/`, e.g. `b"-_"`) |
+| `standard_b64encode` / `standard_b64decode` | Standard alphabet |
+| `urlsafe_b64encode` / `urlsafe_b64decode` | URL-safe alphabet (`-` `_`) |
+| `b16encode(data)` / `b16decode(s)` | Base16 codec |
+| `encodebytes(data)` / `decodebytes(s)` | Base64 text form wrapped every 76 characters |
+
+```python
+import base64
+base64.b64encode(b"hello")        # b'aGVsbG8='
+base64.b64decode(b"aGVsbG8=")     # b'hello'
+base64.b64encode(b"hi", b"-_")    # custom altchars
+base64.b16encode(b"\x01\xab")     # b'01AB'
+```
+
+> The encoding side rejects `str` (`TypeError`) while the decoding side accepts ASCII `str`; invalid padding raises `ValueError` with CPython's messages (length mod 4 == 1 versus bad padding are distinguished)
+
+### `json` Module
+
+| Member | Description |
+| :--- | :--- |
+| `dumps(obj[, indent][, sort_keys][, separators][, ensure_ascii][, allow_nan][, default])` | Serializes to a JSON string |
+| `loads(s)` | Deserializes (full parsing: string escapes / numbers / leading-zero validation / nesting) |
+| `dump(obj, fp, ...)` / `load(fp)` | File-object forms |
+| `JSONDecodeError` | Parse-error exception class (a `ValueError` subclass) |
+
+```python
+import json
+json.dumps({"a": 1})                          # '{"a": 1}'
+json.dumps({"a": 1}, indent=2)                # indented multi-line output
+json.dumps({"a": 1}, sort_keys=True, separators=(",", ":"))
+json.loads('{"a": [1, 2.5, true, null]}')     # {'a': [1, 2.5, True, None]}
+json.dumps(10**40)                            # big integers printed exactly (arbitrary precision)
+```
+
+> `ensure_ascii=False` emits raw non-ASCII characters (the default escapes them as `\uXXXX`); `sort_keys` orders keys; `separators=(item_sep, key_sep)` customizes separators; `allow_nan=False` raises `ValueError` for `nan` / `inf`; non-string keys are escaped as JSON literals (`{1: 2}` becomes `{"1": 2}`, bool keys become `true` / `false`); unserializable objects raise `TypeError` (a `default=` hook can convert them)
 
 ### `logging` Module (Log Output)
 

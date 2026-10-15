@@ -1,4 +1,4 @@
-# 职责: 类体作用域细则 (P0-25): 方法闭包跳过类作用域、方法默认参数读类体变量、嵌套类、类体 nonlocal、walrus、推导式
+# 职责: 类体作用域细则 方法闭包跳过类作用域、方法默认参数读类体变量、嵌套类、类体 nonlocal、walrus、推导式
 # 比对: same_output
 
 x = "module"
@@ -46,6 +46,7 @@ class Outer:
 
 print(Outer.Inner().im())
 
+
 # nonlocal 在类体内 (CPython 3.12): 目标在更外层函数作用域
 def outer_fn():
     v = 1
@@ -63,6 +64,7 @@ def outer_fn():
 
 print(outer_fn())
 
+
 # nonlocal 目标在直接外层函数
 def outer_fn2():
     v2 = 0
@@ -76,18 +78,23 @@ def outer_fn2():
 
 print(outer_fn2())
 
+
 # walrus 落类字典
 class W:
     (ww := 5)
 
+
 print(W.ww)
+
 
 # 类体推导式与生成器
 class G:
     squares = [i * i for i in range(4)]
     evens = {i for i in range(6) if i % 2 == 0}
 
+
 print(G.squares, sorted(G.evens))
+
 
 # 嵌套类可达
 class Outer2:
@@ -96,4 +103,33 @@ class Outer2:
     class Inner2:
         derived = 5
 
+
 print(Outer2.Inner2.derived, Outer2.base)
+
+
+# 类体内推导式访问类级名字 (此前可访问得 [1, 1], CPython 明确禁止)
+# 推导式作用域跳过类体命名空间; 外层函数作用域保持可见
+def make_c():
+    class C:
+        a = 1
+        c = [a for _ in range(2)]
+
+    return C
+
+
+try:
+    make_c()
+except NameError as e:
+    print("NE:", e)
+
+
+def comp_outer():
+    x = 5
+
+    class D:
+        y = [x for _ in range(2)]
+
+    return D.y
+
+
+print(comp_outer())

@@ -8,7 +8,7 @@ while x < 3:
     print(x)
     x = x + 1
 else:
-    print("else")             # else
+    print("else")  # else
 
 # else 在 break 时不执行
 y = 0
@@ -20,4 +20,3 @@ while True:
 else:
     print("not reached")
 
-print("done")

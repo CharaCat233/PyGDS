@@ -1,4 +1,4 @@
-# 职责: @ 矩阵乘运算符 (P2-16, 语法层): 内建类型 TypeError 文案、用户 __matmul__ / __rmatmul__、与 * 的同优先级、@= 增强赋值
+# 职责: @ 矩阵乘运算符 (语法层): 内建类型 TypeError 文案、用户 __matmul__ / __rmatmul__、与 * 的同优先级、@= 增强赋值
 # 比对: same_output
 
 # 内建数值类型未实现 __matmul__
@@ -37,7 +37,7 @@ class Scalar:
 
 print(1 @ Scalar(9))
 
-# 同类型仅定义 __rmatmul__: CPython 不走反射 (既定差异 P2-57, 不做双端断言)
+# 同类型仅定义 __rmatmul__: CPython 不走反射 (既定差异, 不做双端断言)
 
 # 与 * 同优先级 (左结合): (a @ b) * 2 与 a @ (b * 2) 形态区分
 
@@ -82,8 +82,8 @@ except TypeError as e:
 
 # operator.matmul
 import operator
+
 try:
     print(operator.matmul(1, 2))
 except TypeError as e:
     print("op:", e)
-print("done")

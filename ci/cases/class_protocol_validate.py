@@ -1,8 +1,9 @@
-# 职责: 用户类魔法方法返回类型校验 (__len__/__bool__/__init__/__repr__/__str__ 非法返回报 TypeError/ValueError, I2-63)
+# 职责: 用户类魔法方法返回类型校验 (__len__/__bool__/__init__/__repr__/__str__ 非法返回报 TypeError/ValueError)
 # 比对: same_output
 
 # 协议非法返回值按 CPython 报错: __len__ 负数/非整数/大数, __bool__ 非 bool,
 # __init__ 非 None, __repr__/__str__ 非字符串; 合法路径不受影响
+
 
 def t(label, fn):
     try:
@@ -30,7 +31,7 @@ t("len-str", lambda: len(LS()))
 
 class LBig:
     def __len__(self):
-        return 2 ** 200
+        return 2**200
 
 
 t("len-big", lambda: len(LBig()))

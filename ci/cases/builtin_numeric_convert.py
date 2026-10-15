@@ -86,7 +86,7 @@ except TypeError as e:
 print(1 / 3)
 print(1 / 1.5)
 print(0.1 + 0.2)
-print(round(2.0 ** 0.5, 6))
+print(round(2.0**0.5, 6))
 print(1e16)
 print(1e-5)
 print(repr(1.5), repr(0.1 + 0.2))
@@ -95,7 +95,7 @@ print([1 / 3], (1 / 3,), {1: 1 / 3})
 # === bool 按 int 子类参与算术 ===
 print(True + 1, False + 1, True * 3, True - 1)
 print(-True, ~True, +True, +False)
-print(True / 2, True // 2, True % 2, True ** 2)
+print(True / 2, True // 2, True % 2, True**2)
 print(True + True, True * True, True / True)
 print(True << 1, True >> 1, True & 1, True | 2, True ^ 3)
 print(True < 2, True > 0, True <= 1, True >= 1)
@@ -130,7 +130,7 @@ def op_kind(a, b, op):
         elif op == "%":
             return "no-error:" + repr(a % b)
         elif op == "**":
-            return "no-error:" + repr(a ** b)
+            return "no-error:" + repr(a**b)
         elif op == "<<":
             return "no-error:" + repr(a << b)
         elif op == ">>":
