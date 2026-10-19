@@ -72,3 +72,39 @@ r3 = (-4.0) ** 1.5
 print(type(r3).__name__)
 print(round(abs(r3), 10))
 print(round(r3.imag, 10))
+
+# 复数幂上溢: 结果分量出现 ±inf 报 OverflowError (NaN 传播 / nan 化 / 下溢零不误报)
+def _pw(label, fn):
+    try:
+        print(label, fn())
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+_pw("pw1", lambda: (2 + 3j) ** (10 ** 80))
+_pw("pw2", lambda: (10 + 0j) ** 400.0)
+_pw("pw3", lambda: (1e200 + 0j) ** 2)
+_pw("pw4", lambda: (1e300 + 2j) ** 2)
+_pw("pw5", lambda: (float("inf") + 0j) ** 0.5)
+_pw("pw6", lambda: (1e200 + 1e200j) ** 2.5)
+_pw("pw7", lambda: (1e300 + 0j) ** 1.5)
+
+# NaN 传播与 inf 基底 nan 化: 不报错
+_pw("pw8", lambda: (float("nan") + 0j) ** 2)
+_pw("pw9", lambda: (float("nan") + 0j) ** 2.5)
+_pw("pw10", lambda: (float("inf") + 0j) ** 2)
+_pw("pw11", lambda: (float("inf") + 1j) ** 2)
+_pw("pw12", lambda: (1e200 + 0j) ** 100)
+_pw("pw13", lambda: (1e200 + 1j) ** 100)
+
+# 下溢零不误报
+_pw("pw14", lambda: (1e-200 + 0j) ** 100)
+
+# 零基底: 正实指数返回 0j, 零指数返回 1, 负指数报零底数负幂
+_pw("pw15", lambda: 0j ** 0.5)
+_pw("pw16", lambda: 0j ** 2.5)
+_pw("pw17", lambda: 0j ** 2)
+_pw("pw18", lambda: 0j ** 0)
+_pw("pw19", lambda: 0j ** (-1))
+
+# 负指数下溢: 商除零按 CPython EDOM 通道报零底数负幂
+_pw("pw20", lambda: (1e-200 + 0j) ** -2)

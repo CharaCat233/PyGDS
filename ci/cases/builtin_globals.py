@@ -86,3 +86,37 @@ g.update({9: "nine"})
 print(g[9])
 print(9 in g)
 del g[9]
+
+# 活视图枚举面: len/keys/values/items 经同步钩子读活环境 (此前恒 0 / 恒 [])
+x166 = 42
+
+
+def _gv(label, fn):
+    try:
+        print(label, fn())
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_gv("len_pos", lambda: len(globals()) > 0)
+_gv("keys_has_x", lambda: "x166" in list(globals().keys()))
+_gv("four_same", lambda: len(globals()) == len(list(globals().keys())) == len(list(globals().values())) == len(list(globals().items())))
+_gv("items_pair", lambda: ("x166", 42) in list(globals().items()))
+_gv("values_has", lambda: 42 in list(globals().values()))
+_gv("grow", lambda: _grow_probe())
+_gv("sorted_keys_head", lambda: sorted(globals().keys())[-1])
+_gv("iter_count", lambda: len(list(globals())))
+_gv("copy_same", lambda: len(globals().copy()) == len(globals()) == len(dict(globals())))
+_gv("dup_keys", lambda: len(list(globals().keys())) == len(set(globals().keys())))
+_gv("dunder_names", lambda: all(n in list(globals().keys()) for n in ["__name__", "__file__", "__doc__", "__package__", "__spec__", "__builtins__", "__annotations__"]))
+_gv("name_val", lambda: globals()["__name__"])
+_gv("doc_val", lambda: globals()["__doc__"])
+_gv("spec_val", lambda: globals()["__spec__"])
+
+
+def _grow_probe():
+    before = len(globals())
+    globals()["g_new_166"] = 1
+    after = len(globals())
+    del globals()["g_new_166"]
+    return after - before

@@ -1041,6 +1041,38 @@ b'hi'.ljust(4)                      # b'hi  '
 b'hi'.rjust(4)                      # b'  hi'
 ```
 
+#### bytes 大小写与分类族（ASCII 语义）
+
+`bytes.capitalize()`（首字母大写余小写）、`bytes.swapcase()`；分类谓词 `bytes.islower()` / `bytes.isupper()` / `bytes.istitle()` / `bytes.isalnum()` / `bytes.isalpha()` / `bytes.isdigit()` / `bytes.isspace()`（空串全为 `False`）与 `bytes.isascii()`（空串为 `True`）。`bytearray` 同族方法返回 `bytearray`
+
+```python
+b'ab'.capitalize()                  # b'Ab'
+b'aB cD'.swapcase()                 # b'Ab Cd'
+b'ab1'.isalnum()                    # True
+b'\xff'.isascii()                   # False
+```
+
+#### bytes 检索分割与填充族
+
+`bytes.rsplit(sep, maxsplit=-1) -> list[bytes]`（从右分割，`maxsplit` 余项保留在首元素）；`bytes.partition(sep)` / `bytes.rpartition(sep) -> tuple`（三分割，未命中分别返回 `(self, b'', b'')` / `(b'', b'', self)`，空分隔符报 `ValueError`）；`bytes.splitlines() -> list[bytes]`（`\r\n` / `\r` / `\n` 三形态换行）；`bytes.zfill(width)`（符号感知补零）；`bytes.expandtabs(tabsize=8)`
+
+```python
+b'aXbXc'.rsplit(b'X', 1)            # [b'aXb', b'c']
+b'a-b'.partition(b'-')              # (b'a', b'-', b'b')
+b'a\r\nb'.splitlines()              # [b'a', b'b']
+b'-42'.zfill(5)                     # b'-0042'
+```
+
+#### bytes 变换族
+
+`bytes.translate(table, delete=b'')`（`table` 为 `bytes.maketrans(from, to)` 产出的 256 字节映射表，`None` 表示恒等映射；`delete` 中的字节先删除）；`bytes.removeprefix(prefix)` / `bytes.removesuffix(suffix)`（未命中返回原内容拷贝）
+
+```python
+b'aaa'.translate(bytes.maketrans(b'a', b'B'))   # b'BBB'
+b'abc'.translate(None, b'a')                    # b'bc'
+b'abc'.removeprefix(b'a')                       # b'bc'
+```
+
 ### list 方法
 
 #### `list.append(x) -> None`

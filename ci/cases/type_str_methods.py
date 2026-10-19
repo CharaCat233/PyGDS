@@ -53,6 +53,33 @@ print("a,b".split(sep=","))
 print("a,b,c".split(sep=",", maxsplit=1))
 print("a b c".split(sep=" ", maxsplit=1))
 print("a,b".rsplit(sep=","))
+
+
+# 非 str 实参校验 (CPython 文案: strip 族 / split 族 / replace / encode 分族)
+def _sa(label, fn):
+    try:
+        print(label, fn())
+    except Exception as e:
+        print(label, type(e).__name__, e)
+
+
+_sa("strip_int", lambda: "abc".strip(1))
+_sa("lstrip_int", lambda: "abc".lstrip(1))
+_sa("rstrip_int", lambda: "abc".rstrip(1))
+_sa("strip_tuple", lambda: "abc".strip((1, 2)))
+_sa("strip_none", lambda: "abc".strip(None))
+_sa("split_int", lambda: "a b".split(1))
+_sa("rsplit_int", lambda: "a-b".rsplit(1.5))
+_sa("split_none", lambda: "a b".split(None))
+_sa("replace_new_int", lambda: "abc".replace("a", 1))
+_sa("replace_old_int", lambda: "abc".replace(1, "b"))
+_sa("replace_count_str", lambda: "abc".replace("a", "b", "x"))
+_sa("encode_int", lambda: "abc".encode(1))
+_sa("encode_err_int", lambda: "abc".encode("utf-8", 2))
+_sa("encode_enc_none", lambda: "abc".encode(None))
+_sa("encode_err_none", lambda: "abc".encode("utf-8", None))
+_sa("encode_kw_int", lambda: "abc".encode(encoding=1))
+_sa("encode_kw_err_int", lambda: "abc".encode("utf-8", errors=2))
 print("a,b,c".rsplit(sep=",", maxsplit=1))
 
 # rsplit 丢失最左空字段 (此前 ",a".rsplit(",") -> ['a'])

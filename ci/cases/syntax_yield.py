@@ -29,6 +29,28 @@ print(next(g2, -1))  # 2
 print(next(g2, -1))  # 3
 print(next(g2, -1))  # -1 耗尽返回默认值
 
+# 生成器元属性 (CPython 生成器对象): __name__/__qualname__ 同值可写, __doc__ None, gi_code 存在
+def gen_named():
+    "docstring here"
+    yield 1
+
+
+gn = gen_named()
+print(gn.__name__)
+print(gn.__qualname__)
+print(gn.__doc__)
+print(hasattr(gn, "gi_code"))
+print(gn.gi_code.co_name)
+gn.__name__ = "renamed"
+print(gn.__name__)
+print(gn.__qualname__)
+ge = (x for x in [1])
+print(ge.__name__)
+print(ge.__qualname__)
+print(ge.__doc__)
+print(hasattr(ge, "gi_code"))
+print(type(gn).__name__)
+
 # for 循环耗尽不报错
 total = 0
 for x in gen():

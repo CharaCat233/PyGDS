@@ -49,6 +49,41 @@ print(M.scaled(2), M().scaled(2), M.plain(1), M().plain(1), M().norm(5))
 print(M.norm.__qualname__, M.norm.__name__)
 
 
+# lambda 限定名链 (CPython: 类体 A.<lambda>, 函数内 outer.<locals>.<lambda>)
+def _lam_outer():
+    f = lambda: 1
+    return f
+
+
+class LamA:
+    f = lambda: 1
+    g = lambda: (lambda: 2).__qualname__
+
+
+def _lam_nested():
+    return (lambda: (lambda: 3).__qualname__)()
+
+
+print(_lam_outer().__qualname__)
+print(LamA.f.__qualname__)
+print(LamA.g.__qualname__)
+print(_lam_nested())
+
+
+# 局部类方法限定名复用类对象限定名链 (CPython outer.<locals>.Inner.m)
+def _mk_local_cls():
+    class Inner:
+        def m(self):
+            return 1
+
+    return Inner
+
+
+_lcls = _mk_local_cls()
+print(_lcls.m.__qualname__)
+print(_lcls.__qualname__)
+
+
 # 类体内 print 方法对象 (def 时即绑定)
 class Q:
     def m(self):

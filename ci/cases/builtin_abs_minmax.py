@@ -75,3 +75,10 @@ def _arg_exc(label, fn):
 
 _arg_exc("abs-2", lambda: abs(1, 2))
 _arg_exc("sum-3", lambda: sum([1], 1, 1))
+
+# key=None 哨兵等价未提供 (CPython 语义, 非 None 不可调用仍报 TypeError)
+_arg_exc("mn-key-none", lambda: min([2, 1], key=None))
+_arg_exc("mx-key-none", lambda: max([2, 1], key=None))
+_arg_exc("mn-key-none-default", lambda: min([], key=None, default="d"))
+_arg_exc("mn-key-none-int", lambda: min(3, 1, 2, key=None))
+_arg_exc("mn-key-real", lambda: min(["bb", "a"], key=len))

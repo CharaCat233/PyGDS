@@ -1033,6 +1033,38 @@ b'hi'.ljust(4)                      # b'hi  '
 b'hi'.rjust(4)                      # b'  hi'
 ```
 
+#### bytes Case & Classification Families (ASCII semantics)
+
+`bytes.capitalize()` (first letter upper, rest lower), `bytes.swapcase()`; predicates `bytes.islower()` / `bytes.isupper()` / `bytes.istitle()` / `bytes.isalnum()` / `bytes.isalpha()` / `bytes.isdigit()` / `bytes.isspace()` (all `False` on empty input) and `bytes.isascii()` (`True` on empty input). `bytearray` counterparts return `bytearray`
+
+```python
+b'ab'.capitalize()                  # b'Ab'
+b'aB cD'.swapcase()                 # b'Ab Cd'
+b'ab1'.isalnum()                    # True
+b'\xff'.isascii()                   # False
+```
+
+#### bytes Search / Split / Padding Families
+
+`bytes.rsplit(sep, maxsplit=-1) -> list[bytes]` (right-to-left split, the remainder stays in the first element); `bytes.partition(sep)` / `bytes.rpartition(sep) -> tuple` (three-way split; a miss returns `(self, b'', b'')` / `(b'', b'', self)`, empty separator raises `ValueError`); `bytes.splitlines() -> list[bytes]` (`\r\n` / `\r` / `\n` line breaks); `bytes.zfill(width)` (sign-aware zero padding); `bytes.expandtabs(tabsize=8)`
+
+```python
+b'aXbXc'.rsplit(b'X', 1)            # [b'aXb', b'c']
+b'a-b'.partition(b'-')              # (b'a', b'-', b'b')
+b'a\r\nb'.splitlines()              # [b'a', b'b']
+b'-42'.zfill(5)                     # b'-0042'
+```
+
+#### bytes Translation Family
+
+`bytes.translate(table, delete=b'')` (`table` is the 256-byte mapping from `bytes.maketrans(from, to)`, `None` means identity; bytes listed in `delete` are dropped first); `bytes.removeprefix(prefix)` / `bytes.removesuffix(suffix)` (a miss returns a copy of the original)
+
+```python
+b'aaa'.translate(bytes.maketrans(b'a', b'B'))   # b'BBB'
+b'abc'.translate(None, b'a')                    # b'bc'
+b'abc'.removeprefix(b'a')                       # b'bc'
+```
+
 ### list Methods
 
 #### `list.append(x) -> None`

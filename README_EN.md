@@ -134,7 +134,7 @@ Support-level markers:
 | Strings (`str`) | ✅ Full | Common methods plus `%` / `format` / `f-string` formatting |
 | Bytes (`bytes`) | ✅ Full | Literals/constructor and the full method family |
 | Byte Arrays (`bytearray`) | ✅ Full | Mutable byte sequence, construction and methods |
-| Memory Views (`memoryview`) | 🟡 Subset | One-dimensional B-format views (read-only / write-through) |
+| Memory Views (`memoryview`) | 🟡 Subset | One-dimensional views (multi-byte native-format `cast` with `tolist` / `toreadonly`; no multi-dimensional or structured formats) |
 | **Container types** | | |
 | Lists (`list`) | ✅ Full | Common methods: `append`/`extend`/`pop`/`sort`, etc. |
 | Tuples (`tuple`) | ✅ Full | Immutable sequence |

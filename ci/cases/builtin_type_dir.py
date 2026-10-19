@@ -58,6 +58,35 @@ print("__class__" in dir({}), "__class__" in dir((1,)), "__class__" in dir(1.5))
 print("__class__" in dir(b"ab"), "__class__" in dir(range(3)), "__class__" in dir(None))
 print("__class__" in dir(int), "__class__" in dir(D()), "__class__" in dir(len))
 
+# 模块 dir(): 命名空间键 + 模块专属 dunder, 不含类型级 dunder 与 __class__
+import sys
+import math
+
+print(all(n in dir(sys) for n in ["__name__", "__doc__", "__package__", "__loader__", "__spec__", "argv", "path", "version_info"]))
+print(any(n in dir(sys) for n in ["__delattr__", "__init__", "__new__", "__setattr__", "__class__"]))
+print(all(n in dir(math) for n in ["__name__", "__doc__", "sqrt", "floor"]))
+print(dir(sys) == sorted(dir(sys)))
+print(len(dir(sys)) > 10)
+
+# 无参 dir(): 用户定义名 (不含内建名, 含模块 dunder)
+xd = 1
+yd = 2
+print(all(n in dir() for n in ["xd", "yd", "__name__", "__doc__", "__spec__", "__annotations__"]))
+print("print" in dir(), "len" in dir(), "list" in dir())
+
+# 函数 dir: CPython 用户函数 38 项 / 内建函数 30 项全集
+def fn77():
+    "doc77"
+    pass
+
+
+print(len(dir(fn77)))
+print(all(n in dir(fn77) for n in ["__name__", "__qualname__", "__doc__", "__dict__", "__defaults__", "__module__", "__annotations__", "__globals__", "__code__", "__call__", "__get__", "__class__"]))
+print(dir(fn77) == sorted(dir(fn77)))
+print(len(dir(len)))
+print(all(n in dir(len) for n in ["__self__", "__text_signature__", "__name__", "__doc__", "__call__"]))
+print("__globals__" in dir(len), "__self__" in dir(fn77))
+
 # range 的 count / index
 print(range(10).count(3), range(10).count(99))
 print(range(0, 20, 5).index(10), range(4).index(0))

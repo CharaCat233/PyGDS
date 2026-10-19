@@ -94,6 +94,14 @@ def _(x):
 
 
 print("sd-int:", f(1), f("a"))
+
+# registry 活视图 (CPython mappingproxy: 键为类对象, object 项即默认实现)
+print("sd-reg-type:", type(f.registry).__name__)
+print("sd-reg-len:", len(f.registry))
+print("sd-reg-keys:", sorted(k.__name__ for k in f.registry))
+print("sd-reg-obj:", f.registry[object] is f.__wrapped__)
+print("sd-reg-call:", f.registry[int]("x"))
+print("sd-reg-in:", int in f.registry, float in f.registry)
 p = functools.partial(foo, 10, b=3)
 print("p-func:", p.func.__name__)
 print("p-args:", p.args)

@@ -28,6 +28,21 @@ t("compile_exec_eval", lambda: eval(compile("a=1", "<s>", "exec")))
 g = {"v": 10}
 t("exec_writes", lambda: (exec("v = v + 1", g), g["v"]))
 
+# 模块级注解写回 globals 实参的 __annotations__ (CPython exec 语义)
+ga = {}
+exec("q: int = 9", ga)
+t("exec_ann_val", lambda: ga.get("q"))
+t("exec_ann_keys", lambda: sorted(ga.get("__annotations__", {})))
+t("exec_ann_type", lambda: ga["__annotations__"]["q"].__name__)
+gb = {}
+exec("w: str", gb)
+t("exec_ann_noval", lambda: gb.get("w", "missing"))
+t("exec_ann_noval_t", lambda: gb["__annotations__"]["w"].__name__)
+gc = {"__annotations__": {}}
+exec("z: float = 1.5", gc)
+t("exec_ann_exist", lambda: sorted(gc["__annotations__"]))
+t("exec_ann_exist_v", lambda: gc.get("z"))
+
 
 def f():
     lv = 3
@@ -49,6 +64,13 @@ t("vars_none", lambda: vars(5))
 t("sys_modules_in", lambda: "sys" in sys.modules)
 t("sys_modules_get", lambda: type(sys.modules["sys"]).__name__)
 t("eval_uses_builtins", lambda: eval("len([1,2])"))
+
+# 内建 __import__ (动态导入三件套配套, 复用 import 语句解析路径)
+t("import_builtin", lambda: __import__("math").sqrt(4))
+t("import_eval", lambda: eval("__import__('math').sqrt(9)"))
+t("import_dotted", lambda: __import__("collections.abc") is not None)
+t("import_type", lambda: type(__import__("math")).__name__)
+t("import_miss", lambda: __import__("nomodule_xyz"))
 
 
 # exec 定义的函数 / 生成器被主脚本调用时可正常挂起 (函数体在语句键体系内)

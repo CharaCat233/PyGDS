@@ -65,3 +65,26 @@ try:
     b"%c" % (10**100,)
 except OverflowError as e:
     print("OE-c:", type(e).__name__, str(e)[:40])
+
+# 星号宽度/精度: 宽度取自实参 (CPython %*d 消费顺序)
+print(b"%*d" % (5, 42))
+print(b"%-*d|" % (5, 42))
+print(b"%.*f" % (2, 3.14159))
+print(b"%*.*f" % (8, 2, 3.14159))
+print(b"%d %*d" % (1, 4, 2))
+try:
+    b"%*d" % (5,)
+except TypeError as e:
+    print("TE-w-args:", e)
+try:
+    b"%*d" % (5, 42, 43)
+except TypeError as e:
+    print("TE-w-extra:", e)
+try:
+    b"%*d" % ("a", 42)
+except TypeError as e:
+    print("TE-w-int:", e)
+try:
+    b"%2$*d" % (5, 42)
+except ValueError as e:
+    print("VE-badconv:", e)

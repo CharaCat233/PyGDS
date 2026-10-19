@@ -1432,6 +1432,14 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 比对: `same_output`
 - 源文件: [ci/cases/type_int_intern.py](../../ci/cases/type_int_intern.py)
 
+### type_int_dunder
+
+- 职责: int/bool 数值协议与转换 dunder 直调、as_integer_ratio / is_integer
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_dunder.py](../../ci/cases/type_int_dunder.py)
+
+`__index__`/`__int__`/`__floor__`/`__ceil__`/`__trunc__` 返回自身 (bool 经等值整数), `__float__` 大数经 53 位舍入, `__hash__` 与 `hash()` 同源 (模 `2^61-1`, 等值同哈希), `__abs__` 大数取幅值, `as_integer_ratio` 返回 `(self, 1)`, `is_integer` 恒真; float 无 `__index__` (`hasattr` 为 False)
+
 ### type_int_methods
 
 - 职责: `int`/`float` 位方法与 `format()`
@@ -1909,6 +1917,14 @@ OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序
 - 职责: `mean`/`median`/`stdev` 等统计量
 - 比对: `same_output`
 - 源文件: [ci/cases/module_statistics.py](../../ci/cases/module_statistics.py)
+
+### module_stdlib_members
+
+- 职责: 标准库模块成员面外扩 (math/operator/functools/collections/string/itertools/base64/random/statistics)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_stdlib_members.py](../../ci/cases/module_stdlib_members.py)
+
+math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 (整数输入返回 int, 非整数域报 `ValueError`), operator 的原位族 (`i*` 对可变容器原位修改并返回自身) 与 `call`/`inv`, functools 的 `cache`/`cached_property`/`total_ordering`/`update_wrapper`/`get_cache_token`, collections 的 `ChainMap` (链式查找/写透首映射/`new_child`/`parents`) 与 `UserDict`/`UserList`/`UserString` 包装族, string 的 `Template` (`$` 占位/`${}` 花括号/`$$` 转义/`safe_substitute` 缺键跳过) 与 `Formatter`, itertools 的 `compress`/`combinations_with_replacement` (字典序产出), base64 的 Base32 (标准与扩展十六进制字母表) 与 Ascii85/Base85 家族 (`z` 零压缩/`adobe` 框架), random 的分布 variate 族与 `SystemRandom` (值序列为文档化差异, 断言可调用性与定义域), statistics 的 `median_low`/`median_high`/`median_grouped`/`multimode`/`correlation`/`covariance`/`linear_regression`/`NormalDist` (样本数不足/常数输入报 `StatisticsError`)
 
 ### module_string
 

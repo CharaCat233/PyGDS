@@ -106,6 +106,18 @@ try:
     "{:+}".format("ab")
 except ValueError as e:
     print("VE-sign:", str(e)[:50])
+try:
+    "{: }".format("ab")
+except ValueError as e:
+    print("VE-space:", str(e)[:50])
+try:
+    format("ab", "+5")
+except ValueError as e:
+    print("VE-sign2:", str(e))
+try:
+    format("ab", " 5")
+except ValueError as e:
+    print("VE-space2:", str(e))
 print("{:=6}".format(12))
 
 

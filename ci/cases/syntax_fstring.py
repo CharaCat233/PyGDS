@@ -58,6 +58,26 @@ print(f"outer {f'inner {x}'}")
 
 # 备用形式与零填充: 前缀参与布局
 print(f"{255:#06x}")  # 0x00ff
+
+
+# 字符串格式说明符校验 (与 format() 路径同约束: '=' 对齐与 sign 仅数值允许)
+def _fs(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, e)
+
+
+_fs("eq_align", lambda: f"{'ab':=5}")
+_fs("eq_align0", lambda: f"{'ab':0=5}")
+_fs("sign_plus", lambda: f"{'ab':+5}")
+_fs("sign_minus", lambda: f"{'ab':-5}")
+_fs("sign_space", lambda: f"{'ab': 5}")
+_fs("num_eq", lambda: f"{3:=5}")
+_fs("num_plus", lambda: f"{3:+5}")
+_fs("str_gt", lambda: f"{'ab':>5}")
+_fs("str_lt", lambda: f"{'ab':<5}")
+_fs("str_caret", lambda: f"{'ab':^5}")
 print(f"{-255:#06x}")  # -0x0ff
 print(f"{8:#06o}")  # 0o0010
 

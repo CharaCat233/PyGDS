@@ -648,13 +648,17 @@ from math import *                # 导入所有公开成员 (非下划线开头
 | :--- | :--- |
 | 常量 | `pi` `e` `tau` `inf` `nan` |
 | 基础 | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
-| 指数/对数 | `exp` `log` `log1p` `expm1` `log2` `log10` |
+| 指数/对数 | `exp` `log` `log1p` `expm1` `log2` `log10` `exp2` |
 | 几何 | `dist` |
 | 三角函数 | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
+| 双曲函数 | `cosh` `sinh` `tanh` `acosh` `asinh` `atanh` |
 | 角度 | `degrees` `radians` |
 | 整数 | `factorial` `gcd` `comb` `perm` `prod` `lcm` |
 | 符号 | `copysign` |
-| 判定 | `isnan` `isinf` `isfinite` |
+| 判定 | `isnan` `isinf` `isfinite` `isclose` |
+| 浮点分解 | `frexp` `ldexp` `modf` `nextafter` `ulp` |
+| 精确求和 | `fsum` `sumprod`（全整数输入返回 int，大数经大数算术精确） |
+| 特殊函数 | `erf` `erfc`（有理近似）`gamma` `lgamma`（Lanczos 近似） |
 
 ```python
 import math
@@ -676,6 +680,7 @@ math.dist([1, 2], [4, 6])   # 5.0 (欧氏距离, 两序列须等长)
 
 > `math.remainder(x, y)` 返回 `x - n*y`，其中 `n` 为 `x/y` 四舍五入到最近偶数，除数为零或 `x` 为无穷时抛 `ValueError`
 > `math.gcd()` / `math.lcm()` 零参返回 `0` / `1`；`math.hypot(x)` 单参返回 `abs(x)`；`math.dist` 两序列长度不等报 `ValueError`
+> `math.gamma(x)` 结果超出浮点范围时报 `OverflowError: math range error`（如 `gamma(200)`）；`math.ulp(0)` 为次正规最小间隔 `2**-1074`
 
 ### `random` 模块
 
@@ -692,6 +697,10 @@ math.dist([1, 2], [4, 6])   # 5.0 (欧氏距离, 两序列须等长)
 | `sample(population, k)` | 返回 k 个不重复的随机元素 |
 | `gauss(mu=0.0, sigma=1.0)` | 正态分布采样（Box-Muller 变换） |
 | `triangular(low=0.0, high=1.0, mode=None)` | 三角分布采样 |
+| `expovariate(lambd=1.0)` | 指数分布采样 |
+| `normalvariate(mu=0.0, sigma=1.0)` / `lognormvariate(mu, sigma)` | 正态 / 对数正态分布采样 |
+| `gammavariate(alpha, beta)` / `betavariate(alpha, beta)` | gamma / beta 分布采样（`alpha` / `beta` 须为正） |
+| `vonmisesvariate(mu, kappa)` / `paretovariate(alpha)` / `weibullvariate(alpha, beta)` | 圆分布 / 帕累托 / 威布尔分布采样 |
 | `randbytes(n)` | 返回 n 字节随机 `bytes` |
 | `getrandbits(k)` | 返回 k 个随机二进制位的整数 |
 | `getstate()` / `setstate(state)` | 保存与恢复生成器内部状态 |
@@ -708,6 +717,7 @@ random.randint(1, 6)   # 1..6 内
 > **注意**：PyGDS 的 `random` 实现与 CPython 同源的 MT19937（Mersenne Twister）：整数种子走 CPython 同款 `init_by_array` 播种路径，数值序列与 CPython 对齐（`random_mt` 用例守护）；字符串种子经 PyGDS 自有哈希展开，序列与 CPython 不同（文档化差异）。`seed()` 可保证在 PyGDS 内部复现相同序列
 > **说明**：抽样函数的参数类型规则与 CPython 一致——`choice` / `shuffle` 取 `len(seq)` 后按整数下标索引/赋值，因此生成器报 `TypeError: object of type`generator`has no len()`、集合报 `not subscriptable`、`shuffle` 对元组/字符串/`range` 报 `does not support item assignment`，`choice` 支持字符串与 `range`，字典按键取（键非 `0..n-1` 时 `KeyError`）；`sample` 接受列表/元组/字符串/`range`；`choices` 的 `weights` 只需可迭代，可传生成器
 > **`Random` 类**：`random.Random(seed)` 创建持有独立 MT 状态的实例（`r.random()` / `r.randint()` 等方法与模块级同名同语义），便于隔离随机序列；两个同种子实例产生相同序列
+> **`SystemRandom` 类**：`random.SystemRandom()` 的方法面与 `Random` 一致；与 CPython 不同，其熵源为解释器自身的随机源而非操作系统熵（值序列同为文档化差异，不具 CPython `os.urandom` 的密码学语义）
 
 ### `statistics` 模块
 
@@ -724,6 +734,13 @@ random.randint(1, 6)   # 1..6 内
 | `geometric_mean(data)` | 几何平均值（数据须为正） |
 | `harmonic_mean(data)` | 调和平均值（数据须为非负） |
 | `quantiles(data, n=4)` | 分位切点（exclusive 方法，返回 n-1 个值，数据点少于 2 个时抛 `StatisticsError`） |
+| `median_low(data)` / `median_high(data)` | 下中位 / 上中位（偶数个样本分别取靠前 / 靠后） |
+| `median_grouped(data, interval=1)` | 分组中位 |
+| `multimode(data)` | 众数列表（同频多值按出现序全部返回） |
+| `correlation(x, y)` | 皮尔逊相关系数（样本数不足或某侧为常数抛 `StatisticsError`） |
+| `covariance(x, y)` | 样本协方差（除以 n-1，样本数不足抛 `StatisticsError`） |
+| `linear_regression(x, y)` | 最小二乘拟合，返回带 `slope` / `intercept` 属性的结果对象 |
+| `NormalDist(mu=0.0, sigma=1.0)` | 正态分布对象（`sigma` 为负抛 `StatisticsError`） |
 
 ```python
 import statistics
@@ -745,8 +762,13 @@ statistics.quantiles([1, 2, 3, 4], n=2)  # [2.5] (中位数切点)
 | `partial(func, *args, **kwargs)` | 偏函数（预绑定部分参数） |
 | `wraps(wrapped)` | 装饰器：把被包装函数的 `__name__` / `__doc__` 等元数据复制到包装函数 |
 | `lru_cache(maxsize=128, typed=False)` | LRU 缓存装饰器；`@lru_cache` 无括号形态按默认 `maxsize=128`；包装函数带 `cache_info()` / `cache_clear()` |
-| `singledispatch(func)` | 单分派泛型函数；`@f.register(类型)` 注册实现，未命中走默认实现 |
+| `singledispatch(func)` | 单分派泛型函数；`@f.register(类型)` 注册实现，未命中走默认实现；`f.registry` 为注册表映射（键为类对象，`object` 项即默认实现） |
 | `cmp_to_key(func)` | 把旧式 `cmp(a, b)` 函数转成可用于 `key=` 的 key 工厂 |
+| `cache(func)` | 无界缓存装饰器（等价 `lru_cache(maxsize=None)`） |
+| `cached_property(func)` | 非数据描述符：首次访问求值后写入实例缓存 |
+| `total_ordering(cls)` | 类装饰器：按已定义的比较方法补全其余（`__lt__` / `__gt__` / `__eq__` 为源） |
+| `update_wrapper(wrapper, wrapped)` | 把 `wrapped` 的元数据复制到 `wrapper` |
+| `get_cache_token()` | 类型缓存令牌 |
 
 ```python
 from functools import reduce, partial, cmp_to_key
@@ -784,6 +806,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `batched(iterable, n)` | 按长度 n 批量切分为元组流（惰性）；`n < 1` 报 `ValueError` |
 | `tee(iterable, n=2)` | 从一个可迭代对象派生 n 个独立游标（返回 n 元组） |
 | `chain.from_iterable(iterable)` | 拼接一个可迭代对象中的各子可迭代对象 |
+| `compress(data, selectors)` | 双源同步消费，选择器为真时产出对应元素 |
+| `combinations_with_replacement(iterable, r)` | 可重复组合（字典序产出） |
 
 ```python
 from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
@@ -820,6 +844,8 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 | `namedtuple(typename, field_names)` | 生成带命名字段的不可变元组子类；`field_names` 为空白 / 逗号分隔的字符串或字符串可迭代对象；实例支持下标、迭代、解包与按字段名访问，类上提供 `_fields` / `_make(iterable)` / `_replace(**kw)` / 实例方法 `_asdict()` |
 | `deque(iterable=[], maxlen=None)` | 双端队列，有界时溢出静默挤出一端，不支持切片 |
 | `OrderedDict([init_dict])` | 有序字典，repr 带前缀，键序敏感比较 |
+| `ChainMap(*maps)` | 多映射链式查找（写透首映射，`maps` 属性可访问，`new_child(m)` / `parents` 派生） |
+| `UserDict([init])` / `UserList([init])` / `UserString(seq)` | 字典 / 列表 / 字符串包装基类（`data` 属性持底层对象，协议转发） |
 
 ```python
 from collections import Counter, defaultdict
@@ -847,12 +873,13 @@ print(p._asdict()["x"])                     # 1
 | 类别 | 成员 |
 | :--- | :--- |
 | 算术 | `add` `sub` `mul` `truediv` `floordiv` `mod` `pow` `neg` `pos` `abs` |
+| 原位族 | `iadd` `isub` `imul` `itruediv` `ifloordiv` `imod` `ipow` `ilshift` `irshift` `iand` `ior` `ixor` `iconcat`（可变容器原位修改并返回自身，其余按对应运算） |
 | 位运算 | `and_` `or_` `xor` `invert` `lshift` `rshift` |
 | 比较 | `eq` `ne` `lt` `le` `gt` `ge` `is_` `is_not` |
 | 逻辑 | `not_` `truth` |
 | 序列 | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
 | 取值器 | `itemgetter` `attrgetter` |
-| 调用 | `methodcaller(name, *args, **kwargs)`（调用目标对象的方法） |
+| 调用 | `methodcaller(name, *args, **kwargs)`（调用目标对象的方法）`call(callable, *args, **kwargs)`（通用调用）`inv`（`invert` 的别名） |
 | 矩阵乘 | `matmul` |
 | 索引 | `index`（整数协议转换，等价 `__index__`） |
 
@@ -921,7 +948,7 @@ print(list(counter()))                                  # [0, 1, 2]
 
 > **未实现成员**：`strftime` / `strptime` / `gmtime` / `localtime` / `mktime` / `ctime` / `asctime` 未提供（`from time import strftime` 报 `ImportError`）
 
-### `string` 模块（字符串常量）
+### `string` 模块
 
 | 常量 | 值 |
 | :--- | :--- |
@@ -942,6 +969,17 @@ string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 string.digits          # '0123456789'
 string.capwords("the quick brown fox")   # 'The Quick Brown Fox'
 string.capwords("a_b-c", "-")           # 'A_b-C' (按 '-' 切分)
+```
+
+`string.Template(template)` 提供 `$` 占位符替换：`substitute(**kw)` 缺键报 `KeyError`，`safe_substitute(**kw)` 缺键保留原样；`${name}` 花括号界定名，`$$` 转义为字面 `$`。`string.Formatter()` 的 `format(format_string, *args, **kwargs)` 与 `str.format` 同机制
+
+```python
+import string
+string.Template("$x + $y").substitute(x=1, y=2)      # '1 + 2'
+string.Template("${x}!").substitute(x=1)             # '1!'
+string.Template("$$").substitute()                   # '$'
+string.Template("$x $z").safe_substitute(x=1)        # '1 $z'
+string.Formatter().format("{0}-{1}", 5, "a")         # '5-a'
 ```
 
 ### `sys` 模块
@@ -1059,6 +1097,10 @@ list(heapq.merge([1, 3, 5], [2, 4, 6]))   # [1, 2, 3, 4, 5, 6]
 | `standard_b64encode` / `standard_b64decode` | 标准字母表 |
 | `urlsafe_b64encode` / `urlsafe_b64decode` | URL 安全字母表（`-` `_`） |
 | `b16encode(data)` / `b16decode(s)` | Base16 编解码 |
+| `b32encode(data)` / `b32decode(s)` | Base32 编解码（RFC 4648，忽略大小写，`=` 填充） |
+| `b32hexencode(data)` / `b32hexdecode(s)` | Base32 扩展十六进制字母表（`0-9A-V`） |
+| `a85encode(data[, adobe])` / `a85decode(s[, adobe])` | Ascii85 编解码（`z` 零压缩；`adobe=True` 加 `<~` `~>` 框架） |
+| `b85encode(data)` / `b85decode(s)` | Base85 编解码（RFC 1924 字母表） |
 | `encodebytes(data)` / `decodebytes(s)` | 每 76 字符换行的 Base64 文本形态 |
 
 ```python

@@ -649,13 +649,17 @@ from math import *                # import all public members (non-underscore)
 | :--- | :--- |
 | Constants | `pi` `e` `tau` `inf` `nan` |
 | Basics | `sqrt` `isqrt` `cbrt` `floor` `ceil` `trunc` `fabs` `fmod` `pow` `remainder` |
-| Exponential/log | `exp` `log` `log1p` `expm1` `log2` `log10` |
+| Exponential/log | `exp` `log` `log1p` `expm1` `log2` `log10` `exp2` |
 | Geometry | `dist` |
 | Trigonometry | `sin` `cos` `tan` `asin` `acos` `atan` `atan2` `hypot` |
+| Hyperbolic | `cosh` `sinh` `tanh` `acosh` `asinh` `atanh` |
 | Angles | `degrees` `radians` |
 | Integer | `factorial` `gcd` `comb` `perm` `prod` `lcm` |
 | Sign | `copysign` |
-| Predicates | `isnan` `isinf` `isfinite` |
+| Predicates | `isnan` `isinf` `isfinite` `isclose` |
+| Float decomposition | `frexp` `ldexp` `modf` `nextafter` `ulp` |
+| Exact summation | `fsum` `sumprod` (all-integer inputs return int; big integers are computed exactly) |
+| Special functions | `erf` `erfc` (rational approximation) `gamma` `lgamma` (Lanczos approximation) |
 
 ```python
 import math
@@ -677,6 +681,7 @@ math.dist([1, 2], [4, 6])   # 5.0 (Euclidean distance; lengths must match)
 
 > `math.remainder(x, y)` returns `x - n*y` where `n` is `x/y` rounded to the nearest even integer. a zero divisor or an infinite `x` raises `ValueError`.
 > `math.gcd()` / `math.lcm()` with no arguments return `0` / `1`; `math.hypot(x)` with a single argument returns `abs(x)`; `math.dist` raises `ValueError` for sequences of unequal length
+> `math.gamma(x)` raises `OverflowError: math range error` when the result exceeds the floating-point range (e.g. `gamma(200)`); `math.ulp(0)` is the smallest subnormal gap `2**-1074`
 
 ### `random` Module
 
@@ -693,6 +698,10 @@ math.dist([1, 2], [4, 6])   # 5.0 (Euclidean distance; lengths must match)
 | `sample(population, k)` | k distinct random elements |
 | `gauss(mu=0.0, sigma=1.0)` | Normal-distribution sample (Box-Muller transform) |
 | `triangular(low=0.0, high=1.0, mode=None)` | Triangular-distribution sample |
+| `expovariate(lambd=1.0)` | Exponential-distribution sample |
+| `normalvariate(mu=0.0, sigma=1.0)` / `lognormvariate(mu, sigma)` | Normal / log-normal samples |
+| `gammavariate(alpha, beta)` / `betavariate(alpha, beta)` | Gamma / beta samples (`alpha` / `beta` must be positive) |
+| `vonmisesvariate(mu, kappa)` / `paretovariate(alpha)` / `weibullvariate(alpha, beta)` | von Mises / Pareto / Weibull samples |
 | `randbytes(n)` | Returns n random `bytes` |
 | `getrandbits(k)` | Random integer with k random bits |
 | `getstate()` / `setstate(state)` | Save and restore the generator's internal state |
@@ -708,6 +717,7 @@ random.gauss(0, 1)     # a float drawn from N(0, 1)
 > **Note**: PyGDS's `random` module implements the same MT19937 (Mersenne Twister) as CPython: integer seeds follow CPython's `init_by_array` seeding path and the value sequence matches CPython (guarded by the `random_mt` case); string seeds are expanded through PyGDS's own hash and their sequence differs from CPython (a documented difference). `seed()` guarantees reproducible sequences within PyGDS.
 > **Note**: the sampling functions follow CPython. `choice` / `shuffle` take `len(seq)` and index/assign by integer, so a generator raises `TypeError: object of type`generator`has no len()`, a set raises `not subscriptable`, and `shuffle` raises `does not support item assignment` for tuples/strings/`range`; `choice` accepts strings and `range`, and a dict is indexed by key (raising `KeyError` when the key is not in `0..n-1`). `sample` accepts only lists/tuples/strings. The `weights` argument of `choices` only needs to be iterable, so a generator is accepted.
 > **`Random` class**: `random.Random(seed)` creates an instance holding its own MT state (`r.random()` / `r.randint()` etc. match the module-level names), which isolates random sequences; two instances with the same seed produce identical sequences
+> **`SystemRandom` class**: the methods of `random.SystemRandom()` match `Random`; unlike CPython, its entropy source is the interpreter's own random source rather than OS entropy (the value sequence is the same documented difference, without the cryptographic semantics of CPython's `os.urandom`)
 
 ### `statistics` Module
 
@@ -724,6 +734,13 @@ random.gauss(0, 1)     # a float drawn from N(0, 1)
 | `geometric_mean(data)` | Geometric mean (data must be positive) |
 | `harmonic_mean(data)` | Harmonic mean (data must be non-negative) |
 | `quantiles(data, n=4)` | Quantile cut points (exclusive method, returns n-1 values; fewer than 2 data points raises `StatisticsError`) |
+| `median_low(data)` / `median_high(data)` | Lower / upper median (even counts take the earlier / later middle value) |
+| `median_grouped(data, interval=1)` | Grouped median |
+| `multimode(data)` | List of modes (all equally frequent values in occurrence order) |
+| `correlation(x, y)` | Pearson correlation coefficient (insufficient samples or a constant side raises `StatisticsError`) |
+| `covariance(x, y)` | Sample covariance (divided by n-1; insufficient samples raise `StatisticsError`) |
+| `linear_regression(x, y)` | Least-squares fit, returns a result object with `slope` / `intercept` attributes |
+| `NormalDist(mu=0.0, sigma=1.0)` | Normal-distribution object (a negative `sigma` raises `StatisticsError`) |
 
 ```python
 import statistics
@@ -745,8 +762,13 @@ statistics.quantiles([1, 2, 3, 4], n=2)  # [2.5] (median cut point)
 | `partial(func, *args, **kwargs)` | Partial function (pre-binds some arguments) |
 | `wraps(wrapped)` | Decorator: copies `__name__` / `__doc__` and other metadata from the wrapped function onto the wrapper |
 | `lru_cache(maxsize=128, typed=False)` | LRU-caching decorator; the bare `@lru_cache` form uses the default `maxsize=128`; the wrapper exposes `cache_info()` / `cache_clear()` |
-| `singledispatch(func)` | Single-dispatch generic function; register implementations with `@f.register(type)`; unmatched calls use the default implementation |
+| `singledispatch(func)` | Single-dispatch generic function; register implementations with `@f.register(type)`; unmatched calls use the default implementation; `f.registry` is the registry mapping (keys are class objects, the `object` entry is the default implementation) |
 | `cmp_to_key(func)` | Turns an old-style `cmp(a, b)` function into a key factory usable with `key=` |
+| `cache(func)` | Unbounded caching decorator (equivalent to `lru_cache(maxsize=None)`) |
+| `cached_property(func)` | Non-data descriptor: evaluates on first access and caches on the instance |
+| `total_ordering(cls)` | Class decorator: fills in the missing ordering methods from the defined ones (`__lt__` / `__gt__` / `__eq__` as sources) |
+| `update_wrapper(wrapper, wrapped)` | Copies `wrapped`'s metadata onto `wrapper` |
+| `get_cache_token()` | Type-cache token |
 
 ```python
 from functools import reduce, partial, cmp_to_key
@@ -785,6 +807,8 @@ sorted([3, 1, 2], key=cmp_to_key(lambda a, b: b - a))   # [3, 2, 1]
 | `batched(iterable, n)` | Splits into a stream of tuples of length n (lazy); `n < 1` raises `ValueError` |
 | `tee(iterable, n=2)` | Derives n independent cursors from one iterable (returns an n-tuple) |
 | `chain.from_iterable(iterable)` | Concatenates the sub-iterables inside one iterable |
+| `compress(data, selectors)` | Consumes both sources in lockstep, yielding data items whose selector is true |
+| `combinations_with_replacement(iterable, r)` | Combinations with replacement (lexicographic order) |
 
 ```python
 from itertools import chain, product, combinations, permutations, islice, repeat, cycle, count, zip_longest, takewhile, dropwhile
@@ -821,6 +845,8 @@ list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))   # [3, 7]
 | `namedtuple(typename, field_names)` | Generates an immutable tuple subclass with named fields; `field_names` is a whitespace/comma-separated string or an iterable of strings; instances support indexing, iteration, unpacking and field-name access, and the class provides `_fields` / `_make(iterable)` / `_replace(**kw)` plus the instance method `_asdict()` |
 | `deque(iterable=[], maxlen=None)` | Double-ended queue, bounded deques silently discard from the opposite end on overflow, slicing unsupported |
 | `OrderedDict([init_dict])` | Order-preserving dict, repr carries a prefix, comparisons are order-sensitive |
+| `ChainMap(*maps)` | Chained lookup across multiple mappings (writes go to the first map, the `maps` attribute is accessible, `new_child(m)` / `parents` derive new chains) |
+| `UserDict([init])` / `UserList([init])` / `UserString(seq)` | Dict / list / string wrapper base classes (the `data` attribute holds the underlying object, protocol forwarding) |
 
 ```python
 from collections import Counter, defaultdict
@@ -848,12 +874,13 @@ Exposes the built-in operators as ordinary functions, which pairs well with func
 | Category | Members |
 | :--- | :--- |
 | Arithmetic | `add` `sub` `mul` `truediv` `floordiv` `mod` `pow` `neg` `pos` `abs` |
+| In-place | `iadd` `isub` `imul` `itruediv` `ifloordiv` `imod` `ipow` `ilshift` `irshift` `iand` `ior` `ixor` `iconcat` (mutable containers are modified in place and returned; everything else falls back to the matching operation) |
 | Bitwise | `and_` `or_` `xor` `invert` `lshift` `rshift` |
 | Comparison | `eq` `ne` `lt` `le` `gt` `ge` `is_` `is_not` |
 | Logic | `not_` `truth` |
 | Sequence | `concat` `contains` `getitem` `setitem` `delitem` `countOf` `indexOf` `length_hint` |
 | Getters | `itemgetter` `attrgetter` |
-| Call | `methodcaller(name, *args, **kwargs)` (calls a method on the target object) |
+| Call | `methodcaller(name, *args, **kwargs)` (calls a method on the target object) `call(callable, *args, **kwargs)` (generic call) `inv` (alias of `invert`) |
 | Matrix multiply | `matmul` |
 | Index | `index` (integer-protocol conversion, equivalent to `__index__`) |
 
@@ -924,7 +951,7 @@ print(list(counter()))                                  # [0, 1, 2]
 
 > **Unimplemented members**: `strftime` / `strptime` / `gmtime` / `localtime` / `mktime` / `ctime` / `asctime` are not provided (`from time import strftime` raises `ImportError`)
 
-### `string` Module (String Constants)
+### `string` Module
 
 | Constant | Value |
 | :--- | :--- |
@@ -945,6 +972,17 @@ string.ascii_letters   # 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 string.digits          # '0123456789'
 string.capwords("the quick brown fox")   # 'The Quick Brown Fox'
 string.capwords("a_b-c", "-")           # 'A_b-C' (split on '-')
+```
+
+`string.Template(template)` provides `$`-placeholder substitution: `substitute(**kw)` raises `KeyError` for missing keys, `safe_substitute(**kw)` keeps the placeholder as-is; `${name}` braces delimit the name, `$$` escapes to a literal `$`. `string.Formatter()`'s `format(format_string, *args, **kwargs)` works like `str.format`
+
+```python
+import string
+string.Template("$x + $y").substitute(x=1, y=2)      # '1 + 2'
+string.Template("${x}!").substitute(x=1)             # '1!'
+string.Template("$$").substitute()                   # '$'
+string.Template("$x $z").safe_substitute(x=1)        # '1 $z'
+string.Formatter().format("{0}-{1}", 5, "a")         # '5-a'
 ```
 
 ### `sys` Module
@@ -1062,6 +1100,10 @@ list(heapq.merge([1, 3, 5], [2, 4, 6]))   # [1, 2, 3, 4, 5, 6]
 | `standard_b64encode` / `standard_b64decode` | Standard alphabet |
 | `urlsafe_b64encode` / `urlsafe_b64decode` | URL-safe alphabet (`-` `_`) |
 | `b16encode(data)` / `b16decode(s)` | Base16 codec |
+| `b32encode(data)` / `b32decode(s)` | Base32 codec (RFC 4648, case-insensitive, `=` padding) |
+| `b32hexencode(data)` / `b32hexdecode(s)` | Base32 extended-hex alphabet (`0-9A-V`) |
+| `a85encode(data[, adobe])` / `a85decode(s[, adobe])` | Ascii85 codec (`z` zero compression; `adobe=True` adds the `<~` `~>` framing) |
+| `b85encode(data)` / `b85decode(s)` | Base85 codec (RFC 1924 alphabet) |
 | `encodebytes(data)` / `decodebytes(s)` | Base64 text form wrapped every 76 characters |
 
 ```python

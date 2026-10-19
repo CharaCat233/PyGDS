@@ -1432,6 +1432,14 @@ Float literals and `float()` strings go through a self-produced correctly-rounde
 - Comparison: `same_output`
 - Source: [ci/cases/type_int_intern.py](../../ci/cases/type_int_intern.py)
 
+### type_int_dunder
+
+- Responsibility: int/bool numeric-protocol and conversion dunder direct calls, as_integer_ratio / is_integer
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_dunder.py](../../ci/cases/type_int_dunder.py)
+
+`__index__`/`__int__`/`__floor__`/`__ceil__`/`__trunc__` return self (bool via the equal-value integer), `__float__` rounds big integers through 53-bit rounding, `__hash__` matches `hash()` (modulo `2^61-1`, equal values hash equally), `__abs__` takes the magnitude of big integers, `as_integer_ratio` returns `(self, 1)`, `is_integer` is always true; float has no `__index__` (`hasattr` is False)
+
 ### type_int_methods
 
 - Responsibility: `int`/`float` bit methods and `format()`
@@ -1909,6 +1917,14 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Responsibility: `mean`/`median`/`stdev` statistics
 - Comparison: `same_output`
 - Source: [ci/cases/module_statistics.py](../../ci/cases/module_statistics.py)
+
+### module_stdlib_members
+
+- Responsibility: Stdlib module member surface extension (math/operator/functools/collections/string/itertools/base64/random/statistics)
+- Comparison: `same_output`
+- Source: [ci/cases/module_stdlib_members.py](../../ci/cases/module_stdlib_members.py)
+
+math's hyperbolic/error-function/float-decomposition families plus `isclose`/`fsum`/`sumprod`/`gamma` (integer inputs return int, invalid domains raise `ValueError`), operator's in-place family (`i*` mutates mutable containers in place and returns them) plus `call`/`inv`, functools's `cache`/`cached_property`/`total_ordering`/`update_wrapper`/`get_cache_token`, collections's `ChainMap` (chained lookup, writes go to the first map, `new_child`/`parents`) and the `UserDict`/`UserList`/`UserString` wrappers, string's `Template` (`$` placeholders/`${}` braces/`$$` escape/`safe_substitute` missing-key skip) and `Formatter`, itertools's `compress`/`combinations_with_replacement` (lexicographic order), base64's Base32 (standard and extended hex alphabets) plus Ascii85/Base85 families (`z` zero compression/`adobe` framing), random's distribution variates and `SystemRandom` (value sequences are a documented difference, callability and domains asserted), statistics's `median_low`/`median_high`/`median_grouped`/`multimode`/`correlation`/`covariance`/`linear_regression`/`NormalDist` (insufficient samples/constant inputs raise `StatisticsError`)
 
 ### module_string
 
