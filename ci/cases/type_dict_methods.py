@@ -119,3 +119,22 @@ print(u3)
 u4 = {}
 u4.update([("m", 7), ("n", 8)])
 print(u4)
+
+# 多余位置实参: CPython 参数数文案
+def _arg_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_arg_exc("get-3", lambda: {}.get("a", 1, 2))
+_arg_exc("pop-3", lambda: {}.pop("a", 1, 2))
+_arg_exc("setdefault-3", lambda: {}.setdefault("a", 1, 2))
+_arg_exc("update-2", lambda: {}.update({}, {}))
+_arg_exc("copy-1", lambda: {}.copy(1))
+_arg_exc("keys-1", lambda: {}.keys(1))
+_arg_exc("items-1", lambda: {}.items(1))
+_arg_exc("values-1", lambda: {}.values(1))
+_arg_exc("popitem-1", lambda: {}.popitem(1))
+_arg_exc("popitem-empty", lambda: {}.popitem())

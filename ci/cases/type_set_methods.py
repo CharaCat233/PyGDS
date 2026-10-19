@@ -68,3 +68,15 @@ for x in s91c:
 print(sorted(out91))
 s91c.add(4)
 print(sorted(s91c))
+
+# 多余位置实参: CPython 参数数文案
+def _arg_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_arg_exc("add-2", lambda: {1}.add(2, 3))
+_arg_exc("discard-2", lambda: {1}.discard(1, 2))
+_arg_exc("remove-2", lambda: {1}.remove(1, 2))

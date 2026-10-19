@@ -129,3 +129,21 @@ except TypeError as e:
     print("ba-iadd-tuple:", type(e).__name__, str(e))
 print("ba-iadd-bytes:", _ba_iadd_bytes())
 print("ba-iadd-ba:", _ba_iadd_ba())
+
+# pop 下标实参校验先于空表检查, 文案与 list.pop 对齐
+def _arg_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_arg_exc("ba-pop-empty-str", lambda: bytearray().pop("x"))
+_arg_exc("ba-pop-empty-float", lambda: bytearray().pop(1.5))
+_arg_exc("ba-pop-str", lambda: bytearray(b"a").pop("x"))
+_arg_exc("ba-pop-big", lambda: bytearray(b"a").pop(10**100))
+_arg_exc("ba-pop-none", lambda: bytearray(b"ab").pop(None))
+print(bytearray(b"ab").pop(True))
+print(bytearray(b"ab").pop(0))
+print(bytearray(b"ab").pop(-1))
+_arg_exc("ba-pop-empty", lambda: bytearray().pop())

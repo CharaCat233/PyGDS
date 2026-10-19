@@ -120,3 +120,32 @@ try:
 except Exception as e:
     print("jb-bom:", type(e).__name__, str(e))
 print("jb-ok:", json.loads('{"a":1}'))
+
+# 数字文法: '.' / e 后须有数字, 残尾按 Extra data 报错 (位置与 CPython 对齐)
+def _json_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_json_exc("n-1dot", lambda: json.loads("1."))
+_json_exc("n-0dot", lambda: json.loads("0."))
+_json_exc("n-1e", lambda: json.loads("1e"))
+_json_exc("n-1eneg", lambda: json.loads("1e-"))
+_json_exc("n-1eplus", lambda: json.loads("1e+"))
+_json_exc("n-neg", lambda: json.loads("-"))
+_json_exc("n-negdot", lambda: json.loads("-."))
+_json_exc("n-dotonly", lambda: json.loads(".5"))
+_json_exc("n-in-list", lambda: json.loads("[1., 2e]"))
+_json_exc("n-01", lambda: json.loads("01"))
+_json_exc("n-00dot5", lambda: json.loads("00.5"))
+_json_exc("n-spacedot", lambda: json.loads("1 ."))
+
+# 合法数字形态 (小数/指数/大整数/大数小数)
+print(json.loads("1.5"), json.loads("1e3"), json.loads("1.5e-2"), json.loads("2E+10"))
+print(json.loads("123456789012345678901234567890"))
+print(json.loads("12345678901234567890.5"))
+print(json.loads("-1.5"))
+print(json.loads('{"a": 1.5, "b": [1e2, -0.5]}'))
+_json_exc("n-trailing", lambda: json.loads("1 x"))

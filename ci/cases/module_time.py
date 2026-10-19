@@ -63,5 +63,20 @@ try:
     time.sleep(_m.nan)
 except ValueError as e:
     print("VE:", str(e))
+
+# 大数实参 (含负大数) 报 _PyTime_t 溢出文案 (不得真实等待)
+try:
+    time.sleep(10 ** 19)
+except OverflowError as e:
+    print("OE-big:", str(e))
+try:
+    time.sleep(-(10 ** 19))
+except OverflowError as e:
+    print("OE-negbig:", str(e))
+try:
+    time.sleep("x")
+except TypeError as e:
+    print("TE-str:", str(e))
+
 time.sleep(0.001)
 print("slept")

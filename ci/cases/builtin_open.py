@@ -168,3 +168,60 @@ try:
     open(p47, "zq")
 except ValueError as e:
     print("VE-mode:", e)
+
+# r+ 写后读: 写路径使文本读缓冲失效 (读全量 → 写 → seek → 读得新内容)
+d99 = "i099_rw.tmp"
+fh = open(d99, "w")
+fh.write("hello")
+fh.close()
+fh = open(d99, "r+")
+print(fh.read())
+fh.seek(0)
+fh.write("X")
+fh.seek(0)
+print(fh.read())
+fh.close()
+print(open(d99).read())
+
+# 写后未 seek 直接读: 从写入落点续读
+fh = open(d99, "r+")
+fh.seek(0)
+fh.write("Z")
+print(fh.read())
+fh.close()
+
+# writelines 后读
+fh = open(d99, "r+")
+fh.seek(0)
+fh.writelines(["ab", "cd"])
+fh.seek(0)
+print(fh.read())
+fh.close()
+
+# truncate 后同句柄读
+fh = open(d99, "r+")
+fh.read()
+fh.seek(0)
+fh.truncate(3)
+fh.seek(0)
+print(fh.read())
+fh.close()
+
+# with 块内混合读写
+with open(d99, "r+") as w:
+    w.write("AA")
+    w.seek(0)
+    print(w.read())
+    w.write("BB")
+    w.seek(0)
+    print(w.read())
+    print(w.tell())
+print(open(d99).read())
+
+# a+ 追加写后读 (追加保持尾随)
+fh = open(d99, "a+")
+fh.write("!")
+fh.seek(0)
+print(fh.read())
+fh.close()
+print(open(d99).read())

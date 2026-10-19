@@ -148,3 +148,65 @@ try:
     bytes.fromhex("az")
 except ValueError as e:
     print("VE-fh:", str(e)[:60])
+
+# split 空分隔符: 报 ValueError (无界形态此前挂死进程, 常规用例只测有界与空输入形态)
+def _arg_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_arg_exc("bsplit_empty_max", lambda: b"abc".split(b"", 1))
+_arg_exc("bsplit_empty_zero", lambda: b"abc".split(b"", 0))
+_arg_exc("bsplit_empty_input", lambda: b"".split(b""))
+_arg_exc("basplit_empty_max", lambda: bytearray(b"abc").split(bytearray(b""), 1))
+
+# split/replace 的 maxsplit/count 实参校验: float/None 报 TypeError, 大数报 OverflowError
+_arg_exc("bsplit_float", lambda: b"a,b,c".split(b",", 1.5))
+_arg_exc("bsplit_none", lambda: b"a,b,c".split(b",", None))
+_arg_exc("bsplit_big", lambda: b"a,b,c".split(b",", 10**100))
+_arg_exc("breplace_float", lambda: b"abc".replace(b"b", b"x", 1.5))
+_arg_exc("breplace_none", lambda: b"abc".replace(b"b", b"x", None))
+_arg_exc("breplace_big", lambda: b"abc".replace(b"b", b"x", 10**100))
+print(b"a,b,c".split(b",", True))
+print(b"abab".replace(b"b", b"x", True))
+print(b"a,b,c".split(b",", 2**63 - 1))
+
+# find/count start/end 实参: float/str 报 TypeError, None 视同缺省, 大数按 ±∞ 钳制
+_arg_exc("bfind_float", lambda: b"abc".find(b"a", 1.5))
+_arg_exc("bcount_float", lambda: b"abc".count(b"a", 1.5))
+_arg_exc("bfind_str", lambda: b"abc".find(b"a", "x"))
+_arg_exc("bfind_none", lambda: b"abc".find(b"a", None))
+_arg_exc("bcount_none", lambda: b"abc".count(b"a", None, None))
+_arg_exc("bfind_big", lambda: b"abc".find(b"a", 10**100))
+print(b"abc".find(b"b", True))
+
+# startswith/endswith start/end 实参 (负数从尾部计, 大数按 ±∞ 钳制, 空针边界)
+print(b"abc".startswith(b"b", 1))
+print(b"abc".endswith(b"a", 0, 1))
+print(b"abc".startswith(b"b", -2))
+print(bytearray(b"abc").startswith(b"b", 1))
+print(bytearray(b"abc").endswith(b"c", -1))
+print(b"abc".startswith(b"bc", 1))
+print(b"abc".startswith(b"bcd", 1))
+print(b"abc".endswith(b"b", 0, 2))
+print(b"abc".endswith(b"bc", 0, 3))
+print(b"abc".endswith(b"cd", 0, 4))
+print(b"abc".startswith(b"", 3))
+print(b"abc".startswith(b"", 4))
+print(b"abc".startswith(b"", 10))
+print(b"abc".startswith(b"", 2, 1))
+print(b"abc".endswith(b"", 1))
+print(b"abc".endswith(b"", 3))
+print(b"abc".endswith(b"", 10))
+print(b"abc".endswith(b"", 2, 1))
+print(b"abc".startswith(b"b", 1, 10**100))
+print(b"abc".endswith(b"c", 0, 10**100))
+print(b"abc".endswith(b"c", -10**100))
+_arg_exc("bsw_float", lambda: b"abc".startswith(b"b", 1.5))
+_arg_exc("bew_float", lambda: b"abc".endswith(b"c", 1.5))
+
+# 多余位置实参: fromhex/split 参数数文案
+_arg_exc("fromhex-2", lambda: bytes.fromhex("61", 1))
+_arg_exc("bsplit-3", lambda: b"a,b".split(b",", 1, 2))

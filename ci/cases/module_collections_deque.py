@@ -94,3 +94,21 @@ d149 = deque([1, 2, 3])
 d149.rotate(True)
 print(list(d149))
 print(deque([1, 2, 3]).index(2, True))
+
+# index start/end 实参: 大数按 ±∞ 钳制, float/str/None 报 slice indices TypeError
+def _arg_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+d107 = deque([1, 2, 3])
+_arg_exc("dq_big_start", lambda: d107.index(1, 10**100))
+_arg_exc("dq_big_neg_end", lambda: d107.index(1, 0, -10**100))
+print(deque([1, 2, 3]).index(3, 0, 10**100))
+print(deque([1, 2, 3]).index(1, -10**100))
+_arg_exc("dq_float", lambda: d107.index(1, 1.5))
+_arg_exc("dq_none", lambda: d107.index(1, None))
+_arg_exc("dq_str", lambda: d107.index(1, "x"))
+_arg_exc("dq_big_type", lambda: d107.index(1, 10**100, 1.5))

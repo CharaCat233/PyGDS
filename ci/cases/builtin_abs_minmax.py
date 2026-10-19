@@ -65,3 +65,13 @@ print(sum([1, 2], 5))
 print(abs(True))
 print(abs(False))
 
+# 多余位置实参: CPython 参数数文案
+def _arg_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_arg_exc("abs-2", lambda: abs(1, 2))
+_arg_exc("sum-3", lambda: sum([1], 1, 1))

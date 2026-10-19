@@ -124,3 +124,23 @@ try:
     r27.randint(0, -1)
 except ValueError as e:
     print("rint3:", str(e))
+
+# Random 实例 randrange/randint 实参严格整数归一 (float/str/None 报 TypeError)
+def _rng_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+r102 = random.Random(1)
+_rng_exc("ir-float", lambda: r102.randrange(1.5))
+_rng_exc("ir-float-step", lambda: r102.randrange(0, 10, 1.5))
+_rng_exc("ir-none", lambda: r102.randrange(None))
+_rng_exc("ir-str", lambda: r102.randrange("x"))
+_rng_exc("ir-range-float", lambda: r102.randrange(10.5))
+_rng_exc("irandint-float", lambda: r102.randint(1.5, 5))
+_rng_exc("irandint-none", lambda: r102.randint(None, 5))
+print(r102.randrange(10) == random.Random(1).randrange(10))
+print(r102.randrange(True))
+print(random.Random(7).randint(1, 6) == random.Random(7).randint(1, 6))

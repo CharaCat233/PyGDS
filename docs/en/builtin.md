@@ -116,17 +116,22 @@ Corresponds to the Python `bytes` type constructor, the way to build byte string
 
 ## Built-in Functions
 
-### `print(*args, sep=" ", end="\n")`
+### `print(*args, sep=" ", end="\n", file=None, flush=False)`
 
-Corresponds to Python `print()`, outputting arguments to the console.
+Corresponds to Python `print()`, outputting arguments to the console; with `file=` bound to a file object the output is written to that file instead (text write, accepts objects returned by `open()`), and `flush=` is accepted but is a no-op (output is already flushed).
 
 - `sep`: Separator between objects, defaults to a space `" "`.
 - `end`: End string appended after the output, defaults to newline `"\n"`.
+- `file`: Output target, defaults to `None` (console); when a file object is given, the text is written through its `write` (CPython semantics).
+- `flush`: Whether to force flushing; `True` / `False` accepted (writes are already flushed in the current implementation, so this is a no-op).
 
 ```python
 print("Hello", "World")              # Hello World
 print("Hello", "World", sep=", ")    # Hello, World
 print("Hello", end="!")              # Hello!
+f = open("out.txt", "w")
+print("to file", file=f)             # writes to out.txt (with newline)
+f.close()
 ```
 
 ### `len(obj)`

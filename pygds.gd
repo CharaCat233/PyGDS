@@ -3718,11 +3718,20 @@ class DSLObject:
 		if e2 > 1023:
 			return -INF if neg else INF
 		# 3 位保护位缩放后 divmod, 半到偶舍入到 p 位
+		# (整数位主导时 s 为负: 分子左移翻转为分母右移, 商与余数的粘滞语义等价)
 		var s := p - 1 - e2 + 3
-		var num: Array = DSLBigInt.lshift(false, m_limbs, s)
-		var dv: Array = DSLBigInt.divmod(false, num[1], false, d_limbs)
-		var q: Array[int] = dv[1]
-		var r: Array[int] = dv[3]
+		var q: Array[int]
+		var r: Array[int]
+		if s >= 0:
+			var num: Array = DSLBigInt.lshift(false, m_limbs, s)
+			var dv: Array = DSLBigInt.divmod(false, num[1], false, d_limbs)
+			q = dv[1]
+			r = dv[3]
+		else:
+			var den: Array = DSLBigInt.lshift(false, d_limbs, -s)
+			var dv2: Array = DSLBigInt.divmod(false, m_limbs, false, den[1])
+			q = dv2[1]
+			r = dv2[3]
 		var dropped: int = q[0] & 7
 		var shr: Array = DSLBigInt.mag_shr(q, 3)
 		var base: Array[int] = shr[0]
@@ -4188,9 +4197,12 @@ class DSLObject:
 				last_error = "OverflowError: Python int too large to convert to C ssize_t"
 				return -9223372036854775808
 			return a.value
-		return fallback
+		# 非整数实参 (str/float/None 等) 按 CPython 报 TypeError, 不再静默回退缺省
+		last_error = "TypeError: '%s' object cannot be interpreted as an integer" % a._type_name()
+		return -9223372036854775808
 
 	## 序列区间边界实参 (index 的 start/end 用): bool 按 int, 大数按 ±∞ 钳制, [br]
+	## 非 int 实参 (float/str/None) 报 CPython 同文案 TypeError [br]
 	## 返回钳到 [0, maxval] 的值
 	func _bound_index_arg(args: Array[DSLObject], idx: int, fallback: int, maxval: int) -> int:
 		var v = fallback
@@ -4204,9 +4216,30 @@ class DSLObject:
 					v = -9223372036854775808 if oi.big_neg else 9223372036854775807
 				else:
 					v = oi.value
+			else:
+				last_error = "TypeError: slice indices must be integers or have an __index__ method"
+				return -9223372036854775808
 		if v < 0:
 			v = max(0, v + maxval)
 		return mini(v, maxval)
+
+	## 计数/分割族位置实参 (replace 的 count, split/rsplit 的 maxsplit) 取值: [br]
+	## bool 按 int, 大数报 OverflowError, 其余类型 (含 None) 报 '<t>' object cannot be [br]
+	## interpreted as an integer; 缺省用 fallback
+	func _count_int_arg(args: Array[DSLObject], idx: int, fallback: int) -> int:
+		if idx >= args.size():
+			return fallback
+		var a = DSLObject._unwrap_dsl(args[idx])
+		if a is DSLBool:
+			return 1 if a.value else 0
+		if a is DSLInteger:
+			var oi = a as DSLInteger
+			if oi.is_big():
+				last_error = "OverflowError: Python int too large to convert to C ssize_t"
+				return -9223372036854775808
+			return oi.value
+		last_error = "TypeError: '%s' object cannot be interpreted as an integer" % a._type_name()
+		return -9223372036854775808
 		
 	
 	## 生成算术运算类型错误 [br]
@@ -8384,16 +8417,25 @@ class DSLString extends DSLObject:
 		return super._dsl_getattribute(name)
 	
 	func builtin_upper(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.upper() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		return DSLString.new(raw.value.to_upper())
 	
 	func builtin_lower(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.lower() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		return DSLString.new(raw.value.to_lower())
 	
 	func builtin_strip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 2:
+			last_error = "TypeError: strip expected at most 1 argument, got %d" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var s = raw.value
@@ -8424,7 +8466,8 @@ class DSLString extends DSLObject:
 	func _is_py_ws(ch: String) -> bool:
 		return _is_py_space(ch.unicode_at(0))
 	
-	## 检索/切片的位置实参取值: bool 按 int, 大数按 ±∞ 钳制, 缺省用 fallback [br]
+	## 检索/切片的位置实参取值: bool 按 int, None 视同缺省, 大数按 ±∞ 钳制, [br]
+	## 其余类型 (float/str 等) 报 CPython 同文案 TypeError [br]
 	## [param args] 方法实参 [br]
 	## [param idx] 位置下标 (2 = start, 3 = end) [br]
 	## [param fallback] 缺省值 [br]
@@ -8435,12 +8478,15 @@ class DSLString extends DSLObject:
 		var a = DSLObject._unwrap_dsl(args[idx])
 		if a is DSLBool:
 			return 1 if a.value else 0
+		if a is DSLNone:
+			return fallback
 		if a is DSLInteger:
 			var oi = a as DSLInteger
 			if oi.is_big():
 				return -9223372036854775808 if oi.big_neg else 9223372036854775807
 			return oi.value
-		return fallback
+		last_error = "TypeError: slice indices must be integers or None or have an __index__ method"
+		return -9223372036854775808
 
 	## 检索区间 [start, end) 的 CPython 归一化: 负值加长度, 下界钳 0 [br]
 	## [param args] 方法实参 [br]
@@ -8456,6 +8502,9 @@ class DSLString extends DSLObject:
 		return [si, ei]
 
 	func builtin_split(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 3:
+			last_error = "TypeError: split() takes at most 2 arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var sep = ""
@@ -8477,8 +8526,10 @@ class DSLString extends DSLObject:
 		else:
 			use_default = true
 		if maxsplit_arg != null:
-			# maxsplit 的 bool 按 int 参与
-			maxsplit = _bound_arg([maxsplit_arg], 0, -1)
+			# maxsplit 的 bool 按 int 参与, float/None 报 TypeError, 大数报 OverflowError
+			maxsplit = _count_int_arg([maxsplit_arg], 0, -1)
+			if last_error != "":
+				return null
 		var result = DSLList.new()
 		if use_default:
 			# 默认按空白分割 (跳过空项); maxsplit 后的余项原样保留内部空白 (CPython 语义)
@@ -8573,8 +8624,10 @@ class DSLString extends DSLObject:
 		var new_s = args[2]._dsl_str()
 		var count = -1
 		if args.size() >= 4:
-			# count 的 bool 按 int 参与
-			count = _bound_arg(args, 3, -1)
+			# count 的 bool 按 int 参与, float/None 报 TypeError, 大数报 OverflowError
+			count = _count_int_arg(args, 3, -1)
+			if last_error != "":
+				return null
 		if old == "":
 			# 空串替换展开: 在每个字符前插入新串, 无限/count>len 时末尾再补一次
 			if count == 0:
@@ -8607,6 +8660,9 @@ class DSLString extends DSLObject:
 		return DSLString.new(result)
 		
 	func builtin_find(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 4:
+			last_error = "TypeError: find() takes at most 3 arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
@@ -8615,6 +8671,8 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var sub = args[1]._dsl_str()
 		var rng = _str_range(args, s.length())
+		if last_error != "":
+			return null
 		var si: int = rng[0]
 		var ei: int = rng[1]
 		if sub == "":
@@ -8632,6 +8690,9 @@ class DSLString extends DSLObject:
 
 	## str.index(sub[, start[, end]]) - 查找子串, 找不到抛 ValueError
 	func builtin_index(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 4:
+			last_error = "TypeError: index() takes at most 3 arguments (%d given)" % (args.size() - 1)
+			return null
 		var found = builtin_find(args, _kwargs)
 		if found is DSLInteger and found.value == -1:
 			last_error = "ValueError: substring not found"
@@ -8640,6 +8701,9 @@ class DSLString extends DSLObject:
 
 	## str.rfind(sub[, start[, end]]) - 从右向左查找
 	func builtin_rfind(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 4:
+			last_error = "TypeError: rfind() takes at most 3 arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
@@ -8648,6 +8712,8 @@ class DSLString extends DSLObject:
 		var s = raw.value
 		var sub = args[1]._dsl_str()
 		var rng = _str_range(args, s.length())
+		if last_error != "":
+			return null
 		var si: int = rng[0]
 		var ei: int = rng[1]
 		if sub == "":
@@ -8715,6 +8781,9 @@ class DSLString extends DSLObject:
 
 	## str.removeprefix(prefix)
 	func builtin_removeprefix(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			last_error = "TypeError: str.removeprefix() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var pref_obj = DSLObject._unwrap_dsl(args[1])
 		# 前缀必须为 str
@@ -8728,6 +8797,9 @@ class DSLString extends DSLObject:
 
 	## str.removesuffix(suffix)
 	func builtin_removesuffix(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			last_error = "TypeError: str.removesuffix() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var suff_obj = DSLObject._unwrap_dsl(args[1])
 		# 后缀必须为 str
@@ -8741,6 +8813,9 @@ class DSLString extends DSLObject:
 
 	## str.partition(sep) - 分割为 (head, sep, tail)
 	func builtin_partition(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			last_error = "TypeError: str.partition() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var sep = args[1]._dsl_str()
 		# 空分隔符报错, 不再并入 "未找到" 分支
@@ -8754,6 +8829,9 @@ class DSLString extends DSLObject:
 
 	## str.rpartition(sep) - 从右向左分割
 	func builtin_rpartition(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			last_error = "TypeError: str.rpartition() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var sep = args[1]._dsl_str()
 		if sep == "":
@@ -8766,6 +8844,9 @@ class DSLString extends DSLObject:
 
 	## str.isdecimal()
 	func builtin_isdecimal(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isdecimal() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
@@ -8776,6 +8857,9 @@ class DSLString extends DSLObject:
 
 	## str.isnumeric(): Nd + No + Nl 全集
 	func builtin_isnumeric(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isnumeric() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
@@ -8786,6 +8870,9 @@ class DSLString extends DSLObject:
 
 	## str.isprintable()
 	func builtin_isprintable(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isprintable() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		for ch in raw:
 			if not _is_py_printable(ch.unicode_at(0)):
@@ -8794,6 +8881,9 @@ class DSLString extends DSLObject:
 
 	## str.isascii()
 	func builtin_isascii(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isascii() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		for ch in raw:
 			if ch.unicode_at(0) > 127:
@@ -8802,6 +8892,9 @@ class DSLString extends DSLObject:
 
 	## str.isidentifier()
 	func builtin_isidentifier(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isidentifier() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
@@ -8843,15 +8936,42 @@ class DSLString extends DSLObject:
 					col = 0
 		return DSLString.cached(result)
 
+	## 区间 [si, ei) 上的前缀判定 (CPython startswith 的 start/end 语义): [br]
+	## 空前缀要求 si 不越过区间与串尾, 非空前缀须完整落入区间且逐字符相等
+	func _str_region_starts_with(s: String, si: int, ei: int, pfx: String) -> bool:
+		if pfx.is_empty():
+			return si <= ei and si <= s.length()
+		if pfx.length() > ei - si or si + pfx.length() > s.length():
+			return false
+		return s.substr(si, pfx.length()) == pfx
+
+	## 区间 [si, ei) 上的后缀判定 (CPython endswith 的 start/end 语义): [br]
+	## ei 先钳到串长, 空后缀要求 si 不越过区间
+	func _str_region_ends_with(s: String, si: int, ei: int, sfx: String) -> bool:
+		if ei > s.length():
+			ei = s.length()
+		if sfx.is_empty():
+			return si <= ei
+		var p = ei - sfx.length()
+		if p < si:
+			return false
+		return s.substr(p, sfx.length()) == sfx
+
 	func builtin_startswith(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 4:
+			last_error = "TypeError: startswith() takes at most 3 arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
 			last_error = "TypeError: startswith() takes at least one argument"
 			return null
-		# start/end 实参 (bool 按 int) 限定前缀检索区间
+		# start/end 实参 (bool 按 int, None 视同缺省, 负数从尾部计, 大数按 ±∞ 钳制) 限定前缀区间
 		var rng = _str_range(args, raw.value.length())
-		var s = raw.value.substr(rng[0], maxi(0, int(rng[1]) - int(rng[0])))
+		if last_error != "":
+			return null
+		var si: int = rng[0]
+		var ei: int = rng[1]
 		var u = DSLObject._unwrap_dsl(args[1])
 		if u is DSLTuple:
 			# 元组内每个前缀必须为 str
@@ -8860,23 +8980,29 @@ class DSLString extends DSLObject:
 				if not (item_un is DSLString):
 					last_error = "TypeError: startswith first arg must be str or a tuple of str, not %s" % item_un._type_name()
 					return null
-				if s.begins_with(item_un._dsl_str()):
+				if _str_region_starts_with(raw.value, si, ei, item_un._dsl_str()):
 					return DSLBool.new(true)
 			return DSLBool.new(false)
 		if not (u is DSLString):
 			# 非 str 前缀报 TypeError (CPython 同)
 			last_error = "TypeError: startswith first arg must be str or a tuple of str, not %s" % u._type_name()
 			return null
-		return DSLBool.new(s.begins_with(u._dsl_str()))
+		return DSLBool.new(_str_region_starts_with(raw.value, si, ei, u._dsl_str()))
 
 	func builtin_endswith(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 4:
+			last_error = "TypeError: endswith() takes at most 3 arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
 			last_error = "TypeError: endswith() takes at least one argument"
 			return null
 		var rng2 = _str_range(args, raw.value.length())
-		var s2 = raw.value.substr(rng2[0], maxi(0, int(rng2[1]) - int(rng2[0])))
+		if last_error != "":
+			return null
+		var si2: int = rng2[0]
+		var ei2: int = rng2[1]
 		var u2 = DSLObject._unwrap_dsl(args[1])
 		if u2 is DSLTuple:
 			for item in u2.items:
@@ -8884,15 +9010,18 @@ class DSLString extends DSLObject:
 				if not (item_un is DSLString):
 					last_error = "TypeError: endswith first arg must be str or a tuple of str, not %s" % item_un._type_name()
 					return null
-				if s2.ends_with(item_un._dsl_str()):
+				if _str_region_ends_with(raw.value, si2, ei2, item_un._dsl_str()):
 					return DSLBool.new(true)
 			return DSLBool.new(false)
 		if not (u2 is DSLString):
 			last_error = "TypeError: endswith first arg must be str or a tuple of str, not %s" % u2._type_name()
 			return null
-		return DSLBool.new(s2.ends_with(u2._dsl_str()))
+		return DSLBool.new(_str_region_ends_with(raw.value, si2, ei2, u2._dsl_str()))
 	
 	func builtin_lstrip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 2:
+			last_error = "TypeError: lstrip expected at most 1 argument, got %d" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var s = raw.value
@@ -8909,6 +9038,9 @@ class DSLString extends DSLObject:
 		return DSLString.cached(s.substr(start))
 	
 	func builtin_rstrip(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 2:
+			last_error = "TypeError: rstrip expected at most 1 argument, got %d" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var s = raw.value
@@ -8925,6 +9057,9 @@ class DSLString extends DSLObject:
 		return DSLString.cached(s.substr(0, end + 1))
 	
 	func builtin_capitalize(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.capitalize() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var s = DSLObject._unwrap_dsl(args[0]).value
 		if s.length() == 0:
 			return DSLString.cached("")
@@ -8937,6 +9072,9 @@ class DSLString extends DSLObject:
 	}
 
 	func builtin_casefold(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.casefold() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var out := ""
 		for i in range(raw.length()):
@@ -8948,6 +9086,9 @@ class DSLString extends DSLObject:
 		return DSLString.new(out)
 	
 	func builtin_title(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.title() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var r = ""
 		var iw = false
@@ -8966,6 +9107,9 @@ class DSLString extends DSLObject:
 		return DSLString.new(r)
 	
 	func builtin_swapcase(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.swapcase() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var r = ""
 		for i in range(raw.length()):
@@ -8979,6 +9123,9 @@ class DSLString extends DSLObject:
 		return DSLString.new(r)
 	
 	func builtin_count(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 4:
+			last_error = "TypeError: count() takes at most 3 arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
@@ -8987,6 +9134,8 @@ class DSLString extends DSLObject:
 		var sub = args[1]._dsl_str()
 		var sv = raw.value
 		var rng = _str_range(args, sv.length())
+		if last_error != "":
+			return null
 		var si: int = rng[0]
 		var ei: int = rng[1]
 		si = mini(si, sv.length())
@@ -9010,6 +9159,9 @@ class DSLString extends DSLObject:
 		return DSLInteger.pooled(cnt)
 	
 	func builtin_isdigit(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isdigit() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
@@ -9067,6 +9219,9 @@ class DSLString extends DSLObject:
 
 	
 	func builtin_isalpha(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isalpha() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
@@ -9076,6 +9231,9 @@ class DSLString extends DSLObject:
 		return DSLBool.new(true)
 	
 	func builtin_isalnum(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isalnum() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
@@ -9085,6 +9243,9 @@ class DSLString extends DSLObject:
 		return DSLBool.new(true)
 	
 	func builtin_isspace(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isspace() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		if raw.length() == 0:
 			return DSLBool.new(false)
@@ -9128,6 +9289,9 @@ class DSLString extends DSLObject:
 		return true
 	
 	func builtin_islower(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.islower() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var ha = false
 		for ch in raw:
@@ -9138,6 +9302,9 @@ class DSLString extends DSLObject:
 		return DSLBool.new(ha)
 	
 	func builtin_isupper(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.isupper() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var ha = false
 		for ch in raw:
@@ -9148,6 +9315,9 @@ class DSLString extends DSLObject:
 		return DSLBool.new(ha)
 	
 	func builtin_istitle(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 1:
+			last_error = "TypeError: str.istitle() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var raw = DSLObject._unwrap_dsl(args[0]).value
 		var ha = false
 		var iw = false
@@ -9206,6 +9376,9 @@ class DSLString extends DSLObject:
 		return DSLString.cached(r)
 	
 	func builtin_ljust(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 3:
+			last_error = "TypeError: ljust expected at most 2 arguments, got %d" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
@@ -9238,6 +9411,9 @@ class DSLString extends DSLObject:
 		return DSLString.cached(r)
 	
 	func builtin_rjust(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 3:
+			last_error = "TypeError: rjust expected at most 2 arguments, got %d" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
@@ -9336,6 +9512,9 @@ class DSLString extends DSLObject:
 		return DSLString.cached(out)
 
 	func builtin_zfill(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			last_error = "TypeError: str.zfill() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
@@ -9362,6 +9541,9 @@ class DSLString extends DSLObject:
 		return DSLString.cached(sign + body)
 	
 	func builtin_rsplit(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() > 3:
+			last_error = "TypeError: rsplit() takes at most 2 arguments (%d given)" % (args.size() - 1)
+			return null
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		var s = raw.value
@@ -9384,8 +9566,10 @@ class DSLString extends DSLObject:
 		else:
 			use_default = true
 		if maxsplit_arg != null:
-			# maxsplit 的 bool 按 int 参与
-			maxsplit = _bound_arg([maxsplit_arg], 0, -1)
+			# maxsplit 的 bool 按 int 参与, float/None 报 TypeError, 大数报 OverflowError
+			maxsplit = _count_int_arg([maxsplit_arg], 0, -1)
+			if last_error != "":
+				return null
 		if not use_default and sep == "":
 			# CPython: 空分隔符报 ValueError (split 同)
 			last_error = "ValueError: empty separator"
@@ -10220,7 +10404,8 @@ class DSLList extends DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() != 2:
-			last_error = "TypeError: append() takes exactly one argument"
+			# CPython 报 'list.append() takes exactly one argument (N given)' (类名前缀 + 计数)
+			last_error = "TypeError: list.append() takes exactly one argument (%d given)" % (args.size() - 1)
 			return null
 		raw.items.append(DSLObject._unwrap_dsl(args[1]))
 		return DSLNone.new()
@@ -10261,13 +10446,38 @@ class DSLList extends DSLObject:
 			if it.suspended:
 				break
 		return self_obj
+
+	## list *= n: 原地重复扩展 (CPython list.__imul__), n ≤ 0 清空, 返回自身保持别名
+	func magic_imul(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		var other = DSLObject._unwrap_dsl(args[1])
+		var reps_l = -1
+		if other is DSLInteger:
+			# 重复计数为索引位 (CPython Py_ssize_t 同构)
+			if (other as DSLInteger).is_big():
+				self_obj.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+				return null
+			reps_l = other.value
+		elif other is DSLBool:
+			reps_l = 1 if other.value else 0
+		if not (other is DSLInteger or other is DSLBool):
+			self_obj.last_error = "TypeError: can't multiply sequence by non-int of type '%s'" % other._type_name()
+			return null
+		if reps_l < 0:
+			reps_l = 0
+		# 原地扩展: 先取快照再逐份追加 (n=0/负数清空)
+		var snapshot: Array[DSLObject] = self_obj.items.duplicate()
+		self_obj.items.clear()
+		for _i in range(reps_l):
+			self_obj.items.append_array(snapshot)
+		return self_obj
 	
 	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
-		# 下标实参 bool 按 int, 大数报 OverflowError
+		# 下标实参 bool 按 int, 大数报 OverflowError, 非整数报 TypeError (先于空表检查)
 		var idx = _seq_index_arg(args, 1, raw.items.size() - 1)
-		if idx == -9223372036854775808:
+		if last_error != "":
 			return null
 		# 空列表无论是否显式下标一律报 "pop from empty list" (CPython 先查空再查越界)
 		if raw.items.is_empty():
@@ -10287,7 +10497,8 @@ class DSLList extends DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() != 2:
-			last_error = "TypeError: remove() takes exactly one argument"
+			# CPython 报 'list.remove() takes exactly one argument (N given)' (类名前缀 + 计数)
+			last_error = "TypeError: list.remove() takes exactly one argument (%d given)" % (args.size() - 1)
 			return null
 		var target = DSLObject._unwrap_dsl(args[1])
 		for i in range(raw.items.size()):
@@ -10303,9 +10514,9 @@ class DSLList extends DSLObject:
 		if args.size() != 3:
 			last_error = "TypeError: insert() takes exactly two arguments"
 			return null
-		# 下标实参 bool 按 int, 大数报 OverflowError
+		# 下标实参 bool 按 int, 大数报 OverflowError, 非整数报 TypeError
 		var idx = _seq_index_arg(args, 1, 0)
-		if idx == -9223372036854775808:
+		if last_error != "":
 			return null
 		var val = DSLObject._unwrap_dsl(args[2])
 		if idx < 0:
@@ -10318,13 +10529,18 @@ class DSLList extends DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
 		if args.size() < 2:
-			last_error = "TypeError: index() takes at least one argument"
+			# CPython 报 'index expected at least 1 argument, got N'
+			last_error = "TypeError: index expected at least 1 argument, got %d" % (args.size() - 1)
 			return null
 		var target = DSLObject._unwrap_dsl(args[1])
-		# start/end 实参限定检索区间 (负数从尾部计, 越界钳制; bool 按 int)
+		# start/end 实参限定检索区间 (负数从尾部计, 越界钳制, bool 按 int, 非 int 报 TypeError)
 		var n = raw.items.size()
 		var si = _bound_index_arg(args, 2, 0, n)
+		if last_error != "":
+			return null
 		var ei = _bound_index_arg(args, 3, n, n)
+		if last_error != "":
+			return null
 		for i in range(si, ei):
 			if raw.items[i]._dsl_eq(target):
 				return DSLInteger.pooled(i)
@@ -10334,6 +10550,10 @@ class DSLList extends DSLObject:
 	func builtin_count(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 'list.count() takes exactly one argument (N given)'
+		if args.size() != 2:
+			last_error = "TypeError: list.count() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		var target = DSLObject._unwrap_dsl(args[1])
 		var c = 0
 		for item in raw.items:
@@ -10759,6 +10979,10 @@ class DSLTuple extends DSLObject:
 	func builtin_count(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 'tuple.count() takes exactly one argument (N given)'
+		if args.size() != 2:
+			obj.last_error = "TypeError: tuple.count() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		var target = args[1]
 		if target._wrapped != null:
 			target = target._wrapped
@@ -10774,10 +10998,14 @@ class DSLTuple extends DSLObject:
 		var target = args[1]
 		if target._wrapped != null:
 			target = target._wrapped
-		# start/end 实参限定检索区间 (负数从尾部计, 越界钳制, bool 按 int)
+		# start/end 实参限定检索区间 (负数从尾部计, 越界钳制, bool 按 int, 非 int 报 TypeError)
 		var n = raw.items.size()
 		var si = _bound_index_arg(args, 2, 0, n)
+		if last_error != "":
+			return null
 		var ei = _bound_index_arg(args, 3, n, n)
+		if last_error != "":
+			return null
 		for i in range(si, ei):
 			if raw.items[i]._dsl_eq(target):
 				return DSLInteger.pooled(i)
@@ -11009,6 +11237,12 @@ class DSLDict extends DSLObject:
 	func builtin_items(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 'dict.<m>() takes no arguments (N given)'
+		if args.size() > 1:
+			obj.last_error = "TypeError: dict.items() takes no arguments (%d given)" % (args.size() - 1)
+			return null
+		# 活视图 (sys.modules) 先同步再读 backing store
+		raw._view_ensure()
 		var result: Array[DSLObject] = []
 		for key in raw.dict.keys():
 			result.append(DSLTuple.new([raw._original_key_obj(key), raw.dict[key]]))
@@ -11017,6 +11251,12 @@ class DSLDict extends DSLObject:
 	func builtin_keys(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 'dict.<m>() takes no arguments (N given)'
+		if args.size() > 1:
+			obj.last_error = "TypeError: dict.keys() takes no arguments (%d given)" % (args.size() - 1)
+			return null
+		# 活视图 (sys.modules) 先同步再读 backing store
+		raw._view_ensure()
 		var result: Array[DSLObject] = []
 		for key in raw.dict.keys():
 			result.append(raw._original_key_obj(key))
@@ -11025,6 +11265,12 @@ class DSLDict extends DSLObject:
 	func builtin_values(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 'dict.<m>() takes no arguments (N given)'
+		if args.size() > 1:
+			obj.last_error = "TypeError: dict.values() takes no arguments (%d given)" % (args.size() - 1)
+			return null
+		# 活视图 (sys.modules) 先同步再读 backing store
+		raw._view_ensure()
 		var result: Array[DSLObject] = []
 		for key in raw.dict.keys():
 			result.append(raw.dict[key])
@@ -11033,6 +11279,10 @@ class DSLDict extends DSLObject:
 	func builtin_get(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 '<m> expected at most 2 arguments, got N'
+		if args.size() > 3:
+			last_error = "TypeError: get expected at most 2 arguments, got %d" % (args.size() - 1)
+			return null
 		var key = args[1]
 		# 缺省值取 None 单例 (全新实例会让 get(x) is None 误判为 False)
 		var default = args[2] if args.size() >= 3 else _none_singleton()
@@ -11053,6 +11303,10 @@ class DSLDict extends DSLObject:
 	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 '<m> expected at most 2 arguments, got N'
+		if args.size() > 3:
+			last_error = "TypeError: pop expected at most 2 arguments, got %d" % (args.size() - 1)
+			return null
 		var key = args[1]
 		var vkey = raw._key_to_variant(key)
 		if vkey == null:
@@ -11070,6 +11324,10 @@ class DSLDict extends DSLObject:
 	func builtin_update(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 'update expected at most 1 argument, got N'
+		if args.size() > 2:
+			last_error = "TypeError: update expected at most 1 argument, got %d" % (args.size() - 1)
+			return null
 		var write_key = func(target: DSLDict, k: DSLObject, v: DSLObject) -> bool:
 			var vkey = target._key_to_variant(k, true)
 			if vkey == null:
@@ -11150,6 +11408,10 @@ class DSLDict extends DSLObject:
 	func builtin_copy(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 'dict.<m>() takes no arguments (N given)'
+		if args.size() > 1:
+			last_error = "TypeError: dict.copy() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		var new_dict = DSLDict.new()
 		for k in raw.dict.keys():
 			new_dict.dict[k] = raw.dict[k]
@@ -11160,6 +11422,10 @@ class DSLDict extends DSLObject:
 	func builtin_setdefault(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 报 '<m> expected at most 2 arguments, got N' (先于缺键检查)
+		if args.size() > 3:
+			raw.last_error = "TypeError: setdefault expected at most 2 arguments, got %d" % (args.size() - 1)
+			return null
 		if args.size() < 2:
 			raw.last_error = "TypeError: setdefault() takes at least 1 argument"
 			return null
@@ -11179,6 +11445,10 @@ class DSLDict extends DSLObject:
 	func builtin_popitem(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var obj = args[0]
 		var raw = DSLObject._unwrap_dsl(obj)
+		# 多余位置实参: CPython 的参数数检查先于空表 KeyError
+		if args.size() > 1:
+			raw.last_error = "TypeError: dict.popitem() takes no arguments (%d given)" % (args.size() - 1)
+			return null
 		if raw.dict.size() == 0:
 			raw.last_error = "KeyError: " + DSLObject._py_repr(DSLString.new("popitem(): dictionary is empty"))
 			raw.last_error_args = [DSLString.new("popitem(): dictionary is empty")] as Array[DSLObject]
@@ -11980,10 +12250,15 @@ class DSLBytes extends DSLObject:
 	func _dsl_bool() -> bool:
 		return data.size() > 0
 
-	## bytes.fromhex(s) - 十六进制串转 bytes (忽略 ASCII 空格)
+	## bytes.fromhex(s) - 十六进制串转 bytes (忽略 ASCII 空白)
 	func builtin_fromhex(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 1:
 			last_error = "TypeError: fromhex() takes at least 1 argument"
+			return null
+		# 多余位置实参: CPython 报 'bytes.fromhex() takes exactly one argument (N given)'
+		# (类方法形站点 args 无 self 前缀)
+		if args.size() > 1:
+			last_error = "TypeError: bytes.fromhex() takes exactly one argument (%d given)" % args.size()
 			return null
 		var hex = DSLObject._unwrap_dsl(args[0])._dsl_str()
 		# 跳过全部 ASCII 空白 (含 \t \n \v \f \r)
@@ -12306,19 +12581,23 @@ class DSLBytes extends DSLObject:
 			return ov
 		return _bytes_arg_to_data(obj, err_tmpl)
 
-	## bytes 检索边界取值: bool 按 int, 大数按 ±∞ 钳制, 缺省 fallback
+	## bytes 检索边界取值: bool 按 int, None 视同缺省, 大数按 ±∞ 钳制, [br]
+	## 其余类型 (float/str 等) 报 CPython 同文案 TypeError
 	func _bytes_bound_arg(args: Array[DSLObject], idx: int, fallback: int) -> int:
 		if idx >= args.size():
 			return fallback
 		var a = DSLObject._unwrap_dsl(args[idx])
 		if a is DSLBool:
 			return 1 if a.value else 0
+		if a is DSLNone:
+			return fallback
 		if a is DSLInteger:
 			var oi = a as DSLInteger
 			if oi.is_big():
 				return -9223372036854775808 if oi.big_neg else 9223372036854775807
 			return oi.value
-		return fallback
+		last_error = "TypeError: slice indices must be integers or None or have an __index__ method"
+		return -9223372036854775808
 
 	## 检索区间 [start, end) 归一: 负数从尾部计, 下界钳 0
 	func _bytes_range(args: Array[DSLObject], length: int) -> Array:
@@ -12534,6 +12813,10 @@ class DSLBytes extends DSLObject:
 
 	func builtin_split(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
+		# 多余位置实参: CPython 报 'split() takes at most 2 arguments (N given)'
+		if args.size() > 3:
+			last_error = "TypeError: split() takes at most 2 arguments (%d given)" % (args.size() - 1)
+			return null
 		var sep_data: Array[int] = []
 		var has_sep = false
 		if args.size() >= 2 and args[1] is DSLBytes:
@@ -12544,8 +12827,15 @@ class DSLBytes extends DSLObject:
 			last_error = "TypeError: a bytes-like object is required, not '%s'" % args[1]._type_name()
 			return null
 		var maxsplit = -1
-		if args.size() >= 3 and args[2] is DSLInteger:
-			maxsplit = args[2].value
+		if args.size() >= 3:
+			# maxsplit 的 bool 按 int 参与, float/None 报 TypeError, 大数报 OverflowError (先于空分隔符检查)
+			maxsplit = _count_int_arg(args, 2, -1)
+			if last_error != "":
+				return null
+		# 空分隔符前置报错, 消除空 needle 下的死循环挂死与两类静默错值 (对齐 str 侧)
+		if has_sep and sep_data.is_empty():
+			last_error = "ValueError: empty separator"
+			return null
 		var parts: Array[DSLObject] = []
 		var cur: Array[int] = []
 		var i = 0
@@ -12587,8 +12877,11 @@ class DSLBytes extends DSLObject:
 		if new_data == null:
 			return null
 		var count = -1
-		if args.size() >= 4 and args[3] is DSLInteger:
-			count = args[3].value
+		if args.size() >= 4:
+			# count 的 bool 按 int 参与, float/None 报 TypeError, 大数报 OverflowError
+			count = _count_int_arg(args, 3, -1)
+			if last_error != "":
+				return null
 		var done = 0
 		# 空 old: CPython 按逐位置插入展开 (b"abc".replace(b"", b"-") == b"-a-b-c-"),
 		# 主循环对空 old 不前进会挂死宿主进程, 此处前置快路径按展开语义构造
@@ -12627,6 +12920,8 @@ class DSLBytes extends DSLObject:
 			return null
 		# start/end 归一 (负数从尾部计, 大数按 ±∞), 空针与 str 侧同语义
 		var rng = _bytes_range(args, raw.data.size())
+		if last_error != "":
+			return null
 		var si: int = rng[0]
 		var ei: int = rng[1]
 		if sub.is_empty():
@@ -12644,6 +12939,8 @@ class DSLBytes extends DSLObject:
 		if sub == null:
 			return null
 		var rng = _bytes_range(args, raw.data.size())
+		if last_error != "":
+			return null
 		var si: int = rng[0]
 		var ei: int = rng[1]
 		if sub.is_empty():
@@ -12684,6 +12981,8 @@ class DSLBytes extends DSLObject:
 			return null
 		# start/end 归一; 空针 count = 区间长度 + 1
 		var rng = _bytes_range(args, raw.data.size())
+		if last_error != "":
+			return null
 		var si = mini(int(rng[0]), raw.data.size())
 		var ei = mini(int(rng[1]), raw.data.size())
 		if sub.is_empty():
@@ -12707,15 +13006,32 @@ class DSLBytes extends DSLObject:
 		var sub = _bytes_arg_to_data(args[1], "startswith first arg must be bytes or a tuple of bytes, not %s")
 		if sub == null:
 			return null
-		return DSLBool.new(raw.data.size() >= sub.size() and _bytes_find(raw.data, sub, 0, sub.size()) == 0)
+		# start/end 实参 (bool 按 int, None 视同缺省, 负数从尾部计, 大数按 ±∞ 钳制) 限定前缀区间
+		var rng = _bytes_range(args, raw.data.size())
+		if last_error != "":
+			return null
+		var si: int = rng[0]
+		var ei: int = rng[1]
+		if sub.is_empty():
+			return DSLBool.new(si <= ei and si <= raw.data.size())
+		return DSLBool.new(_bytes_find(raw.data, sub, si, ei) == si)
 
 	func builtin_endswith(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
 		var sub = _bytes_arg_to_data(args[1], "endswith first arg must be bytes or a tuple of bytes, not %s")
 		if sub == null:
 			return null
-		var off = raw.data.size() - sub.size()
-		return DSLBool.new(off >= 0 and _bytes_find(raw.data, sub, off, raw.data.size()) == off)
+		var rng = _bytes_range(args, raw.data.size())
+		if last_error != "":
+			return null
+		var si: int = rng[0]
+		var ei: int = mini(int(rng[1]), raw.data.size())
+		if sub.is_empty():
+			return DSLBool.new(si <= ei)
+		var p = ei - sub.size()
+		if p < si:
+			return DSLBool.new(false)
+		return DSLBool.new(_bytes_find(raw.data, sub, p, ei) == p)
 
 	func builtin_join(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = DSLObject._unwrap_dsl(args[0])
@@ -12903,16 +13219,29 @@ class DSLByteArray extends DSLBytes:
 	## bytearray.pop([i]) -> int
 	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLByteArray
+		# 下标实参校验先于空表检查 (CPython 同序): 非整数报 '<t>' object cannot be
+		# interpreted as an integer, 大数报 OverflowError, 文案与 list.pop 侧对齐
+		if args.size() >= 2:
+			var pi = DSLObject._unwrap_dsl(args[1])
+			if pi is DSLBool:
+				pass
+			elif pi is DSLInteger:
+				if (pi as DSLInteger).is_big():
+					last_error = "OverflowError: Python int too large to convert to C ssize_t"
+					return null
+			else:
+				last_error = "TypeError: '%s' object cannot be interpreted as an integer" % pi._type_name()
+				return null
 		if self_obj.data.is_empty():
 			last_error = "IndexError: pop from empty bytearray"
 			return null
 		var i = self_obj.data.size() - 1
 		if args.size() >= 2:
-			var pi = DSLObject._unwrap_dsl(args[1])
-			if not (pi is DSLInteger):
-				last_error = "TypeError: an integer is required"
-				return null
-			i = pi.value
+			var pi2 = args[1]
+			if pi2 is DSLBool:
+				i = 1 if (pi2 as DSLBool).value else 0
+			else:
+				i = (pi2 as DSLInteger).value
 			if i < 0:
 				i += self_obj.data.size()
 			if i < 0 or i >= self_obj.data.size():
@@ -13925,31 +14254,14 @@ class DSLDeque extends DSLObject:
 	func builtin_index_dq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLDeque
 		var target = DSLObject._unwrap_dsl(args[1])
-		var start = 0
-		var end = self_obj.items.size()
-		if args.size() >= 3:
-			var s_obj = DSLObject._unwrap_dsl(args[2])
-			if s_obj is DSLBool:
-				start = 1 if s_obj.value else 0
-			elif s_obj is DSLInteger:
-				start = s_obj.value
-			else:
-				last_error = "TypeError: an integer is required"
-				return null
-			if start < 0:
-				start += self_obj.items.size()
-			start = maxi(start, 0)
-		if args.size() >= 4:
-			var e_obj = DSLObject._unwrap_dsl(args[3])
-			if e_obj is DSLBool:
-				end = 1 if e_obj.value else 0
-			elif e_obj is DSLInteger:
-				end = e_obj.value
-			else:
-				last_error = "TypeError: an integer is required"
-				return null
-			if end < 0:
-				end += self_obj.items.size()
+		# start/end 经统一边界助手归一: bool 按 int, 负数从尾部计, 大数按 ±∞ 钳制, 非 int 报 TypeError
+		var n = self_obj.items.size()
+		var start = _bound_index_arg(args, 2, 0, n)
+		if last_error != "":
+			return null
+		var end = _bound_index_arg(args, 3, n, n)
+		if last_error != "":
+			return null
 		var idx = self_obj._deque_index(target, start, end)
 		if idx < 0:
 			last_error = "ValueError: %s is not in deque" % DSLObject._py_repr(target)
@@ -14820,11 +15132,16 @@ class DSLFile extends DSLObject:
 			return false
 		return true
 
-	## 惰性加载文本读缓冲 (只写模式不读, 避免对只写 FileAccess 发起读)
+	## 惰性加载文本读缓冲 (只写模式不读, 避免对只写 FileAccess 发起读) [br]
+	## 写后失效重载时须回到文件头全量重读
 	func _ensure_text_buf() -> void:
 		if not _text_buf_loaded:
 			if _is_readable():
+				_fa.seek(0)
 				_text_buf = _fa.get_as_text()
+				# 追加模式的宿主位置保持在文件尾 (后续写入仍追加)
+				if fmode.begins_with("a") and _fa.get_position() < _fa.get_length():
+					_fa.seek_end()
 			_text_buf_loaded = true
 
 	## 文本读: 读缓冲按游标取剩余/定长
@@ -14981,8 +15298,14 @@ class DSLFile extends DSLObject:
 		if not (val is DSLString):
 			self_obj._raise("TypeError: write() argument must be str, not %s" % val._type_name())
 			return null
+		# 写前把宿主位置对齐逻辑游标 (r+ 混合读写按游标落点), 追加模式保持尾随
+		if not self_obj.fmode.begins_with("a"):
+			self_obj._fa.seek(self_obj._text_pos)
 		self_obj._fa.store_string(val.value)
 		self_obj._fa.flush()
+		# 写后使文本读缓冲失效 (r+ 写后读即得新内容), 游标对齐宿主写入位置
+		self_obj._text_buf_loaded = false
+		self_obj._text_pos = self_obj._fa.get_position()
 		return DSLInteger.pooled(val.value.length())
 
 	## writelines(lines): 逐项写入任意可迭代, 返回 None
@@ -14999,6 +15322,9 @@ class DSLFile extends DSLObject:
 		if it == null:
 			self_obj._raise("TypeError: '%s' object is not iterable" % seq._type_name())
 			return null
+		# 写前把宿主位置对齐逻辑游标 (同 write), 追加模式保持尾随
+		if not self_obj.binary and not self_obj.fmode.begins_with("a"):
+			self_obj._fa.seek(self_obj._text_pos)
 		while it.has_next():
 			var v = DSLObject._unwrap_dsl(it.next())
 			if self_obj.binary:
@@ -15013,6 +15339,10 @@ class DSLFile extends DSLObject:
 					return null
 				self_obj._fa.store_string(v.value)
 		self_obj._fa.flush()
+		# 写后使文本读缓冲失效 (r+ 写后读即得新内容), 游标对齐宿主写入位置
+		if not self_obj.binary:
+			self_obj._text_buf_loaded = false
+			self_obj._text_pos = self_obj._fa.get_position()
 		return DSLNone.new()
 
 	## readable()/writable(): 已关闭文件 readable 报 ValueError, writable 返回 False
@@ -15069,6 +15399,9 @@ class DSLFile extends DSLObject:
 		var cur_len = self_obj._fa.get_length()
 		if size < cur_len:
 			self_obj._fa.resize(size)
+			# 截断后使文本读缓冲失效 (后续读按截短后的内容重载), 游标保持不变
+			if not self_obj.binary:
+				self_obj._text_buf_loaded = false
 		# CPython: truncate 返回新的文件大小
 		return DSLInteger.pooled(mini(size, cur_len) if size < cur_len else size)
 
@@ -15138,6 +15471,9 @@ class DSLFile extends DSLObject:
 		elif whence == 2:
 			pos = self_obj._text_buf.length() + off.value
 		self_obj._text_pos = clampi(pos, 0, self_obj._text_buf.length())
+		# 宿主位置与逻辑游标对齐 (后续写入按 seek 落点覆盖), 追加模式保持尾随
+		if not self_obj.fmode.begins_with("a"):
+			self_obj._fa.seek(self_obj._text_pos)
 		return DSLInteger.pooled(self_obj._text_pos)
 
 	## tell()
@@ -15568,12 +15904,22 @@ class DSLSet extends DSLObject:
 
 	## 方法回调 (args[0] = 实际实例)
 	func builtin_add(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		# 多余位置实参: CPython 报 'set.add() takes exactly one argument (N given)'
+		if args.size() != 2:
+			args[0].last_error = "TypeError: set.add() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		return args[0]._dsl_add(args[1])
 
 	func builtin_remove(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			args[0].last_error = "TypeError: set.remove() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		return args[0]._dsl_remove(args[1])
 
 	func builtin_discard(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			args[0].last_error = "TypeError: set.discard() takes exactly one argument (%d given)" % (args.size() - 1)
+			return null
 		return args[0]._dsl_discard(args[1])
 
 	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -15690,10 +16036,48 @@ class DSLSet extends DSLObject:
 				self_obj._dsl_add(other.items[k])
 		return DSLNone.new()
 
-	## set |= iterable: 原地 update (CPython set.__ior__), 返回自身保持别名语义
+	## set |= set 形操作数: 原地 update (CPython set.__ior__ 仅接受 set 形操作数, [br]
+	## 其余经反射回退按二元语义报错或由视图 __ror__ 接管), 返回自身保持别名语义
 	func magic_ior(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0]
+		var other = DSLObject._unwrap_dsl(args[1])
+		if not (other is DSLSet):
+			args[0]._arithmetic_type_error("|=", args[1])
+			return null
 		if self_obj.builtin_update(args, _kwargs) == null:
+			return null
+		return self_obj
+
+	## set -= iterable: 原地差集更新 (CPython set.__isub__ 仅接受 set 形操作数), 返回自身保持别名语义
+	func magic_isub(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		var other = DSLObject._unwrap_dsl(args[1])
+		if not (other is DSLSet):
+			args[0]._arithmetic_type_error("-=", args[1])
+			return null
+		if self_obj.builtin_difference_update(args, _kwargs) == null:
+			return null
+		return self_obj
+
+	## set &= iterable: 原地交集更新 (CPython set.__iand__ 接受可迭代, 不可迭代报运算符 TypeError), [br]
+	## 返回自身保持别名语义
+	func magic_iand(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		if _set_arg_to_set(args[1]) == null:
+			args[0]._arithmetic_type_error("&=", args[1])
+			return null
+		if self_obj.builtin_intersection_update(args, _kwargs) == null:
+			return null
+		return self_obj
+
+	## set ^= iterable: 原地对称差更新 (CPython set.__ixor__ 仅接受 set 形操作数), 返回自身保持别名语义
+	func magic_ixor(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0]
+		var other = DSLObject._unwrap_dsl(args[1])
+		if not (other is DSLSet):
+			args[0]._arithmetic_type_error("^=", args[1])
+			return null
+		if self_obj.builtin_symmetric_difference_update(args, _kwargs) == null:
 			return null
 		return self_obj
 
@@ -29471,6 +29855,9 @@ class Interpreter:
 	func _json_peek() -> String:
 		return _json_text[_json_pos] if _json_pos < _json_text.length() else ""
 
+	func _json_peek_at(pos: int) -> String:
+		return _json_text[pos] if pos < _json_text.length() else ""
+
 	func _json_skip_ws() -> void:
 		while _json_pos < _json_text.length():
 			var c = _json_text[_json_pos]
@@ -29552,28 +29939,33 @@ class Interpreter:
 		# 前导零 (如 01) 只解析 0, 剩余交给上层报 Extra data / 分隔符错 (CPython 同位置)
 		if _json_pos - int_start >= 2 and _json_text[int_start] == "0":
 			_json_pos = int_start + 1
-		# 小数部分
+		# 小数部分 (JSON 文法: '.' 后须有数字, 否则不消费, 剩余由上层报 Extra data)
 		if _json_peek() == ".":
-			_json_pos += 1
-			while _json_pos < _json_text.length():
-				var ch2 = _json_text[_json_pos]
-				if ch2 >= "0" and ch2 <= "9":
-					_json_pos += 1
-				else:
-					break
-		# 指数部分
+			var fc = _json_peek_at(_json_pos + 1)
+			if fc >= "0" and fc <= "9":
+				_json_pos += 1
+				while _json_pos < _json_text.length():
+					var ch2 = _json_text[_json_pos]
+					if ch2 >= "0" and ch2 <= "9":
+						_json_pos += 1
+					else:
+						break
+		# 指数部分 (JSON 文法: e 后符号可选、数字必带, 否则不消费)
 		var ec = _json_peek()
 		if ec == "e" or ec == "E":
-			_json_pos += 1
-			var sc = _json_peek()
+			var exp_pos = _json_pos + 1
+			var sc = _json_peek_at(exp_pos)
 			if sc == "+" or sc == "-":
-				_json_pos += 1
-			while _json_pos < _json_text.length():
-				var ch3 = _json_text[_json_pos]
-				if ch3 >= "0" and ch3 <= "9":
-					_json_pos += 1
-				else:
-					break
+				exp_pos += 1
+			var dc = _json_peek_at(exp_pos)
+			if dc >= "0" and dc <= "9":
+				_json_pos = exp_pos
+				while _json_pos < _json_text.length():
+					var ch3 = _json_text[_json_pos]
+					if ch3 >= "0" and ch3 <= "9":
+						_json_pos += 1
+					else:
+						break
 		var token = _json_text.substr(start, _json_pos - start)
 		# 裸负号/空 token 非合法数字 (CPython 报 Expecting value)
 		if token == "" or token == "-":
@@ -29851,7 +30243,12 @@ class Interpreter:
 		var v = args[0]
 		var secs = 0.0
 		if v is DSLInteger:
-			secs = float(v.value)
+			var iv = v as DSLInteger
+			# 大数实参 (含负大数): CPython 报 _PyTime_t 溢出 (区别于浮点的 platform time_t 文案)
+			if iv.is_big():
+				raise_exception("OverflowError", "timestamp too large to convert to C _PyTime_t")
+				return null
+			secs = float(iv.value)
 		elif v is DSLFloat:
 			secs = v.value
 		elif v is DSLBool:
@@ -30551,7 +30948,7 @@ class Interpreter:
 		return null
 
 	## 整数实参归一: bool 按 int, DSLInteger (含大数) 原样保留,
-	## 浮点按 CPython 报 TypeError, 其余按各函数文案报 TypeError
+	## 其余类型按 CPython 报 '<t>' object cannot be interpreted as an integer
 	func _math_int_arg(arg: DSLObject, fn_name: String) -> DSLInteger:
 		var a = DSLObject._unwrap_dsl(arg)
 		if a is DSLBool:
@@ -30561,7 +30958,7 @@ class Interpreter:
 		if a is DSLFloat:
 			raise_exception("TypeError", "'float' object cannot be interpreted as an integer")
 			return null
-		raise_exception("TypeError", "%s() argument must be an integer" % fn_name)
+		raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % a._type_name())
 		return null
 
 	## floor/ceil/trunc 的实数实参归一: bool 按 int, DSLInteger (含大数)/DSLFloat 保型
@@ -30575,6 +30972,30 @@ class Interpreter:
 			return a
 		raise_exception("TypeError", "%s() argument must be a number" % fn_name)
 		return null
+
+	## 浮点函数实参取值: bool 按 int, float 原样, 大数整数经 mag_to_float 精确转 double [br]
+	## (越界报 OverflowError: int too large to convert to float), 其余类型报 CPython 同文案 [br]
+	## TypeError: must be real number, not '<t>'
+	func _math_float_arg(arg: DSLObject) -> float:
+		var a = DSLObject._unwrap_dsl(arg)
+		if a is DSLBool:
+			return 1.0 if a.value else 0.0
+		if a is DSLFloat:
+			return (a as DSLFloat).value
+		if a is DSLInteger:
+			var oi = a as DSLInteger
+			if oi.is_big():
+				var conv: Array = DSLBigInt.mag_to_float(oi.big_neg, oi.big_limbs)
+				if not conv[0]:
+					raise_exception("OverflowError", "int too large to convert to float")
+					return 0.0
+				return conv[1]
+			return float(oi.value)
+		var v = _num_val(arg)
+		if v == null:
+			raise_exception("TypeError", "must be real number, not %s" % a._type_name())
+			return 0.0
+		return float(v)
 
 	## 整数绝对值 (大数经取负, 零/正原样)
 	func _math_abs_int(a: DSLInteger) -> DSLInteger:
@@ -30634,15 +31055,14 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "sqrt() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "sqrt() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
 		# 域错误: CPython 对负数报 ValueError (宿主 sqrt 给出 nan)
 		if x < 0:
 			raise_exception("ValueError", "math domain error")
 			return null
-		return DSLFloat.new(sqrt(float(x)))
+		return DSLFloat.new(sqrt(x))
 
 	## math.isqrt(x)
 	func _math_isqrt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -30749,204 +31169,203 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "fabs() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "fabs() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(abs(float(x)))
+		return DSLFloat.new(abs(x))
 
 	## math.fmod(a, b)
 	func _math_fmod(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 2:
 			raise_exception("TypeError", "fmod() takes exactly two arguments")
 			return null
-		var a = _num_val(args[0])
-		var b = _num_val(args[1])
-		if a == null or b == null:
-			raise_exception("TypeError", "fmod() arguments must be numbers")
+		var a = _math_float_arg(args[0])
+		if report.has_error:
+			return null
+		var b = _math_float_arg(args[1])
+		if report.has_error:
 			return null
 		# 除数为 0: CPython 按 C fmod 的域错误报 ValueError (宿主 fmod 会给出 nan)
-		if float(b) == 0.0:
+		if b == 0.0:
 			raise_exception("ValueError", "math domain error")
 			return null
-		return DSLFloat.new(fmod(float(a), float(b)))
+		return DSLFloat.new(fmod(a, b))
 
 	## math.pow(a, b)
 	func _math_pow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 2:
 			raise_exception("TypeError", "pow() takes exactly two arguments")
 			return null
-		var a = _num_val(args[0])
-		var b = _num_val(args[1])
-		if a == null or b == null:
-			raise_exception("TypeError", "pow() arguments must be numbers")
+		var a = _math_float_arg(args[0])
+		if report.has_error:
+			return null
+		var b = _math_float_arg(args[1])
+		if report.has_error:
 			return null
 		# 域错误 (负底数非整值指数 / 0 的负次幂): CPython 报 ValueError (宿主 pow 会给出 nan/inf)
-		var af = float(a)
-		var bf = float(b)
-		if (af < 0.0 and bf != floor(bf)) or (af == 0.0 and bf < 0.0):
+		if (a < 0.0 and b != floor(b)) or (a == 0.0 and b < 0.0):
 			raise_exception("ValueError", "math domain error")
 			return null
-		return DSLFloat.new(pow(af, bf))
+		return DSLFloat.new(pow(a, b))
 
 	## math.exp(x)
 	func _math_exp(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "exp() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "exp() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(exp(float(x)))
+		var fx = exp(x)
+		# 结果上溢: CPython 报 OverflowError: math range error (宿主 exp 给出 inf)
+		if is_inf(fx):
+			raise_exception("OverflowError", "math range error")
+			return null
+		return DSLFloat.new(fx)
 
 	## math.log(x[, base])
 	func _math_log(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 1 or args.size() > 2:
 			raise_exception("TypeError", "log() takes one or two arguments")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "log() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
 		if x <= 0:
 			raise_exception("ValueError", "math domain error")
 			return null
 		if args.size() == 2:
-			var base = _num_val(args[1])
-			if base == null:
-				raise_exception("TypeError", "log() base must be a number")
+			var base = _math_float_arg(args[1])
+			if report.has_error:
 				return null
-			var bf = float(base)
 			# base 0 -> 域错误, base 1 -> 除零
-			if bf == 0.0:
+			if base == 0.0:
 				raise_exception("ValueError", "math domain error")
 				return null
-			if bf == 1.0:
+			if base == 1.0:
 				raise_exception("ZeroDivisionError", "float division by zero")
 				return null
-			return DSLFloat.new(log(float(x)) / log(bf))
-		return DSLFloat.new(log(float(x)))
+			return DSLFloat.new(log(x) / log(base))
+		return DSLFloat.new(log(x))
 
 	## math.log2(x)
 	func _math_log2(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "log2() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "log2() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(log(float(x)) / log(2.0))
+		if x <= 0:
+			raise_exception("ValueError", "math domain error")
+			return null
+		return DSLFloat.new(log(x) / log(2.0))
 
 	## math.log10(x)
 	func _math_log10(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "log10() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "log10() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(log(float(x)) / log(10.0))
+		if x <= 0:
+			raise_exception("ValueError", "math domain error")
+			return null
+		return DSLFloat.new(log(x) / log(10.0))
 
 	## math.sin(x)
 	func _math_sin(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "sin() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "sin() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(sin(float(x)))
+		return DSLFloat.new(sin(x))
 
 	## math.cos(x)
 	func _math_cos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "cos() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "cos() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(cos(float(x)))
+		return DSLFloat.new(cos(x))
 
 	## math.tan(x)
 	func _math_tan(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "tan() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "tan() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(tan(float(x)))
+		return DSLFloat.new(tan(x))
 
 	## math.asin(x)
 	func _math_asin(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "asin() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "asin() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(asin(float(x)))
+		# 域错误: CPython 对 |x| > 1 报 ValueError (宿主 asin 给出 nan)
+		if x > 1.0 or x < -1.0:
+			raise_exception("ValueError", "math domain error")
+			return null
+		return DSLFloat.new(asin(x))
 
 	## math.acos(x)
 	func _math_acos(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "acos() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "acos() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(acos(float(x)))
+		# 域错误: CPython 对 |x| > 1 报 ValueError (宿主 acos 给出 nan)
+		if x > 1.0 or x < -1.0:
+			raise_exception("ValueError", "math domain error")
+			return null
+		return DSLFloat.new(acos(x))
 
 	## math.atan(x)
 	func _math_atan(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "atan() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "atan() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(atan(float(x)))
+		return DSLFloat.new(atan(x))
 
 	## math.atan2(y, x)
 	func _math_atan2(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 2:
 			raise_exception("TypeError", "atan2() takes exactly two arguments")
 			return null
-		var y = _num_val(args[0])
-		var x = _num_val(args[1])
-		if y == null or x == null:
-			raise_exception("TypeError", "atan2() arguments must be numbers")
+		var y = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(atan2(float(y), float(x)))
+		var x = _math_float_arg(args[1])
+		if report.has_error:
+			return null
+		return DSLFloat.new(atan2(y, x))
 
 	## math.hypot(a, b)
 	func _math_hypot(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() == 0:
 			raise_exception("TypeError", "hypot expected at least 1 argument, got 0")
 			return null
-		if args.size() == 1:
-			# CPython: 单参 hypot(x) 返回 abs(x)
-			var x1 = _num_val(args[0])
-			if x1 == null:
-				raise_exception("TypeError", "hypot() arguments must be numbers")
-				return null
-			return DSLFloat.new(absf(float(x1)))
 		var total = 0.0
 		for a in args:
-			var v = _num_val(a)
-			if v == null:
-				raise_exception("TypeError", "hypot() arguments must be numbers")
+			var v = _math_float_arg(a)
+			if report.has_error:
 				return null
-			total += float(v) * float(v)
+			total += v * v
 		return DSLFloat.new(sqrt(total))
 
 	## math.degrees(x)
@@ -30954,22 +31373,20 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "degrees() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "degrees() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(rad_to_deg(float(x)))
+		return DSLFloat.new(rad_to_deg(x))
 
 	## math.radians(x)
 	func _math_radians(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "radians() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "radians() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLFloat.new(deg_to_rad(float(x)))
+		return DSLFloat.new(deg_to_rad(x))
 
 	## math.factorial(n)
 	func _math_factorial(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -30981,6 +31398,10 @@ class Interpreter:
 			return null
 		if (not n.is_big() and n.value < 0) or (n.is_big() and n.big_neg):
 			raise_exception("ValueError", "factorial() not defined for negative values")
+			return null
+		# 上限检查: n 超 2^31-1 (含大数) 报 CPython 同文案 OverflowError
+		if n.is_big() or n.value > 2147483647:
+			raise_exception("OverflowError", "factorial() argument should not exceed 2147483647")
 			return null
 		# 输入经整数实参归一 (小整数快路径); 结果以大数乘法累积 (factorial(21) 起超 int64)
 		var iv = n.value
@@ -31029,8 +31450,8 @@ class Interpreter:
 		if kgtnmk != null and (kgtnmk as DSLBool).value:
 			kk = nmk
 		if kk.is_big():
-			# k 超 int64: n ≥ k 时结果巨大 (CPython 亦会计算); 测试不覆盖超界, 此处按大数循环
-			raise_exception("OverflowError", "k too large")
+			# k 超 int64: n ≥ k 时结果巨大 (CPython 同样拒算), 报 CPython 同文案上限错误
+			raise_exception("OverflowError", "min(n - k, k) must not exceed 9223372036854775807")
 			return null
 		var result: DSLObject = DSLInteger.pooled(1)
 		for i in range(1, kk.value + 1):
@@ -31062,17 +31483,32 @@ class Interpreter:
 		var kgt = k.magic_gt([k, n] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if kgt != null and (kgt as DSLBool).value:
 			return DSLInteger.pooled(0)
-		var nv = n.value
+		# k 上限: CPython 的 k 须落在 ssize_t 内 (n 可为大数, k 大数报 OverflowError)
+		if k.is_big():
+			raise_exception("OverflowError", "k must not exceed 9223372036854775807")
+			return null
+		# 因子循环 (n-k+1 .. n): n 可为大数, 因子经大数算术 (k 小于 int64)
 		var kv = k.value
+		var start = n.magic_sub([n, k] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		var result: DSLObject = DSLInteger.pooled(1)
-		for i in range(nv - kv + 1, nv + 1):
-			result = result.magic_mul([result, DSLInteger.pooled(i)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		for j in range(kv):
+			var factor = start.magic_add([start, DSLInteger.pooled(j + 1)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if factor == null:
+				return null
+			result = result.magic_mul([result, factor] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if result == null:
+				return null
 		return result
 
 	## math.prod(iterable, start=1) - 连乘
 	func _math_prod(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 1:
 			raise_exception("TypeError", "prod() takes at least one argument")
+			return null
+		# 多余位置实参: CPython 报 'prod() takes exactly 1 positional argument (N given)'
+		# (start 仅支持关键字形态, 第二个位置实参即报错; args 无 self 前缀)
+		if args.size() > 1:
+			raise_exception("TypeError", "prod() takes exactly 1 positional argument (%d given)" % args.size())
 			return null
 		var start: DSLObject = DSLInteger.pooled(1)
 		if args.size() >= 2:
@@ -31131,15 +31567,15 @@ class Interpreter:
 		if args.size() != 2:
 			raise_exception("TypeError", "copysign() takes exactly two arguments")
 			return null
-		var x = _num_val(args[0])
-		var y = _num_val(args[1])
-		if x == null or y == null:
-			raise_exception("TypeError", "copysign() arguments must be numbers")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		var r = abs(float(x))
+		var y = _math_float_arg(args[1])
+		if report.has_error:
+			return null
+		var r = abs(x)
 		# 符号位语义 (CPython copysign): 负零也带负号, 判定须经倒数 (y < 0 对 -0.0 失效)
-		var yf := float(y)
-		if yf < 0 or (yf == 0 and 1.0 / yf < 0):
+		if y < 0 or (y == 0 and 1.0 / y < 0):
 			r = -r
 		return DSLFloat.new(r)
 
@@ -31148,33 +31584,30 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "isnan() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "isnan() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLBool.new(is_nan(float(x)))
+		return DSLBool.new(is_nan(x))
 
 	## math.isinf(x)
 	func _math_isinf(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "isinf() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "isinf() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLBool.new(is_inf(float(x)))
+		return DSLBool.new(is_inf(x))
 
 	## math.isfinite(x)
 	func _math_isfinite(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
 			raise_exception("TypeError", "isfinite() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "isfinite() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		return DSLBool.new(is_finite(float(x)))
+		return DSLBool.new(is_finite(x))
 
 	## math.remainder(x, y) [br]
 	## IEEE 754 余数: x - n*y, 其中 n 为 x/y 四舍五入到最近偶数, 除数为零或 x 为无穷时抛 ValueError
@@ -31182,13 +31615,14 @@ class Interpreter:
 		if args.size() != 2:
 			raise_exception("TypeError", "remainder() takes exactly two arguments")
 			return null
-		var x = _num_val(args[0])
-		var y = _num_val(args[1])
-		if x == null or y == null:
-			raise_exception("TypeError", "remainder() arguments must be numbers")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		var fx = float(x)
-		var fy = float(y)
+		var y = _math_float_arg(args[1])
+		if report.has_error:
+			return null
+		var fx = x
+		var fy = y
 		if fy == 0.0 or is_inf(fx):
 			raise_exception("ValueError", "math domain error")
 			return null
@@ -31196,14 +31630,19 @@ class Interpreter:
 			return DSLFloat.new(NAN)
 		if is_inf(fy):
 			return DSLFloat.new(fx)
-		var q = fx / fy
-		var n = floor(q)
-		var diff = q - n
-		if diff > 0.5:
-			n += 1.0
-		elif diff == 0.5 and fmod(n, 2.0) != 0.0:
-			n += 1.0
-		var r = fx - n * fy
+		# IEEE 754 余数: 以 fmod 求精确截断余数后向最近偶数调整,
+		# 朴素 (x/y 取整再回乘) 在大值量级丢尾数 (如 remainder(1e30, 7))
+		var r = fmod(fx, fy)
+		if r != 0.0:
+			var half = absf(fy) * 0.5
+			var ar = absf(r)
+			if ar > half:
+				r -= sign(r) * sign(fy) * fy
+			elif ar == half:
+				# 恰为半量子: 商 n = (x-r)/y 向偶数取整, n 为奇数时调整
+				var n = (fx - r) / fy
+				if fmod(n, 2.0) != 0.0:
+					r -= sign(r) * sign(fy) * fy
 		# 余数为零时保留被除数的符号 (与 IEEE 754 / CPython 一致)
 		if r == 0.0:
 			var x_is_negative = fx < 0.0 or (fx == 0.0 and (1.0 / fx) < 0.0)
@@ -31215,14 +31654,16 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "cbrt() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "cbrt() argument must be a number")
+		var fx = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		var fx = float(x)
 		if fx == 0.0 or is_nan(fx) or is_inf(fx):
 			return DSLFloat.new(fx)
 		var r = pow(abs(fx), 1.0 / 3.0)
+		# 牛顿迭代精化 (宿主 pow(x, 1/3) 有 libm 噪声): r ← (2r + x/r²) / 3
+		if is_finite(r) and r != 0.0:
+			r = (2.0 * r + absf(fx) / (r * r)) / 3.0
+			r = (2.0 * r + absf(fx) / (r * r)) / 3.0
 		return DSLFloat.new(-r if fx < 0.0 else r)
 
 	## math.log1p(x) - log(1+x), 供 x 接近 0 时高精度 (级数展开避免 log(1+x) 精度损失)
@@ -31230,11 +31671,10 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "log1p() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "log1p() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		var fx = float(x)
+		var fx = x
 		if fx < -1.0:
 			raise_exception("ValueError", "math domain error")
 			return null
@@ -31268,11 +31708,10 @@ class Interpreter:
 		if args.size() != 1:
 			raise_exception("TypeError", "expm1() takes exactly one argument")
 			return null
-		var x = _num_val(args[0])
-		if x == null:
-			raise_exception("TypeError", "expm1() argument must be a number")
+		var x = _math_float_arg(args[0])
+		if report.has_error:
 			return null
-		var fx = float(x)
+		var fx = x
 		if is_nan(fx):
 			return DSLFloat.new(fx)
 		if is_inf(fx):
@@ -31290,7 +31729,12 @@ class Interpreter:
 			for i in range(items.size() - 1, -1, -1):
 				sum += items[i]
 			return DSLFloat.new(sum)
-		return DSLFloat.new(exp(fx) - 1.0)
+		var fr = exp(fx) - 1.0
+		# 结果上溢: CPython 报 OverflowError: math range error (宿主 exp 给出 inf)
+		if is_inf(fr):
+			raise_exception("OverflowError", "math range error")
+			return null
+		return DSLFloat.new(fr)
 
 	## math.dist(p, q) - 两点欧氏距离 (任意可迭代坐标序列)
 	func _math_dist(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -31320,12 +31764,13 @@ class Interpreter:
 			return null
 		var total = 0.0
 		for i in range(pa.size()):
-			var pv = _num_val(pa[i])
-			var qv = _num_val(qa[i])
-			if pv == null or qv == null:
-				raise_exception("TypeError", "both points must be the same type")
+			var pv = _math_float_arg(pa[i])
+			if report.has_error:
 				return null
-			var d = float(pv) - float(qv)
+			var qv = _math_float_arg(qa[i])
+			if report.has_error:
+				return null
+			var d = pv - qv
 			total += d * d
 		return DSLFloat.new(sqrt(total))
 
@@ -32091,8 +32536,13 @@ class Interpreter:
 		if args.size() < 3 or not (args[0] is DSLRandomInstance):
 			return null
 		var inst = args[0] as DSLRandomInstance
-		var a = int(_num_val(args[1]))
-		var b = int(_num_val(args[2]))
+		# 实参经严格整数归一 (float/str/None 报 TypeError, 大数越界报 OverflowError, 与模块级一致)
+		var a = _rng_index_int_arg(args[1])
+		if report.has_error:
+			return null
+		var b = _rng_index_int_arg(args[2])
+		if report.has_error:
+			return null
 		# randint 委托 randrange(a, b+1) 的报错形态 (回显 start 与 stop-1)
 		if a > b:
 			raise_exception("ValueError", "empty range in randrange(%d, %d)" % [a, b + 1])
@@ -32103,9 +32553,12 @@ class Interpreter:
 		if args.size() < 2 or not (args[0] is DSLRandomInstance):
 			return null
 		var inst = args[0] as DSLRandomInstance
+		# 实参经严格整数归一 (float/str/None 报 TypeError, 大数越界报 OverflowError, 与模块级一致)
 		var ints: Array[int] = []
 		for i in range(1, args.size()):
-			ints.append(int(_num_val(args[i])))
+			ints.append(_rng_index_int_arg(args[i]))
+			if report.has_error:
+				return null
 		var start = 0
 		var stop = 0
 		var step = 1
@@ -40183,6 +40636,8 @@ class Interpreter:
 		if obj is DSLString:
 			return DSLInteger.pooled(obj.value.length())
 		if obj is DSLDict:
+			# 活视图 (sys.modules) 的 len 须经 _view_ensure 同步, 否则读到空 backing store
+			obj._view_ensure()
 			return DSLInteger.pooled(obj.dict.size())
 		if obj is DSLDefaultDict:
 			return DSLInteger.pooled(obj.inner.dict.size())
@@ -40270,6 +40725,11 @@ class Interpreter:
 		
 	## print(*args, sep, end) - 输出到控制台
 	func builtin_print(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLNone:
+		# 未知关键字实参先报 (CPython 解析期优先于 sep/end 取值校验)
+		for k in kwargs:
+			if k != "sep" and k != "end" and k != "file" and k != "flush":
+				raise_exception("TypeError", "'%s' is an invalid keyword argument for print()" % k)
+				return null
 		var sep = " "
 		var end = "\n"
 		if kwargs.has("sep"):
@@ -40290,7 +40750,17 @@ class Interpreter:
 			else:
 				raise_exception("TypeError", "end must be None or a string, not %s" % end_obj._type_name())
 				return null
-		
+		# file=: 非 None 时写入目标文件对象 (DSLFile), 不可写沿用其权限校验
+		# 非 file 类型按 CPython 报 '<t>' object has no attribute 'write'
+		var file_target: DSLFile = null
+		if kwargs.has("file"):
+			var fobj = kwargs["file"]
+			if fobj is DSLFile:
+				file_target = fobj
+			elif not (fobj is DSLNone):
+				raise_exception("AttributeError", "'%s' object has no attribute 'write'" % fobj._type_name())
+				return null
+
 		var s = ""
 		for i in range(args.size()):
 			if i > 0:
@@ -40301,6 +40771,11 @@ class Interpreter:
 				return null
 			s += str_result.value if str_result is DSLString else args[i]._dsl_str()
 		s += end
+		if file_target != null:
+			file_target.builtin_fwrite([file_target, DSLString.new(s)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if report.has_error:
+				return null
+			return DSLNone.new()
 		report.print_msg(s)
 		return DSLNone.new()
 	
@@ -40658,7 +41133,8 @@ class Interpreter:
 	## abs(x) - 返回绝对值
 	func builtin_abs(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() != 1:
-			raise_exception("TypeError", "abs() takes 1 argument")
+			# CPython 报 'abs() takes exactly one argument (N given)' (文案含计数)
+			raise_exception("TypeError", "abs() takes exactly one argument (%d given)" % args.size())
 			return null
 		var obj = args[0]
 		if obj.klass != null:
@@ -41105,6 +41581,10 @@ class Interpreter:
 		if args.size() < 1:
 			raise_exception("TypeError", "sum() takes at least 1 argument")
 			return null
+		# 多余位置实参: CPython 报 'sum() takes at most 2 arguments (N given)'
+		if args.size() > 2:
+			raise_exception("TypeError", "sum() takes at most 2 arguments (%d given)" % args.size())
+			return null
 		var start = DSLInteger.pooled(0)
 		if args.size() >= 2:
 			start = args[1]
@@ -41212,6 +41692,10 @@ class Interpreter:
 	func builtin_pow(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 2:
 			raise_exception("TypeError", "pow() takes at least 2 arguments")
+			return null
+		# 多余位置实参: CPython 报 'pow() takes at most 3 arguments (N given)'
+		if args.size() > 3:
+			raise_exception("TypeError", "pow() takes at most 3 arguments (%d given)" % args.size())
 			return null
 		var base = args[0]
 		var exp_ = args[1]
@@ -41330,6 +41814,10 @@ class Interpreter:
 	func builtin_sorted(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLList:
 		if args.size() < 1:
 			raise_exception("TypeError", "sorted() takes at least 1 argument")
+			return null
+		# 多余位置实参: CPython 报 'sorted expected 1 argument, got N'
+		if args.size() > 1:
+			raise_exception("TypeError", "sorted expected 1 argument, got %d" % args.size())
 			return null
 		for kw in _kwargs.keys():
 			if kw != "key" and kw != "reverse":

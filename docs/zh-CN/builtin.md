@@ -116,17 +116,22 @@ dict(x=10, y=20)         # {"x": 10, "y": 20}
 
 ## 内置函数
 
-### `print(*args, sep=" ", end="\n")`
+### `print(*args, sep=" ", end="\n", file=None, flush=False)`
 
-对应 Python `print()`，将参数输出到控制台
+对应 Python `print()`，将参数输出到控制台；`file=` 传入文件对象时改写该文件（文本写，接受 `open()` 返回的文件对象），`flush=` 接受但无操作（当前输出不缓冲）
 
 - `sep`：对象之间的分隔符，默认为空格 `" "`
 - `end`：输出末尾的结束符，默认为换行 `"\n"`
+- `file`：输出目标，默认 `None` 写控制台；传入文件对象时逐次 `write`（等价 CPython 语义）
+- `flush`：是否强制刷新，接受 `True` / `False`（当前实现写后即刷新，无额外操作）
 
 ```python
 print("Hello", "World")              # Hello World
 print("Hello", "World", sep=", ")    # Hello, World
 print("Hello", end="!")              # Hello!
+f = open("out.txt", "w")
+print("to file", file=f)             # 写入 out.txt (含换行)
+f.close()
 ```
 
 ### `len(obj)`

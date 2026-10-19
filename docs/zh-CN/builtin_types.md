@@ -587,19 +587,22 @@ Python 对应签名在括号内给出，用于对照行为是否一致
 "hello".find("l", 0, 2)   # -1 (end 界定)
 ```
 
-#### `str.startswith(prefix) -> bool`
+#### `str.startswith(prefix, start=0, end=...) -> bool`
 
 ```python
-# Python: str.startswith(prefix)
+# Python: str.startswith(prefix, start=0, end=...)
 "hello".startswith("he")  # True
 "hello".startswith("xx")  # False
+"hello".startswith("ell", 1)   # True (从 start 起判定)
+"hello".startswith("he", 1)    # False
 ```
 
-#### `str.endswith(suffix) -> bool`
+#### `str.endswith(suffix, start=0, end=...) -> bool`
 
 ```python
-# Python: str.endswith(suffix)
+# Python: str.endswith(suffix, start=0, end=...)
 "hello".endswith("lo")    # True
+"hello".endswith("ell", 0, 4)   # True (区间 [start, end) 内判定)
 ```
 
 #### `str.lstrip(chars=None) -> str`
@@ -1010,10 +1013,14 @@ b'hello'.find(b'll')                # 2
 b'hello'.count(b'l')                # 2
 ```
 
-#### `bytes.startswith(prefix)` / `bytes.endswith(suffix) -> bool`
+#### `bytes.startswith(prefix, start=0, end=...)` / `bytes.endswith(suffix, start=0, end=...) -> bool`
+
+区间限定判定（负数从尾部计，越界钳制），`bytearray` 同
 
 ```python
 b'abc'.startswith(b'ab')            # True
+b'abc'.startswith(b'b', 1)          # True (从 start 起判定)
+b'abc'.endswith(b'c', 0, -1)        # False (区间 [start, end) 内判定)
 ```
 
 #### `bytes.join(iterable) -> bytes`

@@ -143,3 +143,46 @@ _show_exc("pop_empty0", lambda: [].pop(0))
 _show_exc("pop_empty5", lambda: [].pop(5))
 _show_exc("pop_oor", lambda: [1, 2].pop(5))
 _show_exc("pop_oor_neg", lambda: [1, 2].pop(-3))
+
+# pop/insert 下标实参校验: 非整数报 TypeError (先于空表检查), 大数报 OverflowError
+def _arg_exc(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__, str(e))
+
+
+_arg_exc("pop_str", lambda: [1, 2].pop("x"))
+_arg_exc("pop_float", lambda: [1, 2].pop(1.5))
+_arg_exc("pop_none", lambda: [1, 2].pop(None))
+_arg_exc("pop_empty_str", lambda: [].pop("x"))
+_arg_exc("pop_empty_float", lambda: [].pop(1.5))
+_arg_exc("pop_big", lambda: [1, 2].pop(10**100))
+_arg_exc("pop_neg2e63", lambda: [1, 2].pop(-2**63))
+_arg_exc("insert_float", lambda: [1, 2].insert(1.5, 9))
+_arg_exc("insert_str", lambda: [1, 2].insert("x", 9))
+_arg_exc("insert_none", lambda: [1, 2].insert(None, 9))
+_arg_exc("insert_big", lambda: [1, 2].insert(10**100, 9))
+x98 = [1, 2]
+try:
+    x98.insert(-10**100, 9)
+except OverflowError as e:
+    print("OE:", str(e))
+print(x98)
+
+# list.index start/end 实参: float/str/None 报 slice indices TypeError, 大数按 ±∞ 钳制
+_arg_exc("li_float", lambda: [1, 2, 3].index(3, 1.5))
+_arg_exc("li_str", lambda: [1, 2, 3].index(3, "x"))
+_arg_exc("li_none", lambda: [1, 2, 3].index(3, 0, None))
+_arg_exc("li_big_start", lambda: [1, 2, 3].index(3, 10**100))
+_arg_exc("li_big_end", lambda: [1, 2, 3].index(3, 0, 10**100))
+_arg_exc("li_big_neg_end", lambda: [1, 2, 3].index(1, 0, -10**100))
+print([1, 2, 3].index(1, -10**100))
+print([1, 2, 3].index(3, True))
+
+# 多余位置实参: CPython 参数数文案
+_arg_exc("count-2", lambda: [1].count(1, 2))
+_arg_exc("append-0", lambda: [].append())
+_arg_exc("append-2", lambda: [].append(1, 2))
+_arg_exc("remove-2", lambda: [1].remove(1, 2))
+_arg_exc("index-0", lambda: [1].index())

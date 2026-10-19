@@ -32,6 +32,24 @@ print("string" in sys.modules)
 del sys.modules["string"]
 print("string" in sys.modules)
 
+# keys/values/items/len 与模块缓存同步 (活视图先同步再读 backing store)
+import json
+
+print("json" in sys.modules.keys())
+print("json" in list(sys.modules.keys()))
+print("sys" in sys.modules.keys())
+print(len(sys.modules) > 5)
+print(len(sys.modules.keys()) > 5)
+print(len(list(sys.modules.items())) > 5)
+print(sys.modules["json"] is json)
+print(_m in sys.modules.values())
+print(len(sys.modules.values()) > 5)
+ks = sys.modules.keys()
+
+import random
+print("random" in ks)
+print("random" in sys.modules.keys())
+
 # sys.exc_info (活动异常时返回 (type, value, traceback))
 import sys
 

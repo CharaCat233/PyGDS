@@ -210,8 +210,7 @@ dsl.run()
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
 | D3 | 默认步数上限 50000 | 超限报 `RuntimeError: maximum step count exceeded`（`yield from` 深递归等长脚本会触顶，CPython 无此限）；宿主可经 `_config_max_steps` 调整，属安全阀设计 |
-| D6 | 内置模块 repr 标 (built-in) | PyGDS 将 `random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` / `logging` 等模块实现为 GDScript 内置模块，repr 为 `<module 'x' (built-in)>`；CPython 对应模块为 .py 文件，repr 为 `<module 'x' from '...py'>`（对 PyGDS 实为内置，非缺陷） |
-| D7 | 用户模块 repr 的 from 'path' 用脚本可见路径 | 用户模块 `repr` 的源路径取脚本可见形态：沙箱内为盘符相对路径（如 `<module 'm' from 'MOD1:/m.py'>`），不暴露 `user://` 真实路径；CPython 为绝对路径（沙箱设计的既定正确行为） |
+| D6 | 模块 repr 呈现由沙箱文件系统模型决定 | 两面：内置模块（`random` / `statistics` / `functools` / `itertools` / `collections` / `contextlib` / `string` / `operator` / `logging` 等）在沙箱内无 .py 文件可指，repr 为 `<module 'x' (built-in)>`（CPython 对应模块为 .py 文件，repr 为 `<module 'x' from '...py'>`）；用户模块 repr 的源路径取脚本可见形态——沙箱内为盘符相对路径（如 `<module 'm' from 'MOD1:/m.py'>`），不暴露 `user://` 真实路径（CPython 为绝对路径） |
 
 ### 平台层差异（Platform）
 
@@ -222,6 +221,8 @@ dsl.run()
 | P4 | Unicode 名称与字符分类数据库缺失 | Godot 无 Unicode 名称与赋值数据库。`\N{名称}` 内置 ASCII 可打印字符全名与常用符号名称表，表外按 CPython 语义报 `SyntaxError: unknown Unicode character name`；`isdecimal` / `isdigit` / `isnumeric` / `isspace` 已内置 Nd / No / Nl / Zs 全码位区间表对齐 CPython，`isprintable` 对未分配 (Cn) 码位按可打印处理（无赋值数据库判定） |
 | P5 | 对象回收回调不可驱动（生成器隐式 close 与用户类 `__del__`） | Godot 4.x 的 `NOTIFICATION_PREDELETE` 触发时脚本实例已 detach，引用计数回收路径无法驱动生成器 `finally` 或用户类 `__del__`（alpha.8 批次二实测与 I1-80 同根源，理论修复路径被否定）；需要清理逻辑的代码应显式 `close()`；Godot 升级若松动应复核 |
 | P6 | 引擎退出检查对全局类脚本资源图的滞留告警 | 内嵌类方法体内的自引用构造（类 X 体内 `X.new()`）使引擎退出时不释放脚本核心类图并告警；触发构造已于 v0.8.0-alpha.9 经跨类工厂规避（退出告警清零），新增内嵌类应避免该形态；引擎升级若松动应复核 |
+| P10 | complex 幂的宿主 libm 精度残余 | 两个面：π/2 邻域实部有 libm cos 噪声底（`(-2.0) ** 0.5` 实部约 3e-5 相对差，虚部精确）；大角度归约（`\|指数×θ\| ≳ 1e18`）双端结果不同（均在单位圆上，量级与语义不受影响）；测试按 `round(..., N)` / 不变量断言 |
+| P13 | `math` 浮点函数的宿主 libm / 多步舍入精度残余 | 三个面：大角度三角归约（`math.sin(10**30)` 双端结果不同，均在 [-1, 1]）；`hypot` / `dist` 多步舍入与 CPython 缩放正确舍入算法有 1 ULP 级尾差；`log10` 经 `log(x)/log(10)` 二次舍入有噪声差（宿主无正确舍入 log10 原生函数） |
 
 ---
 

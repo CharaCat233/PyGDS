@@ -581,19 +581,22 @@ The Python equivalent signature is given in parentheses for behavioral compariso
 "hello".find("l", 0, 2)   # -1 (bounded by end)
 ```
 
-#### `str.startswith(prefix) -> bool`
+#### `str.startswith(prefix, start=0, end=...) -> bool`
 
 ```python
-# Python: str.startswith(prefix)
+# Python: str.startswith(prefix, start=0, end=...)
 "hello".startswith("he")  # True
 "hello".startswith("xx")  # False
+"hello".startswith("ell", 1)   # True (checked from start)
+"hello".startswith("he", 1)    # False
 ```
 
-#### `str.endswith(suffix) -> bool`
+#### `str.endswith(suffix, start=0, end=...) -> bool`
 
 ```python
-# Python: str.endswith(suffix)
+# Python: str.endswith(suffix, start=0, end=...)
 "hello".endswith("lo")    # True
+"hello".endswith("ell", 0, 4)   # True (checked within [start, end))
 ```
 
 #### `str.lstrip(chars=None) -> str`
@@ -1002,10 +1005,14 @@ b'hello'.find(b'll')                # 2
 b'hello'.count(b'l')                # 2
 ```
 
-#### `bytes.startswith(prefix)` / `bytes.endswith(suffix) -> bool`
+#### `bytes.startswith(prefix, start=0, end=...)` / `bytes.endswith(suffix, start=0, end=...) -> bool`
+
+Region-bounded checks (negative offsets count from the tail, out-of-range values are clamped); `bytearray` behaves the same.
 
 ```python
 b'abc'.startswith(b'ab')            # True
+b'abc'.startswith(b'b', 1)          # True (checked from start)
+b'abc'.endswith(b'c', 0, -1)        # False (checked within [start, end))
 ```
 
 #### `bytes.join(iterable) -> bytes`
