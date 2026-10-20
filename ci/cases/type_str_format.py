@@ -36,10 +36,40 @@ print("{0:0>4}".format(7))  # 0007
 print("{:*^6}".format("ab"))  # **ab**
 print("{:>5}".format(42))  # "   42"
 
+# 显式对齐与 0 标志组合: 0 充当填充字符参与对齐方向 (显式 fill 时 0 被忽略)
+print("{:>05}".format("ab"))
+print("{:<05}".format("ab"))
+print("{:^05}".format("ab"))
+print("{:>05}".format(42))
+print("{:<05}".format(42))
+print("{:^05}".format(42))
+print("{:=05}".format(42))
+print("{:>07}".format(-42))
+print("{:=07}".format(-42))
+print("{:<07}".format(-42))
+print("{:>08x}".format(255))
+print("{:=08x}".format(255))
+print("{:>010}".format(3.5))
+print("{:*^05}".format("ab"))
+print("{:*^07}".format(-42))
+print("{:>0}".format(42))
+print("{:0>5}".format("ab"))  # 显式 0 填充字符 (非 0 标志)
+
 # 转换标志
 print("{!r}".format("str"))  # 'str'
 print("{!s}".format("str"))  # str
 print("{!a}".format("hi"))  # 'hi'
+
+# !a 非 ASCII 转义 (与 f-string !a / ascii() 同规则)
+print("{!a}".format("é"))
+print("{!a}".format("中文"))
+print("{!r} {!a}".format("é", "é"))
+print("{!a:>10}|".format("é"))
+print("{!a}".format(123))
+print("{!a}".format(None))
+print("{!a}".format("tab\tnl\n"))
+print("{0!a}".format("\x7fé\x85"))
+print(f"{'é'!a}")
 
 # 转义花括号
 print("{{}}".format())  # {}

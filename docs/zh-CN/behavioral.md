@@ -268,7 +268,7 @@
 
 ### syntax_fstring
 
-- 职责: f-string 插值、格式说明符、转换与嵌套
+- 职责: f-string 插值、格式说明符、转换与嵌套 (显式对齐与 `0` 标志组合时 `0` 充当填充字符, 显式 fill 优先)
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_fstring.py](../../ci/cases/syntax_fstring.py)
 
@@ -389,6 +389,14 @@
 - 职责: 行内复合语句分号归属与 `else` 接续
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_inline_compound.py](../../ci/cases/syntax_inline_compound.py)
+
+### syntax_invalid_escape
+
+- 职责: 未识别转义 (`\8` `\9` `\p` 等) 发 SyntaxWarning (每字面量首处), 值仍保留字面量; bytes 同 (含 `\u` 与超范围八进制)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_invalid_escape.py](../../ci/cases/syntax_invalid_escape.py)
+
+每个字面量最多告警一次, 首个违规转义决定文案 (未识别转义报 `invalid escape sequence '\X'`, 超范围八进制报 `invalid octal escape sequence '\400'`); 相邻字面量各自告警。PyGDS 无 warnings 模块, 告警经 print 通道发出 (CPython 经 warnings 机制走 stderr)
 
 ### syntax_lambda
 
@@ -1402,6 +1410,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 比对: `same_output`
 - 源文件: [ci/cases/type_function.py](../../ci/cases/type_function.py)
 
+### type_functools_types
+
+- 职责: functools.cache/lru_cache 工厂与包装对象的类型身份及 repr 形态
+- 比对: `same_output`
+- 源文件: [ci/cases/type_functools_types.py](../../ci/cases/type_functools_types.py)
+
 ### type_generic_alias
 
 - 职责: `list[int]` 等泛性别名对象与哈希相等
@@ -1504,6 +1518,14 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 比对: `same_output`
 - 源文件: [ci/cases/type_int_truediv.py](../../ci/cases/type_int_truediv.py)
 
+### type_inplace_dunder
+
+- 职责: list/bytearray 原地 dunder (`__iadd__`/`__imul__`) 直调与 `+=`/`*=` 语句层
+- 比对: `same_output`
+- 源文件: [ci/cases/type_inplace_dunder.py](../../ci/cases/type_inplace_dunder.py)
+
+直调 `__imul__` 的非整数实参文案取运算符层形态 (CPython 槽包装直调另有 ssize_t 转换文案, 两路径在 CPython 内部即不一致)
+
 ### type_list
 
 - 职责: `list` 构造、增删改查方法与 `+`/`*` 运算
@@ -1592,7 +1614,7 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 
 ### type_str_format
 
-- 职责: `str.format` 参数引用、对齐填充与转换标志
+- 职责: `str.format` 参数引用、对齐填充与转换标志 (显式对齐与 `0` 标志组合时 `0` 充当填充字符, 显式 fill 优先)
 - 比对: `same_output`
 - 源文件: [ci/cases/type_str_format.py](../../ci/cases/type_str_format.py)
 

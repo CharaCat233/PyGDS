@@ -98,6 +98,23 @@ def _gv(label, fn):
         print(label, type(e).__name__, str(e))
 
 
+def _grow_probe():
+    before = len(globals())
+    globals()["g_new_166"] = 1
+    after = len(globals())
+    del globals()["g_new_166"]
+    return after - before
+
+
+def _loader_probe():
+    ld = globals()["__loader__"]
+    return (type(ld).__name__,
+            repr(ld).startswith("<_frozen_importlib_external.SourceFileLoader object"),
+            ld.name,
+            ld is globals()["__loader__"],
+            str(ld) == repr(ld))
+
+
 _gv("len_pos", lambda: len(globals()) > 0)
 _gv("keys_has_x", lambda: "x166" in list(globals().keys()))
 _gv("four_same", lambda: len(globals()) == len(list(globals().keys())) == len(list(globals().values())) == len(list(globals().items())))
@@ -113,10 +130,4 @@ _gv("name_val", lambda: globals()["__name__"])
 _gv("doc_val", lambda: globals()["__doc__"])
 _gv("spec_val", lambda: globals()["__spec__"])
 
-
-def _grow_probe():
-    before = len(globals())
-    globals()["g_new_166"] = 1
-    after = len(globals())
-    del globals()["g_new_166"]
-    return after - before
+_gv("loader_shape", _loader_probe)

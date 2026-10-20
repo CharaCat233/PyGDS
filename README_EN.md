@@ -203,7 +203,13 @@ The following lists the known differences and limitations between PyGDS and CPyt
 
 ### Language-Core Differences (Issue)
 
-(No unfixed entries currently: the former I1-80 user-class `__del__` was merged into P5, and the former I2-74 character classification now has full code-point coverage with its unassigned residual merged into P4)
+| ID | Item | Details |
+| :--- | :--- | :--- |
+| I2-33 | `compile()` / `exec()` syntax-error line number is always line 1 | The lexer / parser does not propagate the error line, so `compile("x = 1\n    y = 2", "<t>", "exec")` reports `(<t>, line 1)` instead of the actual line |
+| I2-35 | repr does not escape non-printable characters | `repr(format(1114111, "c"))` emits the raw U+10FFFF character (CPython yields `'\U0010ffff'`); escaping non-printable code points is constrained by P4 (no Unicode database) and needs an explicit code-point table or range-based rules |
+| I2-45 | Some `dir()` members of functions are not attribute-accessible | `__globals__` / `__closure__` / `__code__` / `__get__` / `__call__` / `__builtins__` are listed by name only while attribute access raises `AttributeError` (all function members listed by CPython are accessible) |
+| I2-48 | Part of the phase-two member-surface expansion is still missing | `functools` `partialmethod` / `recursive_repr` / `singledispatchmethod`, the `NormalDist` method family (`pdf` / `cdf` / `inv_cdf` / `samples` / `from_samples`), and `string.Template` introspection (`is_valid` / `get_identifiers`) |
+| I2-49 | In-place dunder direct call `__imul__` non-int argument message uses the operator-layer shape | `[1].__imul__("x")` raises `can't multiply sequence by non-int of type 'str'` (CPython's slot-wrapper direct call raises `'str' object cannot be interpreted as an integer`); the two paths disagree inside CPython itself, PyGDS takes the operator-layer shape which keeps the statement layer aligned |
 
 ### Design-Layer Differences (Design)
 

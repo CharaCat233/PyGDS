@@ -268,7 +268,7 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 
 ### syntax_fstring
 
-- Responsibility: f-string interpolation, format specifiers, conversions and nesting
+- Responsibility: f-string interpolation, format specifiers, conversions and nesting (with explicit alignment the `0` flag becomes the fill character, explicit fill wins)
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_fstring.py](../../ci/cases/syntax_fstring.py)
 
@@ -389,6 +389,14 @@ A decimal literal beyond the limit (default 4300) raises `SyntaxError: Exceeds t
 - Responsibility: Semicolon attribution in inline compound statements and `else` continuation
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_inline_compound.py](../../ci/cases/syntax_inline_compound.py)
+
+### syntax_invalid_escape
+
+- Responsibility: Unrecognized escapes (`\8` `\9` `\p` etc.) emit SyntaxWarning (first occurrence per literal) while the literal is preserved; same for bytes (including `\u` and over-range octal)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_invalid_escape.py](../../ci/cases/syntax_invalid_escape.py)
+
+Each literal warns at most once, with the first offending escape deciding the message (`invalid escape sequence '\X'` for unrecognized escapes, `invalid octal escape sequence '\400'` for over-range octal); adjacent literals warn independently. PyGDS has no warnings module, so the warning goes through the print channel (CPython routes it through the warnings machinery to stderr)
 
 ### syntax_lambda
 
@@ -1402,6 +1410,12 @@ Float literals and `float()` strings go through a self-produced correctly-rounde
 - Comparison: `same_output`
 - Source: [ci/cases/type_function.py](../../ci/cases/type_function.py)
 
+### type_functools_types
+
+- Responsibility: type identity and repr shapes of the functools.cache/lru_cache factories and the wrapped object
+- Comparison: `same_output`
+- Source: [ci/cases/type_functools_types.py](../../ci/cases/type_functools_types.py)
+
 ### type_generic_alias
 
 - Responsibility: `list[int]` generic alias objects, hashing and equality
@@ -1504,6 +1518,14 @@ The `x`/`X`/`o`/`b` (incl. `#` alternate form and `_` grouping), `c`, and `f`/`e
 - Comparison: `same_output`
 - Source: [ci/cases/type_int_truediv.py](../../ci/cases/type_int_truediv.py)
 
+### type_inplace_dunder
+
+- Responsibility: in-place dunder (`__iadd__`/`__imul__`) direct calls on list/bytearray and the `+=`/`*=` statements
+- Comparison: `same_output`
+- Source: [ci/cases/type_inplace_dunder.py](../../ci/cases/type_inplace_dunder.py)
+
+The non-int argument message of direct `__imul__` uses the operator-layer shape (CPython's slot-wrapper direct call has a separate ssize_t conversion message - the two paths disagree inside CPython itself)
+
 ### type_list
 
 - Responsibility: `list` construction, CRUD methods and `+`/`*` operations
@@ -1592,7 +1614,7 @@ range arguments keep arbitrary precision instead of converging to the index widt
 
 ### type_str_format
 
-- Responsibility: `str.format` argument referencing, alignment/padding, conversion flags
+- Responsibility: `str.format` argument referencing, alignment/padding, conversion flags (with explicit alignment the `0` flag becomes the fill character, explicit fill wins)
 - Comparison: `same_output`
 - Source: [ci/cases/type_str_format.py](../../ci/cases/type_str_format.py)
 

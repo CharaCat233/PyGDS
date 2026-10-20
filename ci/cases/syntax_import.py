@@ -58,3 +58,22 @@ try:
     exec("from math import nonexistent_b5")
 except ImportError as e:
     print("IE:", str(e))
+
+# builtins 模块可导入 (成员面 = 内建名全集, sys.modules 可见, 模块带 __name__)
+import builtins
+
+print(type(builtins).__name__)
+print(builtins.len([1, 2]))
+print(builtins.abs(-3))
+print(builtins.__name__)
+print("builtins" in __import__("sys").modules)
+
+from builtins import len as blen
+
+print(blen("abc"))
+print(builtins.print is print)
+
+import math as _m2
+
+print(_m2.__name__)
+print(math.__name__)

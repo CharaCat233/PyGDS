@@ -59,6 +59,24 @@ print(f"outer {f'inner {x}'}")
 # 备用形式与零填充: 前缀参与布局
 print(f"{255:#06x}")  # 0x00ff
 
+# 显式对齐与 0 标志组合: 0 充当填充字符参与对齐方向 (显式 fill 时 0 被忽略)
+print(f"{'ab':>05}")
+print(f"{'ab':<05}")
+print(f"{'ab':^05}")
+print(f"{42:>05}")
+print(f"{42:<05}")
+print(f"{42:^05}")
+print(f"{42:=05}")
+print(f"{-42:>07}")
+print(f"{-42:=07}")
+print(f"{-42:<07}")
+print(f"{255:>08x}")
+print(f"{255:=08x}")
+print(f"{3.5:>010}")
+print(f"{'ab':*^05}")
+print(f"{-42:*^07}")
+print(f"{42:>0}")
+
 
 # 字符串格式说明符校验 (与 format() 路径同约束: '=' 对齐与 sign 仅数值允许)
 def _fs(label, fn):

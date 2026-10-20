@@ -8,6 +8,18 @@ print(type(iter("ab")).__name__)
 print(type(iter((1,))).__name__)
 print(type(iter(range(2))).__name__)
 
+# 字节家族迭代器类型名 (消费语义不变)
+print(type(iter(b"ab")).__name__)
+print(type(iter(bytearray(b"ab"))).__name__)
+print(type(iter(memoryview(b"ab"))).__name__)
+itb = iter(b"ab")
+print(next(itb), next(itb))
+print(list(itb))
+print(list(iter(bytearray(b"xy"))))
+print(list(iter(memoryview(b"xy"))))
+print(sum(iter(memoryview(b"\x01\x02"))))
+print([c * 2 for c in b"ab"])
+
 lst = [1, 2]
 it = iter(lst)
 lst.append(3)

@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+## [0.8.8-alpha.3] - 2026-10-20
+
+### 修复
+
+- **json 数字字面量的 int64 溢出探测改用纯字符串比较**：`json.loads("123456789012345678901234567890")` 的大整数路径此前以 `String.to_int()` 的回读比对探测溢出——引擎的 `to_int` 对超界值在部分平台（Linux）打印 `ERROR: Cannot represent ... as a 64-bit signed integer` 污染运行日志，且探测行为依赖平台实现；改为按去掉符号后的十进制位长与 `"9223372036854775807"` / `"9223372036854775808"` 字典序上限比较（JSON 数字文法无前导零，字典序有效），溢出直接走大数路径，`to_int` 仅在确认 int64 内时调用；`json.loads` 的 int64 边界（`±(2**63-1)` / `±2**63`）与大数形态输出不变
+- **CI 用例的 `math.perm` / `math.comb` 超大 k 形态改用安全形态**：CPython 3.13+ 移除了 3.12 的 `k must not exceed 9223372036854775807` 上限检查（超大 k 进入 k 次迭代计算），CI runner 上该形态在垫片 15s 超时内无法完成（垫片写回 `code: null`，被判定为「CPython 报错而 PyGDS 正常完成」）；`module_math` 的三个超大 k 形态（`perm(10**20, 10**19)` / `perm(2**64, 2**63+1)` / `comb(10**20, 10**19)`）改为 `perm(10**20, 2)` / `perm(2**64, 2)` / `comb(10**20, 2)`（k=2 双端快速且大数精确），超大 k 的平台分歧登记为已知问题 P14（PyGDS 保持 3.12 对齐的上限检查）
+- **未识别转义缺 `SyntaxWarning`**：`"\8"` / `"\9"` / `"\p"` 等非八进制首字符的未识别转义此前静默保留字面量——str 与 bytes 两条解码路径按 CPython 发 `SyntaxWarning: invalid escape sequence '\8'`（bytes 侧含 `\u` / `\U` / `\N` 形态），值仍保留反斜杠与该字符；告警粒度对齐 CPython 为每字符串字面量一次（首个违规转义决定文案，相邻字面量各自告警），超范围八进制（`\400` 等）的 `invalid octal escape sequence` 文案同批对齐到 bytes 侧，str 侧同步收敛为每字面量一次
+- **list / bytearray 的原地 dunder 属性未暴露**：`[1, 2].__iadd__([3])` / `bytearray(b"a").__iadd__(b"b")` 此前报 `AttributeError`——实例级与类级描述符表注册 `__iadd__` / `__imul__`（与 `+=` / `*=` 语句层共用实现，返回自身保持别名）；`bytearray.__imul__` 补原地重复实现（`ba *= n` 此前经二元乘法新建对象破坏别名语义，顺带对齐）；`list.__iadd__` 非可迭代实参的文案由二元拼接形态改为 CPython 原地语义的 `'X' object is not iterable`；大数计数报 `OverflowError: cannot fit 'int' into an index-sized integer`，bytes 不可变无原地 dunder（CPython 同）；直调 `__imul__` 的非整数实参文案取运算符层形态（CPython 槽包装直调另有 ssize_t 转换文案，两路径在其内部即不一致，登记为已知问题 I2-49）
+- **函数与绑定方法的 repr 缺限定名**：`repr(A.f)` / `repr(A().f.__func__)` 此前输出 `<function object>`（与 str 不同形）——repr 复用限定名路径输出 `<function A.f at 0x...>`（lambda 为 `<function <lambda> at 0x...>`，嵌套函数带 `outer.<locals>.inner` 链），绑定方法 repr 与 str 同形为 `<bound method A.f of <...>>`
+- **str.format 模板 `{!a}` 不做 ASCII 转义**：`"{!a}".format("é")` 此前原样输出——转换标志分支对 repr 结果按 `ascii()` 同规则转义（`\xNN` / `\uNNNN` / `\UNNNNNNNN`），与 f-string 路径一致；纯 ASCII 转义助手提升为共享静态实现（`ascii()` 内建与 f-string `!a` 同源）
+- **字节家族迭代器类型名缺失**：`iter(b"ab")` / `iter(bytearray(b"ab"))` / `iter(memoryview(b"ab"))` 此前报 `'list'`（快照物化路径）——`iter()` 补三分支返回一等迭代器对象（`bytes_iterator` / `bytearray_iterator` / `memory_iterator`，bytearray 先于 bytes 判定），迭代产出与活动视图语义不变
+- **int / bool 跨型 dunder 直调缺 `NotImplemented`**：`(1).__eq__(1.0)` / `__ne__` / `__lt__` / `__le__` / `__gt__` / `__ge__` 与 `__add__` / `__sub__` / `__mul__` / `__truediv__` / `__floordiv__` / `__mod__` / `__pow__` 对 float / complex / str 等跨型实参此前返回真值或报 TypeError——补 `NotImplemented` 内置常量（`NotImplementedType` 类型，真值为 True，repr 为 `NotImplemented`）并按 CPython 槽语义对跨型实参返回哨兵；表达式层比较 / 算术与排序器不经哨兵路径（数值精确比较语义保持）；bool 继承 int 槽同语义，dunder 属性面经类级描述符可达
+- **`math.prod` 浮点左值的序列重复反射文案偏离**：`math.prod([1.5, "a"])` 此前报通用 `unsupported operand type(s) for *`——浮点左值补序列重复反射分支，报 CPython 同文案 `can't multiply sequence by non-int of type 'float'`（与表达式层一致）
+- **`int.to_bytes` 的 `length=0` 边界误报**：`(0).to_bytes(0, "big", signed=True)` / `(-1).to_bytes(0, ...)` 此前误报 `OverflowError: int too big to convert`——合法域判定改按幅值位长（无符号 `<= cap`、有符号 `< cap`）与二补码 `~v` 位长（负数 `|v| - 1` 位长 `< cap`，`-1` 恒放行），`length=0` 时有符号 `0` / `-1` 返回 `b''`；I0-32 既有边界矩阵（含 `-128` / `-129` / 大数负值与全 byteorder）无回退
+- **`Counter` 多元素 repr 不按计数降序**：`repr(Counter(a=2, b=3))` 此前按插入序渲染——改为复用 `most_common()` 排序内核（计数降序、同计数保持插入序，浮点 / 大数计数与 `most_common()` 结果一致）；空 Counter 的 `Counter()` 形态保持
+- **格式化显式对齐与 `0` 标志组合的零填充不生效**：`f"{'ab':>05}"` / `format("ab", ">05")` 此前忽略 `0` 标志输出空格填充——显式对齐且无显式填充字符时 `0` 充当填充字符参与对齐方向（数值与字符串一致，`format(-42, '>07')` 为 `'0000-42'`，`=` 对齐仍走符号后填充），显式 fill（`format("ab", "*^05")`）与 `0` 共存时 `0` 被忽略（CPython 同）；f-string 与 `format()` 双路径同步
+- **`functools.cache` / `lru_cache` 的类型身份失真**：`type(functools.cache).__name__` 此前呈现 `builtin_function_or_method`（CPython 为 Python 层函数 `'function'`），包装产物 `type(fib).__name__` 呈现 `'function'`（CPython 为 `'functools._lru_cache_wrapper'`）——两工厂的类型身份按 CPython 对齐（repr 与用户函数同形），包装对象注册 `_lru_cache_wrapper` 类型类（repr 为 `<functools._lru_cache_wrapper object ...>` 形态）
+- **`import builtins` 不可用**：`__builtins__` 键已有内建模块对象但未注册进导入机制——模块注册表补 `builtins` 键（`import builtins` / `sys.modules["builtins"]` / `from builtins import len` 可用，成员面为内建名全集，`__builtins__.len` 等属性访问同步可用）；模块对象补 `__name__` 属性（CPython 全部模块均有）
+- **`NormalDist` 属性面为公开 `mu` / `sigma`**：CPython 内部字段为私有 `_mu` / `_sigma`（公开面访问 `nd.mu` 报 AttributeError）——属性面改为 `_mu` / `_sigma` 可读写（赋值生效），公开 `mu` / `sigma` 报 `AttributeError: 'NormalDist' object has no attribute 'mu'`；repr 形态不变
+- **`__loader__` 的值为 repr 文本形态**：主脚本 dunder 的 `__loader__` 此前以字符串承载——改为加载器对象（`type(__loader__).__name__` 为 `SourceFileLoader`，repr / `name` 属性形态对齐）；`type(__spec__).__name__` 的 `NoneType` 形态经对照确认一致
+- **集合包装与编解码边界的静默缺陷**：`math.ulp` 对次正规实参（如 `5e-324`）使步长下溢为 0 的逼近循环死循环，宿主进程冻结不可防护——步长下溢回退最小次正规常量起步；`math.exp2(10000)` 静默返回 `inf`——补上溢守卫报 `OverflowError: math range error`（与 `exp` 同款）；`math.modf(inf)` 的小数部分误复制 `inf`——按 CPython 返回 `(0.0, inf)`（小数部分符号跟随 x，负零经运行期取负构造）；`UserDict` 缺键下标读 / 删除此前静默返回 None（委托错误通道未搬运，`ud["zz"]` 静默错值）——改为 KeyError 传播（与 I1-85 错误通道搬运同款）；`ud.keys()` / `values()` / `items()` 的转发站点调用不存在的方法触发引擎运行期错误——改转发 `builtin_keys` 族；`ChainMap.__delitem__` 首映射缺键静默——补 KeyError；`base64.b85encode` / `a85encode` 的尾组长度判定 `== 4` 对多组输入（5 字节输入的首组 rem=5）误算输出位数多落一字符（`b85encode(b"hello")` 8 字符 vs CPython 7）——修正为 `>= 4`，往返验证（`b85decode(b85encode(x))` 逐位一致）；base64 的 decode 族（`b32decode` / `b32hexdecode` / `a85decode` / `b85decode`）此前拒收 str 输入（`a bytes-like object is required`）——CPython 签名接受 str，统一改走 decode 实参助手；`binascii.Error` 异常类未注册（base64 解码错误直接 NameError 不可捕获）——注册为 ValueError 子类
+
+### 测试
+
+- 全量用例 406 -> 409（`type_functools_types` 覆盖 functools 类型身份；`syntax_invalid_escape` 覆盖未识别转义告警与每字面量一次语义、`syntax_escape` 同步改为动态编译形态；`type_inplace_dunder` 覆盖原地 dunder 直调；`type_int_dunder` / `type_function` / `builtin_iter_type` / `type_str_format` / `syntax_fstring` / `module_math` / `type_int_bytes` / `module_collections_counter` / `module_stdlib_members` / `syntax_import` / `builtin_globals` 扩展对应用例形态；`module_stdlib_members` 补 base85/ascii85 尾组往返与 decode 族 str 形态、math 的 ulp 次正规 / exp2 上溢 / modf inf 分量防回退形态）；挂起套件 24/24、沙箱套件 52/52；lint 三件套 0 问题
+
 ## [0.8.8-alpha.2] - 2026-10-20
 
 ### 修复

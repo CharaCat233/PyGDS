@@ -19,6 +19,26 @@ print((127).to_bytes(1, "big", signed=True))
 print((2 ** 64).to_bytes(9, "big"))
 print((2 ** 64 - 1).to_bytes(8, "big"))
 
+# length=0 边界: 有符号 0 与 -1 放行空输出, 其余 OverflowError
+print((0).to_bytes(0))
+print((0).to_bytes(0, "big", signed=True))
+print((0).to_bytes(0, "little", signed=True))
+print((-1).to_bytes(0, "big", signed=True))
+print((-1).to_bytes(0, "little", signed=True))
+print(int.to_bytes(0, 0, "big", signed=True))
+try:
+    print((1).to_bytes(0, "big", signed=True))
+except OverflowError as e:
+    print("OE", str(e))
+try:
+    print((-2).to_bytes(0, "big", signed=True))
+except OverflowError as e:
+    print("OE", str(e))
+try:
+    print((-2 ** 64).to_bytes(0, "big", signed=True))
+except OverflowError as e:
+    print("OE", str(e))
+
 # 越界报错: 幅值超容量 OverflowError (边界值放行)
 try:
     print((128).to_bytes(1, "big", signed=True))

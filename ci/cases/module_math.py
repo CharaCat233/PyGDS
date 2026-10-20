@@ -138,6 +138,18 @@ try:
 except TypeError as e:
     print("TE-prod:", str(e))
 
+# 浮点左值序列重复反射 (序列在右, CPython 文案按左操作数类型)
+try:
+    math.prod([1.5, "a"])
+except TypeError as e:
+    print("TE-prod-f:", str(e))
+try:
+    eval('1.5 * "a"')
+except TypeError as e:
+    print("TE-mul-f:", str(e))
+print(math.prod([True, "a"]))
+print(math.prod([2, [1]]))
+
 # 域错误
 try:
     print(math.log(8, 0))
@@ -284,7 +296,9 @@ _mth_exc("fact-str", lambda: math.factorial("x"))
 # 越界大数转 double 报 OverflowError (值超出 double 量级)
 _mth_exc("deg-huge", lambda: math.degrees(10 ** 400))
 
-# 整数函数大数残余: factorial 上限 / perm 大数 n / comb 文案
+# 整数函数大数残余: factorial 上限 / perm 大数 n / comb 大数 n
+# (超大 k 的 perm/comb 形态不入常规用例: CPython 3.12 对 k 超上限报 OverflowError,
+#  3.13+ 移除上限检查进入 k 次迭代计算, 15s 垫片超时下无法双端断言, 见已知问题清单 P14)
 _mth_exc("fact-cap", lambda: math.factorial(2 ** 31))
 _mth_exc("fact-big", lambda: math.factorial(10 ** 30))
 _mth_exc("fact-neg", lambda: math.factorial(-1))
@@ -292,12 +306,12 @@ _mth_exc("fact-float", lambda: math.factorial(5.0))
 print(math.factorial(20))
 print(math.perm(10 ** 20, 5))
 print(math.comb(10 ** 20, 3))
-_mth_exc("perm-big-k", lambda: math.perm(10 ** 20, 10 ** 19))
-_mth_exc("perm-k2e63", lambda: math.perm(2 ** 64, 2 ** 63 + 1))
+print(math.perm(10 ** 20, 2))
+print(math.perm(2 ** 64, 2))
+print(math.comb(10 ** 20, 2))
 _mth_exc("perm-k-gt-n", lambda: math.perm(5, 10 ** 100))
 _mth_exc("perm-float", lambda: math.perm(5.0, 2))
 print(math.perm(2 ** 63 - 1, 2))
-_mth_exc("comb-big-k", lambda: math.comb(10 ** 20, 10 ** 19))
 _mth_exc("comb-k-gt-n", lambda: math.comb(5, 10 ** 100))
 print(math.comb(2 ** 63, 2 ** 63 - 1))
 print(math.factorial(True), math.perm(True, True), math.comb(True, False))

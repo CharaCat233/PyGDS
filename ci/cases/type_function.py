@@ -90,3 +90,25 @@ def kwf2(a, *, b):
 print(kwf2.__kwdefaults__)
 it153 = iter([1, 2, 3])
 print(it153.__length_hint__())
+
+# repr 与 str 同形且带限定名 (地址双端不同, 用前缀/包含判定)
+print(C.m.__qualname__)
+print(repr(C.m).startswith("<function C.m at 0x"))
+print(str(C.m) == repr(C.m))
+print("<function C.m" in repr(C.m))
+print(repr(inst.m).startswith("<bound method C.m of <"))
+print(str(inst.m) == repr(inst.m))
+print(inst.m.__func__ is C.m)
+print(repr(inst.m.__func__).startswith("<function C.m at 0x"))
+print(repr(fn).startswith("<function fn at 0x"))
+print(repr(lam).startswith("<function <lambda> at 0x"))
+
+
+def outer2():
+    def inner():
+        pass
+
+    return inner
+
+
+print(repr(outer2()).startswith("<function outer2.<locals>.inner at 0x"))

@@ -25,6 +25,15 @@ print(sorted(Counter(a=2, b=3).items()))
 print(Counter(a=1)["a"])
 print(Counter(a=1, b=2) == Counter({"a": 1, "b": 2}))
 
+# 多元素 repr 按计数降序 (CPython 经 most_common 渲染), 同计数保持插入序
+print(repr(Counter(a=2, b=3)))
+print(repr(Counter({"a": 1, "b": 2})))
+print(repr(Counter("abbc")))
+print(repr(Counter("abbcccdddd")))
+print(repr(Counter(a=1, b=1, c=2, d=1)))
+print(repr(Counter({1: 2.5, 2: 2.5, 3: 0.5})))
+print(repr(Counter(a=2, b=3).items() == Counter(a=2, b=3).items()))
+
 # 浮点/大数计数保留
 print(repr(Counter({"a": 1.5})))
 print(Counter({"a": 1.5})["a"])

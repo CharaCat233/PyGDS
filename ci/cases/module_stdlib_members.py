@@ -223,6 +223,25 @@ t("b85e", lambda: base64.b85encode(b"ab"))
 t("b85d", lambda: base64.b85decode(b"VPX"))
 t("b16e", lambda: base64.b16encode(b"ab"))
 t("b32_round", lambda: base64.b32decode(base64.b32encode(b"hello")))
+# 尾组编码: 5 字节输入的首组 (rem>4) 曾误算输出长度
+t("b85e_hello", lambda: base64.b85encode(b"hello"))
+t("b85_round", lambda: base64.b85decode(base64.b85encode(b"hello")))
+t("a85e_hello", lambda: base64.a85encode(b"hello"))
+t("a85_round", lambda: base64.a85decode(base64.a85encode(b"hello")))
+t("b85e_8", lambda: base64.b85encode(b"abcdefgh"))
+t("a85e_8", lambda: base64.a85encode(b"abcdefgh"))
+# decode 族接受 str (CPython 签名 s: str 或 bytes)
+t("b32d_str", lambda: base64.b32decode("MFRA===="))
+t("b85d_str", lambda: base64.b85decode("K009T"))
+t("a85d_str", lambda: base64.a85decode("@:B"))
+# math 边界: ulp 次正规 / exp2 上溢 / modf inf (挂死与静默错值防回退)
+t("m_ulp_denorm", lambda: math.ulp(5e-324))
+t("m_ulp_0", lambda: math.ulp(0.0))
+t("m_exp2_ovf", lambda: math.exp2(10000))
+t("m_exp2_ok", lambda: math.exp2(10))
+t("m_modf_inf", lambda: math.modf(float("inf")))
+t("m_modf_ninf", lambda: math.modf(float("-inf")))
+t("m_modf_nan", lambda: math.modf(float("nan")))
 # random: 分布族可调用性与 SystemRandom
 t("r_dist", lambda: (callable(random.expovariate), callable(random.normalvariate), callable(random.gammavariate), callable(random.betavariate), callable(random.lognormvariate), callable(random.paretovariate), callable(random.weibullvariate), callable(random.vonmisesvariate)))
 t("r_sysrng", lambda: type(random.SystemRandom).__name__)
@@ -247,5 +266,23 @@ def _lr_probe():
 
 t("s_nd", lambda: statistics.NormalDist(mu=1).__class__.__name__)
 t("s_nd_sigma", lambda: statistics.NormalDist(0, -1))
+
+
+def _nd_probe():
+    nd = statistics.NormalDist(mu=3, sigma=2)
+    ae1 = ae2 = ""
+    try:
+        nd.mu
+    except AttributeError as e:
+        ae1 = str(e)
+    try:
+        nd.sigma
+    except AttributeError as e:
+        ae2 = str(e)
+    nd._mu = 5.0
+    return (nd._mu, nd._sigma, ae1, ae2, repr(statistics.NormalDist()))
+
+
+t("s_nd_attrs", _nd_probe)
 t("s_corr_len", lambda: statistics.correlation([1], [1, 2]))
 t("s_corr_const", lambda: statistics.correlation([1, 1], [1, 2]))
