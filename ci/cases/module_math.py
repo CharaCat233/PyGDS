@@ -249,6 +249,14 @@ def _mth_exc(label, fn):
         print(label, type(e).__name__, str(e))
 
 
+# 仅断言异常类的形态 (消息随平台 C long 宽度不同, 不入双端断言)
+def _mth_exc_cls(label, fn):
+    try:
+        print(label, repr(fn()))
+    except Exception as e:
+        print(label, type(e).__name__)
+
+
 print(math.sqrt(10 ** 30))
 print(math.log(10 ** 30))
 print(math.log(10 ** 30, 2))
@@ -297,13 +305,18 @@ _mth_exc("fact-str", lambda: math.factorial("x"))
 _mth_exc("deg-huge", lambda: math.degrees(10 ** 400))
 
 # 整数函数大数残余: factorial 上限 / perm 大数 n / comb 大数 n
-# (超大 k 的 perm/comb 形态不入常规用例: CPython 3.12 对 k 超上限报 OverflowError,
-#  3.13+ 移除上限检查进入 k 次迭代计算, 15s 垫片超时下无法双端断言, 见已知问题清单 P14)
-_mth_exc("fact-cap", lambda: math.factorial(2 ** 31))
-_mth_exc("fact-big", lambda: math.factorial(10 ** 30))
+# (perm/comb 的 k 上限检查用 long long, 消息 `k must not exceed 9223372036854775807` 与
+#  `min(n - k, k) must not exceed ...` 全版本全平台一致, 可全量断言
+#  factorial 超界的 OverflowError 消息随平台 C long 宽度不同 (Windows 2**31-1 / Linux 2**63-1),
+#  且 Linux 上 n 在 long 范围内的 factorial 会真实计算 (n=2**31 即超时爆内存), 故只断言异常类)
+_mth_exc_cls("fact-cap", lambda: math.factorial(2 ** 63))
+_mth_exc_cls("fact-big", lambda: math.factorial(10 ** 30))
 _mth_exc("fact-neg", lambda: math.factorial(-1))
 _mth_exc("fact-float", lambda: math.factorial(5.0))
 print(math.factorial(20))
+_mth_exc("perm-k-huge", lambda: math.perm(10 ** 20, 10 ** 19))
+_mth_exc("perm-k-huge2", lambda: math.perm(2 ** 64, 2 ** 63 + 1))
+_mth_exc("comb-k-huge", lambda: math.comb(10 ** 20, 10 ** 19))
 print(math.perm(10 ** 20, 5))
 print(math.comb(10 ** 20, 3))
 print(math.perm(10 ** 20, 2))

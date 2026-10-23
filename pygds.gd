@@ -86,6 +86,8 @@ class Lexer:
 	var open_brackets: Array = []
 	## 未闭合括号的报错文本 (扫描完成时仍有未闭合括号时记录, 由解析层决定是否上报)
 	var unclosed_error: String = ""
+	## 未闭合括号的开括号行号 (CPython 报开括号所在行)
+	var unclosed_line: int = 0
 	## 表达式模式 (f-string 替换字段等子表达式通道): [br]
 	## 换行视为空白, 不产出 NEWLINE, 不触发缩进处理, 表达式可跨行书写含缩进续行与注释
 	var expression_mode: bool = false
@@ -123,15 +125,19 @@ class Lexer:
 			start = current
 			scan_token()
 		# 括号未闭合到文件末尾 (隐式续行吞掉了中间的换行):
-		# 记录待报文本, 解析层据此在关闭括号失败处还原报错 (模式内的冒号则报 invalid syntax)
+		# 记录待报文本 (含开括号行号), 解析层据此在关闭括号失败处还原报错 (模式内的冒号则报 invalid syntax)
 		if paren_depth > 0 and not report.has_error:
 			var br = open_brackets[0]
 			unclosed_error = "SyntaxError: '%s' was never closed" % br[0]
+			unclosed_line = br[1]
 		# 在文件末尾生成剩余的 DEDENT
 		while indent_stack.size() > 1:
 			indent_stack.pop_back()
 			tokens.append(Token.new(TokenType.DEDENT, "", null, line, column))
 		tokens.append(Token.new(TokenType.EOF, "", null, line, column))
+		# 词法错误的行号兜底: 扫描中止处即首个报错位置 (带行号信息的站点经 error_at 记录)
+		if report.has_error and report.error_line == 0:
+			report.error_line = line
 		return tokens
 		
 	## 判断是否处于文件末尾
@@ -205,7 +211,7 @@ class Lexer:
 				indent_stack.pop_back()
 				tokens.append(Token.new(TokenType.DEDENT, "", null, line, column))
 			if indent_stack.back()[0] != spaces:
-				report.error("SyntaxError: inconsistent indentation at line %d" % line)
+				report.error_at("SyntaxError: inconsistent indentation at line %d" % line, line)
 				
 	## 扫描一个 Token
 	func scan_token():
@@ -381,7 +387,7 @@ class Lexer:
 				elif c.is_valid_identifier() or c == '_':
 					identifier()
 				else:
-					report.error("Unexpected character '%s' at line %d, col %d" % [c, line, column])
+					report.error_at("Unexpected character '%s' at line %d, col %d" % [c, line, column], line)
 	
 	## 扫描字符串字面量
 	func string(quote_char: String):
@@ -390,6 +396,7 @@ class Lexer:
 			advance()
 			advance()
 			var content_start = current
+			var start_line := line
 			while not is_at_end():
 				# 转义序列: 跳过反斜杠与下一字符, 被转义的引号不参与结束判定
 				if peek() == '\\':
@@ -418,7 +425,7 @@ class Lexer:
 					line += 1
 					column = 1
 				advance()
-			report.error("SyntaxError: unterminated triple-quoted string literal (detected at line %d)" % (line - 1 if source.ends_with("\n") else line))
+			report.error_at("SyntaxError: unterminated triple-quoted string literal (detected at line %d)" % (line - 1 if source.ends_with("\n") else line), start_line)
 			return
 			
 		# 普通单行字符串
@@ -435,7 +442,7 @@ class Lexer:
 				column = 1
 			advance()
 		if is_at_end():
-			report.error("SyntaxError: unterminated string literal (detected at line %d)" % start_line)
+			report.error_at("SyntaxError: unterminated string literal (detected at line %d)" % start_line, start_line)
 			return
 		# 跳过结束引号
 		advance()
@@ -1024,7 +1031,7 @@ class Lexer:
 				column = 1
 			advance()
 		if is_at_end():
-			report.error("SyntaxError: unterminated string literal (detected at line %d)" % start_line)
+			report.error_at("SyntaxError: unterminated string literal (detected at line %d)" % start_line, start_line)
 			return
 		advance()
 		var body_start = start + prefix.length() + 1
@@ -2587,6 +2594,8 @@ class ConsoleReport:
 	var has_error: bool = false
 	## 最后一个错误信息
 	var last_error: String = ""
+	## 首个错误所在的源码行号 (解析期由词法器/解析器记录, 0 = 未记录)
+	var error_line: int = 0
 	## 信息列表: [(Level, msg), ...]
 	var messages: Array[Array] = []
 	## 日志级别阈值
@@ -2633,6 +2642,16 @@ class ConsoleReport:
 		if not has_error:
 			has_error = true
 			last_error = msg
+
+	## 错误记录并登记首个错误所在的源码行号 (词法器/解析器专用, [br]
+	## 供 compile/exec 的动态编译错误上抛实际行号) [br]
+	## [param msg] 错误消息字符串 [br]
+	## [param line] 出错行号
+	func error_at(msg: String, line: int):
+		if not has_error:
+			has_error = true
+			last_error = msg
+			error_line = line
 	
 	## 确认未捕获异常, 输出到 Godot 控制台和游戏内日志终端, 同时写入 print_output [br]
 	## [param msg] 错误消息字符串
@@ -14801,12 +14820,25 @@ class DSLChainMap extends DSLObject:
 	func _type_name() -> String:
 		return "ChainMap"
 
-	func _dsl_getattribute(name: String) -> DSLObject:
-		if name == "maps":
-			var lst: Array[DSLObject] = []
-			lst.append_array(maps)
-			return DSLList.new(lst)
-		return super._dsl_getattribute(name)
+	## CPython 的迭代/键序: 从最后一张映射开始逐张 update 到临时 dict — [br]
+	## 键的位置由 reversed 遍历中的首次出现决定, 值由最靠前的含键映射决定 [br]
+	## [param self_obj] 接收者 (proto 绑定调用时状态一律经 args[0] 取用)
+	func _chain_ordered_keys(self_obj: DSLChainMap) -> Array:
+		var ordered := {}
+		var rev_maps: Array[DSLObject] = []
+		rev_maps.append_array(self_obj.maps)
+		rev_maps.reverse()
+		for m in rev_maps:
+			var raw_m = m as DSLDict
+			if raw_m == null:
+				continue
+			for k in raw_m.dict:
+				if not ordered.has(k):
+					ordered[k] = true
+		var out: Array = []
+		for k in ordered:
+			out.append(k)
+		return out
 
 	func _chain_lookup(key: DSLObject) -> DSLObject:
 		for m in maps:
@@ -14830,12 +14862,7 @@ class DSLChainMap extends DSLObject:
 
 	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] if args.size() >= 1 else self
-		var seen := {}
-		for m in (self_obj as DSLChainMap).maps:
-			var raw = m as DSLDict
-			for k in raw.dict:
-				seen[k] = true
-		return DSLInteger.pooled(seen.size())
+		return DSLInteger.pooled((self_obj as DSLChainMap)._chain_ordered_keys(self_obj).size())
 
 	func _dsl_getitem(index: DSLObject) -> DSLObject:
 		var r = _chain_lookup(index)
@@ -14848,24 +14875,94 @@ class DSLChainMap extends DSLObject:
 		maps[0]._dsl_setitem(index, value)
 
 	func _dsl_delitem(index: DSLObject) -> void:
-		# 首映射缺键按 CPython 报 KeyError (ChainMap.__delitem__ 只作用于 maps[0])
+		# CPython: 只删首映射, 缺键报 KeyError("Key not found in the first mapping: {key!r}")
+		# (str(e) 为该消息字符串的 repr 形态, 消息预先带引号构造)
 		var c = maps[0].magic_contains([maps[0], index] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		if not (c is DSLBool and (c as DSLBool).value):
-			last_error = "KeyError: %s" % DSLObject._py_repr(index)
+			last_error = 'KeyError: "Key not found in the first mapping: %s"' % DSLObject._py_repr(index)
 			return
 		maps[0]._dsl_delitem(index)
 
-	## 写透: 仅对首映射删除 (CPython del chainmap[key] 只作用于 maps[0])
+	## CPython Mapping.__eq__: 双方均为映射时按 dict(self) == dict(other) 比较
+	func _chain_eq_mapping(self_obj: DSLChainMap, other: DSLObject) -> bool:
+		for k in self_obj._chain_ordered_keys(self_obj):
+			var ko = self_obj._original_key_of(k)
+			var mine = self_obj._chain_lookup(ko)
+			var theirs = other._dsl_getitem(ko)
+			if other.last_error != "":
+				other.last_error = ""
+				return false
+			if mine == null or theirs == null:
+				return false
+			if not mine._dsl_eq(theirs):
+				return false
+		# 反向: other 有而 self 没有的键
+		var okeys = other._dsl_iter()
+		if okeys == null:
+			return false
+		while okeys.has_next():
+			var k = okeys.next()
+			if okeys.suspended:
+				break
+			if not self_obj._chain_has(k):
+				return false
+		return true
+
+	## 键变体的原始键对象还原 (DSLDict 侧表键 "i:..." / "s:..." 形态)
+	func _original_key_of(k) -> DSLObject:
+		for m in maps:
+			var raw_m = m as DSLDict
+			if raw_m != null and raw_m.dict.has(k):
+				return raw_m._original_key_obj(k)
+		return DSLString.new(str(k))
+
+	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var self_obj = args[0] if args.size() >= 1 else self
+		var other = DSLObject._unwrap_dsl(args[1])
+		if other is DSLChainMap:
+			return DSLBool.new((other as DSLChainMap)._chain_eq_mapping(other, self_obj) and self_obj._chain_eq_mapping(self_obj, other))
+		if other is DSLDict or other is DSLDefaultDict or other is DSLUserDict:
+			return DSLBool.new(self_obj._chain_eq_mapping(self_obj, other))
+		return DSLBool.new(false)
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var eq = magic_eq(args, _kwargs)
+		return DSLBool.new(not (eq as DSLBool).value)
+
+	## CPython parents 为 property 属性 (其余映射组成的 ChainMap)
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "maps":
+			var lst: Array[DSLObject] = []
+			lst.append_array(maps)
+			return DSLList.new(lst)
+		if name == "parents":
+			var rest: Array[DSLObject] = []
+			for i in range(1, maps.size()):
+				rest.append(maps[i])
+			return DSLChainMap.new(rest)
+		return super._dsl_getattribute(name)
+
 	func magic_keys(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLChainMap
 		var seen: Array[DSLObject] = []
-		for m in (self_obj as DSLChainMap).maps:
-			var raw_m = m as DSLDict
-			if raw_m == null:
-				continue
-			for k in raw_m.dict:
-				seen.append(raw_m._original_key_obj(k))
+		for k in self_obj._chain_ordered_keys(self_obj):
+			seen.append(self_obj._original_key_of(k))
 		return DSLDictKeys.new(seen)
+
+	func magic_values(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLChainMap
+		var out: Array[DSLObject] = []
+		for k in self_obj._chain_ordered_keys(self_obj):
+			out.append(self_obj._chain_lookup(self_obj._original_key_of(k)))
+		return DSLList.new(out)
+
+	func magic_items(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLChainMap
+		var out: Array[DSLObject] = []
+		for k in self_obj._chain_ordered_keys(self_obj):
+			var ko = self_obj._original_key_of(k)
+			out.append(DSLTuple.new([ko, self_obj._chain_lookup(ko)] as Array[DSLObject]))
+		return DSLList.new(out)
 
 	func _dsl_iter() -> DSLIterator:
 		var ks = magic_keys([self] as Array[DSLObject], {} as Dictionary[String, DSLObject])
@@ -14895,12 +14992,37 @@ class DSLChainMap extends DSLObject:
 		var out = DSLChainMap.new(new_maps)
 		return out
 
-	func builtin_parents(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+	## ChainMap.copy(): 浅拷贝 (maps 列表复制, 映射对象共享)
+	func builtin_copy(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLChainMap
-		var rest: Array[DSLObject] = []
-		for i in range(1, self_obj.maps.size()):
-			rest.append(self_obj.maps[i])
-		return DSLChainMap.new(rest)
+		var new_maps: Array[DSLObject] = []
+		new_maps.append_array(self_obj.maps)
+		return DSLChainMap.new(new_maps)
+
+	## ChainMap.get(key[, default]): 链式查找, 缺键返回 default (缺省 None)
+	func builtin_get(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLChainMap
+		var r = self_obj._chain_lookup(DSLObject._unwrap_dsl(args[1]))
+		if r != null:
+			return r
+		if args.size() >= 3:
+			return args[2]
+		return DSLNone.new()
+
+	## ChainMap.pop(key[, default]): 只弹首映射, 缺键有 default 返回之, 否则按 CPython 文案报错
+	## (str(e) 为消息字符串的 repr 形态, 消息预先带引号构造)
+	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLChainMap
+		var key = DSLObject._unwrap_dsl(args[1])
+		var c = self_obj.maps[0].magic_contains([self_obj.maps[0], key] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if c is DSLBool and (c as DSLBool).value:
+			var v = self_obj.maps[0]._dsl_getitem(key)
+			self_obj.maps[0]._dsl_delitem(key)
+			return v
+		if args.size() >= 3:
+			return args[2]
+		self_obj.last_error = 'KeyError: "Key not found in the first mapping: %s"' % DSLObject._py_repr(key)
+		return null
 
 ## collections.UserDict / UserList / UserString 的包装基类形态 (data 属性 + 协议转发)
 class DSLUserDict extends DSLObject:
@@ -14913,6 +15035,51 @@ class DSLUserDict extends DSLObject:
 
 	func _type_name() -> String:
 		return "UserDict"
+
+	## CPython Mapping.__eq__ 语义: 双方均为映射时按 dict(self) == dict(other) 比较
+	func _ud_eq_mapping(self_obj: DSLUserDict, other: DSLObject) -> bool:
+		for k in self_obj.data.dict:
+			var mine = self_obj.data.dict[k]
+			var ko = self_obj.data._original_key_obj(k)
+			var theirs = other._dsl_getitem(ko)
+			if other.last_error != "":
+				other.last_error = ""
+				return false
+			if mine == null or theirs == null:
+				return false
+			if not mine._dsl_eq(theirs):
+				return false
+		# 反向: other 有而 self 没有的键
+		var okeys = other._dsl_iter()
+		if okeys == null:
+			return false
+		while okeys.has_next():
+			var k = okeys.next()
+			if okeys.suspended:
+				break
+			var c = self_obj.data.magic_contains([self_obj.data, k] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if not (c is DSLBool and (c as DSLBool).value):
+				return false
+		return true
+
+	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var self_obj = args[0] as DSLUserDict
+		var other = DSLObject._unwrap_dsl(args[1])
+		if other is DSLUserDict:
+			return DSLBool.new(self_obj._ud_eq_mapping(self_obj, other) and (other as DSLUserDict)._ud_eq_mapping(other, self_obj))
+		if other is DSLDict or other is DSLDefaultDict or other is DSLChainMap:
+			return DSLBool.new(self_obj._ud_eq_mapping(self_obj, other))
+		return DSLBool.new(false)
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var eq = magic_eq(args, _kwargs)
+		return DSLBool.new(not (eq as DSLBool).value)
+
+	## 属性面: data 暴露包装字典本身 (CPython UserDict.data)
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "data":
+			return data
+		return super._dsl_getattribute(name)
 
 	func _dsl_getitem(index: DSLObject) -> DSLObject:
 		var r = data._dsl_getitem(index)
@@ -14935,28 +15102,34 @@ class DSLUserDict extends DSLObject:
 			data.last_error = ""
 
 	func magic_contains(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return data.magic_contains([data, args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		var self_obj = args[0] as DSLUserDict
+		return self_obj.data.magic_contains([self_obj.data, args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 
 	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(data.dict.size())
+		var self_obj = args[0] as DSLUserDict
+		return DSLInteger.pooled(self_obj.data.dict.size())
 
 	func _dsl_iter() -> DSLIterator:
 		return data._dsl_iter()
 
 	func _dsl_str() -> String:
-		return "UserDict(" + data._dsl_str() + ")"
+		return data._dsl_str()
 
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLString.new(_dsl_str())
+		var self_obj = args[0] as DSLUserDict
+		return DSLString.new(self_obj.data._dsl_str())
 
-	func magic_keys(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return data.builtin_keys([data] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+	func magic_keys(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserDict
+		return self_obj.data.builtin_keys([self_obj.data] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 
-	func magic_values(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return data.builtin_values([data] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+	func magic_values(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserDict
+		return self_obj.data.builtin_values([self_obj.data] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 
-	func magic_items(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return data.builtin_items([data] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+	func magic_items(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserDict
+		return self_obj.data.builtin_items([self_obj.data] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 
 	func builtin_get(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLUserDict
@@ -14968,6 +15141,31 @@ class DSLUserDict extends DSLObject:
 	func builtin_copy(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLUserDict
 		return DSLUserDict.new(self_obj.data.builtin_copy([self_obj.data] as Array[DSLObject], {} as Dictionary[String, DSLObject]) as DSLDict)
+
+	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserDict
+		var rest: Array[DSLObject] = [self_obj.data]
+		for i in range(1, args.size()):
+			rest.append(args[i])
+		return self_obj.data.builtin_pop(rest, {} as Dictionary[String, DSLObject])
+
+	func builtin_update(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserDict
+		var rest: Array[DSLObject] = [self_obj.data]
+		for i in range(1, args.size()):
+			rest.append(args[i])
+		return self_obj.data.builtin_update(rest, _kwargs)
+
+	func builtin_clear(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserDict
+		return self_obj.data.builtin_clear([self_obj.data] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+
+	func builtin_setdefault(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserDict
+		var rest: Array[DSLObject] = [self_obj.data]
+		for i in range(1, args.size()):
+			rest.append(args[i])
+		return self_obj.data.builtin_setdefault(rest, {} as Dictionary[String, DSLObject])
 
 ## collections.UserList: 列表协议转发到 data
 class DSLUserList extends DSLObject:
@@ -14981,14 +15179,27 @@ class DSLUserList extends DSLObject:
 	func _type_name() -> String:
 		return "UserList"
 
+	## CPython UserList.__cast: 另一 UserList 取其 data, 其余原样
+	func _cast_other(other: DSLObject) -> DSLObject:
+		if other is DSLUserList:
+			return (other as DSLUserList).data
+		return other
+
 	func _dsl_getitem(index: DSLObject) -> DSLObject:
 		return data._dsl_getitem(index)
 
 	func _dsl_setitem(index: DSLObject, value: DSLObject) -> void:
 		data._dsl_setitem(index, value)
 
+	func _dsl_delitem(index: DSLObject) -> void:
+		data._dsl_delitem(index)
+		if data.last_error != "":
+			last_error = data.last_error
+			data.last_error = ""
+
 	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLInteger.pooled(data.items.size())
+		var self_obj = args[0] if args.size() >= 1 else self
+		return DSLInteger.pooled((self_obj as DSLUserList).data.items.size())
 
 	func _dsl_iter() -> DSLIterator:
 		return data._dsl_iter()
@@ -14996,49 +15207,172 @@ class DSLUserList extends DSLObject:
 	func _dsl_bool() -> bool:
 		return data.items.size() > 0
 
+	## CPython UserList.__repr__ 为包装列表自身的列表形态
 	func _dsl_str() -> String:
-		return "UserList(" + data._dsl_str() + ")"
+		return data._dsl_str()
 
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		return DSLString.new(_dsl_str())
+		var self_obj = args[0] if args.size() >= 1 else self
+		return DSLString.new((self_obj as DSLUserList).data._dsl_str())
 
+	## CPython UserList.__eq__ 按 data 与 cast(other) 的列表相等比较
 	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
-		return data.magic_eq([data, args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject]) as DSLBool
+		var self_obj = args[0] if args.size() >= 1 else self
+		var other = DSLObject._unwrap_dsl(args[1])
+		var cast = (self_obj as DSLUserList)._cast_other(other)
+		if cast is DSLList:
+			return DSLBool.new((self_obj as DSLUserList).data._dsl_eq(cast))
+		return DSLBool.new(false)
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var eq = magic_eq(args, _kwargs)
+		return DSLBool.new(not (eq as DSLBool).value)
+
+	func magic_lt(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		var self_obj = args[0] if args.size() >= 1 else self
+		var cast = (self_obj as DSLUserList)._cast_other(DSLObject._unwrap_dsl(args[1]))
+		if cast is DSLList:
+			return (self_obj as DSLUserList).data.magic_lt([self_obj.data, cast] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		last_error = "TypeError: '<' not supported between instances of 'UserList' and '%s'" % (cast._type_name() if cast != null else "object")
+		return null
+
+	func magic_add(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] if args.size() >= 1 else self
+		var cast = (self_obj as DSLUserList)._cast_other(DSLObject._unwrap_dsl(args[1]))
+		if cast is DSLList:
+			return DSLUserList.new((self_obj as DSLUserList).data.magic_add([self_obj.data, cast] as Array[DSLObject], {} as Dictionary[String, DSLObject]) as DSLList)
+		last_error = "TypeError: can only concatenate UserList (not \"%s\") to UserList" % (cast._type_name() if cast != null else "object")
+		return null
+
+	func magic_mul(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] if args.size() >= 1 else self
+		return DSLUserList.new((self_obj as DSLUserList).data.magic_mul([self_obj.data, DSLObject._unwrap_dsl(args[1])] as Array[DSLObject], {} as Dictionary[String, DSLObject]) as DSLList)
+
+	func magic_rmul(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return magic_mul(args, _kwargs)
+
+	func magic_iadd(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] if args.size() >= 1 else self
+		var cast = (self_obj as DSLUserList)._cast_other(DSLObject._unwrap_dsl(args[1]))
+		if cast is DSLList:
+			(self_obj as DSLUserList).data.items.append_array((cast as DSLList).items)
+			return self_obj
+		last_error = "TypeError: '%s' object is not iterable" % (cast._type_name() if cast != null else "object")
+		return null
 
 	func builtin_append(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
 		if args.size() != 2:
-			last_error = "TypeError: append() takes exactly one argument (%d given)" % (args.size() - 1)
+			self_obj.last_error = "TypeError: append() takes exactly one argument (%d given)" % (args.size() - 1)
 			return null
-		data.items.append(args[1])
+		self_obj.data.items.append(args[1])
 		return DSLNone.new()
 
 	func builtin_extend(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
 		if args.size() != 2:
-			last_error = "TypeError: extend() takes exactly one argument (%d given)" % (args.size() - 1)
+			self_obj.last_error = "TypeError: extend() takes exactly one argument (%d given)" % (args.size() - 1)
 			return null
 		var it = args[1]._dsl_iter()
 		if it == null:
-			last_error = "TypeError: '%s' object is not iterable" % args[1]._type_name()
+			self_obj.last_error = "TypeError: '%s' object is not iterable" % args[1]._type_name()
 			return null
 		while it.has_next():
-			data.items.append(it.next())
+			self_obj.data.items.append(it.next())
 			if it.suspended:
 				break
 		return DSLNone.new()
 
-	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		if data.items.is_empty():
-			last_error = "IndexError: pop from empty list"
+	func builtin_insert(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		if args.size() != 3:
+			self_obj.last_error = "TypeError: insert() takes exactly two arguments (%d given)" % (args.size() - 1)
 			return null
-		var idx = data.items.size() - 1
+		var idx = self_obj.data._seq_index_arg(args, 1, 0)
+		if self_obj.data.last_error != "":
+			self_obj.last_error = self_obj.data.last_error
+			self_obj.data.last_error = ""
+			return null
+		var val = args[2]
+		if idx < 0:
+			idx = maxi(0, self_obj.data.items.size() + idx)
+		idx = mini(idx, self_obj.data.items.size())
+		self_obj.data.items.insert(idx, val)
+		return DSLNone.new()
+
+	func builtin_pop(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		if self_obj.data.items.is_empty():
+			self_obj.last_error = "IndexError: pop from empty list"
+			return null
+		var idx = self_obj.data.items.size() - 1
 		if args.size() >= 2:
-			var iv = DSLObject._norm_seq_index(args[1], data, "TypeError: list indices must be integers or slices, not %s")
-			if iv == DSLObject.INDEX_ERR:
+			var iv = self_obj.data._seq_index_arg(args, 1, self_obj.data.items.size() - 1)
+			if self_obj.data.last_error != "":
+				self_obj.last_error = self_obj.data.last_error
+				self_obj.data.last_error = ""
 				return null
 			idx = iv
-		var v = data.items[idx]
-		data.items.remove_at(idx)
+		var v = self_obj.data.items[idx]
+		self_obj.data.items.remove_at(idx)
 		return v
+
+	func builtin_remove(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		for i in range(self_obj.data.items.size()):
+			var it = self_obj.data.items[i]
+			var eq = it.magic_eq([it, args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if eq is DSLBool and (eq as DSLBool).value:
+				self_obj.data.items.remove_at(i)
+				return DSLNone.new()
+		self_obj.last_error = "ValueError: list.remove(x): x not in list"
+		return null
+
+	func builtin_clear(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		self_obj.data.items.clear()
+		return DSLNone.new()
+
+	func builtin_copy(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		var out: Array[DSLObject] = []
+		out.append_array(self_obj.data.items)
+		return DSLUserList.new(DSLList.new(out))
+
+	func builtin_count(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		var cnt = 0
+		for it in self_obj.data.items:
+			var eq = it.magic_eq([it, args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if eq is DSLBool and (eq as DSLBool).value:
+				cnt += 1
+		return DSLInteger.pooled(cnt)
+
+	func builtin_index(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		for i in range(self_obj.data.items.size()):
+			var it = self_obj.data.items[i]
+			var eq = it.magic_eq([it, args[1]] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			if eq is DSLBool and (eq as DSLBool).value:
+				return DSLInteger.pooled(i)
+		self_obj.last_error = "ValueError: %s is not in list" % DSLObject._py_repr(args[1])
+		return null
+
+	func builtin_reverse(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		self_obj.data.items.reverse()
+		return DSLNone.new()
+
+	func builtin_sort(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var self_obj = args[0] as DSLUserList
+		var rest: Array[DSLObject] = [self_obj.data]
+		return self_obj.data.builtin_sort(rest, kwargs)
+
+	## 属性面: data 暴露包装列表本身 (CPython UserList.data)
+	func _dsl_getattribute(name: String) -> DSLObject:
+		if name == "data":
+			return data
+		return super._dsl_getattribute(name)
 
 ## collections.UserString: 字符串协议转发到 data
 class DSLUserString extends DSLObject:
@@ -24273,6 +24607,12 @@ class Parser:
 			var stmt = declaration()
 			if stmt != null:
 				statements.append(stmt)
+		# 解析失败的行号兜底: 中止点的当前 token 即首个报错位置 (精确站点经 error_at 记录)
+		if report.has_error and report.error_line == 0:
+			var tok = peek()
+			if tok.type == TokenType.EOF and current > 0:
+				tok = tokens[current - 1]
+			report.error_line = tok.line
 		if not report.has_error:
 			_walk_yield_stmt(statements, 0)
 		if not report.has_error:
@@ -24316,6 +24656,8 @@ class Parser:
 
 	## 词法层记录的未闭合括号报错文本 (空串表示无)
 	var unclosed_error: String = ""
+	## 词法层记录的未闭合括号的开括号行号 (CPython 报开括号所在行)
+	var unclosed_line: int = 0
 
 	## 消费关闭括号, 失败时结合未闭合括号状态还原报错 [br]
 	## 失败 Token 为冒号时说明括号内出现了非法冒号 (如 case 模式截断了语句冒号), 报 invalid syntax [br]
@@ -24330,11 +24672,11 @@ class Parser:
 			if check(TokenType.COLON):
 				# 括号内出现非法冒号 (如 case 模式截断了语句冒号): 优先报 invalid syntax
 				unclosed_error = ""
-				report.error("SyntaxError: invalid syntax")
+				report.error_at("SyntaxError: invalid syntax", peek().line)
 				return null
-			report.error(unclosed_error)
+			report.error_at(unclosed_error, unclosed_line if unclosed_line > 0 else peek().line)
 			return null
-		report.error("Line %d, Column %d: %s" % [peek().line, peek().column, error_msg])
+		report.error_at("Line %d, Column %d: %s" % [peek().line, peek().column, error_msg], peek().line)
 		return null
 
 	## 检查指定偏移处的 Token 是否为指定类型 (不消费 Token) [br]
@@ -24364,7 +24706,7 @@ class Parser:
 	func consume(type: int, error_msg: String) -> Token:
 		if check(type):
 			return advance()
-		report.error("Line %d, Column %d: %s" % [peek().line, peek().column, error_msg])
+		report.error_at("Line %d, Column %d: %s" % [peek().line, peek().column, error_msg], peek().line)
 		return null
 	
 	## 跳过连续的换行 Token (NEWLINE) [br]
@@ -24786,7 +25128,7 @@ class Parser:
 				report.error("duplicate argument '%s' in function definition" % prm.name)
 				return null
 			seen[prm.name] = true
-		var body = block()
+		var body = block("function definition", colon.line)
 		var func_stmt = FunctionStmt.new(name, params, body)
 		func_stmt.return_annotation = return_ann
 		func_stmt.doc = _capture_doc(body)
@@ -24865,7 +25207,7 @@ class Parser:
 		var colon = consume(TokenType.COLON, "expected ':'")
 		if colon == null:
 			return null
-		var body = block()
+		var body = block("class definition", colon.line)
 		var class_stmt = ClassStmt.new(name_tok.lexeme, base_exprs, body, kw_bases, starkw_bases, base_layout)
 		class_stmt.doc = _capture_doc(body)
 		return class_stmt
@@ -25128,12 +25470,12 @@ class Parser:
 		var colon = consume(TokenType.COLON, "expected ':'")
 		if colon == null:
 			return null
-		var then_branch = block()
+		var then_branch = block("'if' statement", colon.line)
 		if report.has_error:
 			return null
 		# 行内体 (或缩进块) 之后跳过换行, 使同缩进的 elif / else 能接续
 		skip_newlines()
-		
+
 		var elif_branches = []
 		while match_types([TokenType.ELIF]):
 			var elif_cond = simple_expression()
@@ -25142,20 +25484,20 @@ class Parser:
 			colon = consume(TokenType.COLON, "expected ':'")
 			if colon == null:
 				return null
-			elif_branches.append([elif_cond, block()])
+			elif_branches.append([elif_cond, block("'elif' statement", colon.line)])
 			if report.has_error:
 				return null
 			skip_newlines()
-				
+
 		var else_branch = []
 		if match_types([TokenType.ELSE]):
 			colon = consume(TokenType.COLON, "expected ':'")
 			if colon == null:
 				return null
-			else_branch = block()
+			else_branch = block("'else' statement", colon.line)
 			if report.has_error:
 				return null
-			
+
 		return IfStmt.new(condition, then_branch, elif_branches, else_branch)
 
 	## 前瞻判断当前语句是否为 match 语句 (软关键字消歧) [br]
@@ -25330,7 +25672,7 @@ class Parser:
 		if check(TokenType.NEWLINE) and (current + 1 >= tokens.size() or tokens[current + 1].type != TokenType.INDENT):
 			report.error("IndentationError: expected an indented block after 'case' statement on line %d" % colon.line)
 			return null
-		var body = block()
+		var body = block("'case' statement", colon.line)
 		if report.has_error:
 			return null
 		return MatchCase.new(pattern, guard, body)
@@ -25793,15 +26135,16 @@ class Parser:
 		var colon = consume(TokenType.COLON, "expected ':'")
 		if colon == null:
 			return null
-		var body = block()
+		var body = block("'while' statement", colon.line)
 		if report.has_error:
 			return null
-			
+
 		var while_stmt = WhileStmt.new(condition, body)
 		skip_newlines()
 		if match_types([TokenType.ELSE]):
-			consume(TokenType.COLON, "expected ':'")
-			while_stmt.set_meta("_else_body", block())
+			var else_colon = consume(TokenType.COLON, "expected ':'")
+			if else_colon != null:
+				while_stmt.set_meta("_else_body", block("'else' statement", else_colon.line))
 		return while_stmt
 		
 	## 解析 for 循环语句 [br]
@@ -25830,16 +26173,17 @@ class Parser:
 		var colon = consume(TokenType.COLON, "expected ':'")
 		if colon == null:
 			return null
-		var body = block()
+		var body = block("'for' statement", colon.line)
 		if report.has_error:
 			return null
-			
+
 		var for_stmt = ForStmt.new(targets, iterable, body)
 		for_stmt.tuple_target = tuple_form
 		skip_newlines()
 		if match_types([TokenType.ELSE]):
-			consume(TokenType.COLON, "expected ':'")
-			for_stmt.set_meta("_else_body", block())
+			var else_colon = consume(TokenType.COLON, "expected ':'")
+			if else_colon != null:
+				for_stmt.set_meta("_else_body", block("'else' statement", else_colon.line))
 		return for_stmt
 
 	## 解析 with 语句 [br]
@@ -25858,7 +26202,7 @@ class Parser:
 				var p_colon = consume(TokenType.COLON, "expected ':'")
 				if p_colon == null:
 					return null
-				var p_body = block()
+				var p_body = block("'with' statement", p_colon.line)
 				if report.has_error:
 					return null
 				return WithStmt.new(paren_items, p_body)
@@ -25890,7 +26234,7 @@ class Parser:
 		var colon = consume(TokenType.COLON, "expected ':'")
 		if colon == null:
 			return null
-		var body = block()
+		var body = block("'with' statement", colon.line)
 		if report.has_error:
 			return null
 		return WithStmt.new(items, body)
@@ -25932,10 +26276,10 @@ class Parser:
 		var try_colon = consume(TokenType.COLON, "expected ':'")
 		if try_colon == null:
 			return null
-		var try_body = try_block()
+		var try_body = try_block("'try' statement", try_colon.line)
 		if report.has_error:
 			return null
-		
+
 		var except_clauses: Array[ExceptClause] = []
 		var saw_starred = false
 		var saw_plain = false
@@ -25965,9 +26309,9 @@ class Parser:
 			var colon = consume(TokenType.COLON, "expected ':'")
 			if colon == null:
 				return null
-			except_clauses.append(ExceptClause.new(exc_type, as_name, block(), starred))
+			except_clauses.append(ExceptClause.new(exc_type, as_name, block("'except' statement", colon.line), starred))
 			skip_newlines()
-		
+
 		# else 子句: 必须在所有 except 之后、finally 之前
 		var else_body: Array[Stmt] = []
 		skip_newlines()
@@ -25975,15 +26319,15 @@ class Parser:
 			var else_colon = consume(TokenType.COLON, "expected ':'")
 			if else_colon == null:
 				return null
-			else_body = block()
-		
+			else_body = block("'else' statement", else_colon.line)
+
 		var finally_body: Array[Stmt] = []
 		skip_newlines()
 		if match_types([TokenType.FINALLY]):
 			var colon2 = consume(TokenType.COLON, "expected ':'")
 			if colon2 == null:
 				return null
-			finally_body = block()
+			finally_body = block("'finally' statement", colon2.line)
 		
 		if except_clauses.is_empty() and finally_body.is_empty():
 			var debug_tok = peek()
@@ -25994,11 +26338,17 @@ class Parser:
 	
 	## 解析 try 代码块, 与 block() 类似, 但遇到 except/finally 时停止 (不消费它们) [br]
 	## 这样嵌套 try-except 内部的 except 归内层, 外层的 except/finally 归外层 [br]
+	## [param owner_phrase] 冒号所属构造的 CPython 短语 (缩进块缺失时用于 IndentationError 消息) [br]
+	## [param owner_line] 冒号所在行号 [br]
 	## [returns] try 块内的语句数组 (实际类型 Array[Stmt])
-	func try_block() -> Array[Stmt]:
+	func try_block(owner_phrase: String = "", owner_line: int = 0) -> Array[Stmt]:
 		var stmts: Array[Stmt] = []
 		if check(TokenType.NEWLINE):
 			advance()
+			if not check(TokenType.INDENT):
+				if owner_phrase != "":
+					report.error_at("IndentationError: expected an indented block after %s on line %d" % [owner_phrase, owner_line], peek().line)
+					return stmts
 			var indent = consume(TokenType.INDENT, "Expected indented block")
 			if indent == null:
 				return stmts
@@ -26058,11 +26408,17 @@ class Parser:
 	## 解析冒号后的代码块, 支持缩进块和单行语句 [br]
 	## 如果下个 Token 是 NEWLINE, 则读取 INDENT 缩进块直到 DEDENT [br]
 	## 否则只读取一条表达式语句 [br]
+	## [param owner_phrase] 冒号所属构造的 CPython 短语 (缩进块缺失时用于 IndentationError 消息) [br]
+	## [param owner_line] 冒号所在行号 [br]
 	## [returns] 代码块内的语句数组 (实际类型 Array[Stmt])
-	func block() -> Array[Stmt]:
+	func block(owner_phrase: String = "", owner_line: int = 0) -> Array[Stmt]:
 		var stmts: Array[Stmt] = []
 		if check(TokenType.NEWLINE):
 			advance()
+			if not check(TokenType.INDENT):
+				if owner_phrase != "":
+					report.error_at("IndentationError: expected an indented block after %s on line %d" % [owner_phrase, owner_line], peek().line)
+					return stmts
 			var indent = consume(TokenType.INDENT, "Expected indented block")
 			if indent == null:
 				return stmts
@@ -26541,9 +26897,21 @@ class Parser:
 		# async/await 是保留字, 出现在表达式位置按 CPython 报通用语法错误,
 		# 而不是让它们作为标识符进入求值阶段报 NameError
 		if check(TokenType.ASYNC) or check(TokenType.AWAIT):
-			report.error("SyntaxError: invalid syntax")
+			report.error_at("SyntaxError: invalid syntax", peek().line)
 			return null
-		report.error("Line %d, Column %d: Unexpected token '%s'" % [peek().line, peek().column, peek().lexeme])
+		# 未闭合括号下的 EOF 报错还原 (与 _consume_bracket_close 同语义): 开括号行号优先
+		if unclosed_error != "":
+			if check(TokenType.COLON):
+				unclosed_error = ""
+				report.error_at("SyntaxError: invalid syntax", peek().line)
+				return null
+			report.error_at(unclosed_error, unclosed_line if unclosed_line > 0 else peek().line)
+			return null
+		# 语句起点出现 INDENT token: CPython 报 IndentationError: unexpected indent
+		if peek().type == TokenType.INDENT:
+			report.error_at("IndentationError: unexpected indent", peek().line)
+			return null
+		report.error_at("Line %d, Column %d: Unexpected token '%s'" % [peek().line, peek().column, peek().lexeme], peek().line)
 		return null
 
 	## 解析 lambda 表达式: lambda [params]: body [br]
@@ -27630,6 +27998,7 @@ class Parser:
 			return null
 		var sub_parser = Parser.new(report, toks)
 		sub_parser.unclosed_error = lexer.unclosed_error
+		sub_parser.unclosed_line = lexer.unclosed_line
 		# 字段表达式可为元组 (f"{1, 2}" -> "(1, 2)")
 		var expr = sub_parser.tuple_expression()
 		if report.has_error or expr == null:
@@ -28632,7 +29001,7 @@ class Parser:
 		if match_types([TokenType.EQUAL]):
 			# 首个赋值目标也须可赋值 (字面量/表达式报 Invalid assignment target)
 			if not (expr is Variable or expr is GetItem or expr is GetAttr):
-				report.error("Line %d, Column %d: Invalid assignment target" % [previous().line, previous().column])
+				report.error_at("Line %d, Column %d: Invalid assignment target" % [previous().line, previous().column], previous().line)
 				return null
 			# 收集赋值目标链 (支持 a = b = value)
 			var targets = [expr]
@@ -30644,6 +31013,7 @@ class Interpreter:
 		_define_exception("SyntaxError")
 		# TabError (SyntaxError 子类, CPython 同继承关系)
 		_define_exception("TabError", "SyntaxError")
+		_define_exception("IndentationError", "SyntaxError")
 		# 异常组 (PEP 654): 构造校验 / str / repr / subgroup / split 为组特有形态
 		_define_exception("KeyboardInterrupt", "BaseException")
 		_define_exception("BaseExceptionGroup", "BaseException")
@@ -32640,6 +33010,7 @@ class Interpreter:
 			return null
 		var parser = Parser.new(report, toks)
 		parser.unclosed_error = lexer.unclosed_error
+		parser.unclosed_line = lexer.unclosed_line
 		var body = parser.parse()
 		# 模块体首文档字符串 (CPython __doc__ 语义)
 		mod.doc = parser._capture_doc(body)
@@ -33256,8 +33627,14 @@ class Interpreter:
 		cm_methods["__delitem__"] = DSLWrappedDescriptor.new("__delitem__", Callable(cm_proto, "_dsl_delitem"))
 		cm_methods["__repr__"] = DSLWrappedDescriptor.new("__repr__", Callable(cm_proto, "magic_repr"))
 		cm_methods["keys"] = DSLMethodDescriptor.new("keys", Callable(cm_proto, "magic_keys"))
+		cm_methods["values"] = DSLMethodDescriptor.new("values", Callable(cm_proto, "magic_values"))
+		cm_methods["items"] = DSLMethodDescriptor.new("items", Callable(cm_proto, "magic_items"))
+		cm_methods["get"] = DSLMethodDescriptor.new("get", Callable(cm_proto, "builtin_get"))
+		cm_methods["pop"] = DSLMethodDescriptor.new("pop", Callable(cm_proto, "builtin_pop"))
+		cm_methods["copy"] = DSLMethodDescriptor.new("copy", Callable(cm_proto, "builtin_copy"))
 		cm_methods["new_child"] = DSLMethodDescriptor.new("new_child", Callable(cm_proto, "builtin_new_child"))
-		cm_methods["parents"] = DSLMethodDescriptor.new("parents", Callable(cm_proto, "builtin_parents"))
+		cm_methods["__eq__"] = DSLWrappedDescriptor.new("__eq__", Callable(cm_proto, "magic_eq"))
+		cm_methods["__ne__"] = DSLWrappedDescriptor.new("__ne__", Callable(cm_proto, "magic_ne"))
 		var cm_cls = DSLClass.new("ChainMap", globals.get_val_safe("object"), cm_methods, self)
 		cm_cls.klass = _builtin_type_classes["type"]
 		cm_cls.module_prefix = "collections."
@@ -33278,6 +33655,12 @@ class Interpreter:
 		ud_methods["values"] = DSLMethodDescriptor.new("values", Callable(ud_proto, "magic_values"))
 		ud_methods["items"] = DSLMethodDescriptor.new("items", Callable(ud_proto, "magic_items"))
 		ud_methods["copy"] = DSLMethodDescriptor.new("copy", Callable(ud_proto, "builtin_copy"))
+		ud_methods["pop"] = DSLMethodDescriptor.new("pop", Callable(ud_proto, "builtin_pop"))
+		ud_methods["update"] = DSLMethodDescriptor.new("update", Callable(ud_proto, "builtin_update"))
+		ud_methods["clear"] = DSLMethodDescriptor.new("clear", Callable(ud_proto, "builtin_clear"))
+		ud_methods["setdefault"] = DSLMethodDescriptor.new("setdefault", Callable(ud_proto, "builtin_setdefault"))
+		ud_methods["__eq__"] = DSLWrappedDescriptor.new("__eq__", Callable(ud_proto, "magic_eq"))
+		ud_methods["__ne__"] = DSLWrappedDescriptor.new("__ne__", Callable(ud_proto, "magic_ne"))
 		var ud_cls = DSLClass.new("UserDict", globals.get_val_safe("object"), ud_methods, self)
 		ud_cls.klass = _builtin_type_classes["type"]
 		ud_cls.module_prefix = "collections."
@@ -33291,10 +33674,25 @@ class Interpreter:
 		ul_methods["__getitem__"] = DSLWrappedDescriptor.new("__getitem__", Callable(ul_proto, "_dsl_getitem"))
 		ul_methods["__setitem__"] = DSLWrappedDescriptor.new("__setitem__", Callable(ul_proto, "_dsl_setitem"))
 		ul_methods["__eq__"] = DSLWrappedDescriptor.new("__eq__", Callable(ul_proto, "magic_eq"))
+		ul_methods["__ne__"] = DSLWrappedDescriptor.new("__ne__", Callable(ul_proto, "magic_ne"))
+		ul_methods["__lt__"] = DSLWrappedDescriptor.new("__lt__", Callable(ul_proto, "magic_lt"))
+		ul_methods["__add__"] = DSLWrappedDescriptor.new("__add__", Callable(ul_proto, "magic_add"))
+		ul_methods["__iadd__"] = DSLWrappedDescriptor.new("__iadd__", Callable(ul_proto, "magic_iadd"))
+		ul_methods["__mul__"] = DSLWrappedDescriptor.new("__mul__", Callable(ul_proto, "magic_mul"))
+		ul_methods["__rmul__"] = DSLWrappedDescriptor.new("__rmul__", Callable(ul_proto, "magic_rmul"))
+		ul_methods["__delitem__"] = DSLWrappedDescriptor.new("__delitem__", Callable(ul_proto, "_dsl_delitem"))
 		ul_methods["__repr__"] = DSLWrappedDescriptor.new("__repr__", Callable(ul_proto, "magic_repr"))
 		ul_methods["append"] = DSLMethodDescriptor.new("append", Callable(ul_proto, "builtin_append"))
 		ul_methods["extend"] = DSLMethodDescriptor.new("extend", Callable(ul_proto, "builtin_extend"))
 		ul_methods["pop"] = DSLMethodDescriptor.new("pop", Callable(ul_proto, "builtin_pop"))
+		ul_methods["insert"] = DSLMethodDescriptor.new("insert", Callable(ul_proto, "builtin_insert"))
+		ul_methods["remove"] = DSLMethodDescriptor.new("remove", Callable(ul_proto, "builtin_remove"))
+		ul_methods["clear"] = DSLMethodDescriptor.new("clear", Callable(ul_proto, "builtin_clear"))
+		ul_methods["copy"] = DSLMethodDescriptor.new("copy", Callable(ul_proto, "builtin_copy"))
+		ul_methods["count"] = DSLMethodDescriptor.new("count", Callable(ul_proto, "builtin_count"))
+		ul_methods["index"] = DSLMethodDescriptor.new("index", Callable(ul_proto, "builtin_index"))
+		ul_methods["reverse"] = DSLMethodDescriptor.new("reverse", Callable(ul_proto, "builtin_reverse"))
+		ul_methods["sort"] = DSLMethodDescriptor.new("sort", Callable(ul_proto, "builtin_sort"))
 		var ul_cls = DSLClass.new("UserList", globals.get_val_safe("object"), ul_methods, self)
 		ul_cls.klass = _builtin_type_classes["type"]
 		ul_cls.module_prefix = "collections."
@@ -42355,6 +42753,7 @@ class Interpreter:
 			return null
 		var sub_parser = Parser.new(report, toks)
 		sub_parser.unclosed_error = lexer.unclosed_error
+		sub_parser.unclosed_line = lexer.unclosed_line
 		var expr = sub_parser.simple_expression()
 		if report.has_error or expr == null:
 			if report.has_error and sub_parser.unclosed_error != "" and report.last_error != "SyntaxError: invalid syntax":
@@ -44779,33 +45178,19 @@ class Interpreter:
 	## 动态源码解析: 语法错误按 CPython 的 SyntaxError 异常形态抛出
 	## [returns] DSLCode, 失败返回 null (异常已抛)
 	func _compile_dynamic(source: String, filename: String, mode: String) -> DSLCode:
+		report.error_line = 0
 		var lexer = Lexer.new(report, source)
 		lexer.int_max_str_digits = _int_max_str_digits
 		var toks = lexer.scan()
 		if report.has_error:
-			var msg = report.last_error
-			var err_type = "SyntaxError"
-			if msg.begins_with("SyntaxError: "):
-				msg = msg.substr(13)
-			elif msg.begins_with("TabError: "):
-				err_type = "TabError"
-				msg = msg.substr(10)
-			report.clear_error()
-			raise_exception(err_type, "%s (%s, line 1)" % [msg, filename])
+			_raise_compile_error(filename)
 			return null
 		var parser = Parser.new(report, toks)
 		parser.unclosed_error = lexer.unclosed_error
+		parser.unclosed_line = lexer.unclosed_line
 		var body = parser.parse()
 		if report.has_error:
-			var msg = report.last_error
-			var err_type = "SyntaxError"
-			if msg.begins_with("SyntaxError: "):
-				msg = msg.substr(13)
-			elif msg.begins_with("TabError: "):
-				err_type = "TabError"
-				msg = msg.substr(10)
-			report.clear_error()
-			raise_exception("SyntaxError", "%s (%s, line 1)" % [msg, filename])
+			_raise_compile_error(filename)
 			return null
 		var code = DSLCode.new()
 		code.source = source
@@ -44813,6 +45198,29 @@ class Interpreter:
 		code.mode = mode
 		code.statements = body
 		return code
+
+	## 动态编译错误的统一上抛: 取词法器/解析器记录的实际行号 (缺省 1), [br]
+	## 归一消息形态为 `<msg> (<filename>, line N)` — 剥离解析器的 `Line N, Column M: ` 前缀, [br]
+	## 类型按词法层前缀识别 (SyntaxError / TabError / IndentationError) [br]
+	## [param filename] compile 实参的文件名
+	func _raise_compile_error(filename: String):
+		var msg = report.last_error
+		var err_type = "SyntaxError"
+		if msg.begins_with("SyntaxError: "):
+			msg = msg.substr(13)
+		elif msg.begins_with("TabError: "):
+			err_type = "TabError"
+			msg = msg.substr(10)
+		elif msg.begins_with("IndentationError: "):
+			err_type = "IndentationError"
+			msg = msg.substr(18)
+		# 归一: 剥离解析器站点的 `Line N, Column M: ` 前缀 (行号已入尾缀)
+		var m = RegEx.create_from_string("^Line \\d+, Column \\d+: ").search(msg)
+		if m != null:
+			msg = msg.substr(m.get_string().length())
+		var err_line = report.error_line if report.error_line > 0 else 1
+		report.clear_error()
+		raise_exception(err_type, "%s (%s, line %d)" % [msg, filename, err_line])
 
 	## 动态代码执行环境的构造: globals 实参为 DSLDict 时快照建独立环境 [br]
 	## (CPython 的活 dict 视图语义简化为快照写回, 差异文档化)
@@ -49352,6 +49760,7 @@ func set_preset_script(source: String) -> void:
 		else:
 			var parser = Parser.new(r, tokens)
 			parser.unclosed_error = lexer.unclosed_error
+			parser.unclosed_line = lexer.unclosed_line
 			_preset_statements = parser.parse()
 			if not r.has_error and parser.unclosed_error != "":
 				r.error(parser.unclosed_error)
@@ -49455,6 +49864,7 @@ func _parse_main_source(source: String) -> void:
 	if not report.has_error:
 		var parser = Parser.new(report, tokens)
 		parser.unclosed_error = lexer.unclosed_error
+		parser.unclosed_line = lexer.unclosed_line
 		statements = parser.parse()
 		if not report.has_error and parser.unclosed_error != "":
 			report.error(parser.unclosed_error)

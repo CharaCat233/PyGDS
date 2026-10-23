@@ -158,6 +158,14 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_compare_chain.py](../../ci/cases/syntax_compare_chain.py)
 
+### syntax_compile_line
+
+- 职责: compile/exec 语法错误的行号上抛与消息形态 (尾缀 `(<file>, line N)` 为实际出错行, 缩进块缺失报 `IndentationError: unexpected indent`, 括号未闭合报开括号所在行, 行号状态随 compile 复位)
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_compile_line.py](../../ci/cases/syntax_compile_line.py)
+
+行号断言经消息尾缀 `line N` 提取 (PyGDS 无 re 模块, 用字符串定位); 缩进块缺失的完整消息与 CPython 一致 (`IndentationError: unexpected indent (<t>, line 2)`), 其余解析错误的消息文本为 PyGDS 既有措辞 (类型统一 SyntaxError 族), 双端断言只覆盖异常类与行号
+
 ### syntax_continue_outside
 
 - 职责: 循环外 `continue` 触发解析期错误
@@ -1739,6 +1747,14 @@ PyGDS 内置的标准库模块（`math` / `random` / `statistics` / `functools` 
 - 源文件: [ci/cases/module_collections_ordereddict.py](../../ci/cases/module_collections_ordereddict.py)
 
 OrderedDict 间相等比较按键序敏感, 与普通 dict 比较退化为键序无关 (CPython 同语义), `popitem(last=False)` 弹出首个键值对, 空字典报 `dictionary is empty`
+
+### module_collections_wrappers
+
+- 职责: ChainMap/UserDict/UserList 的协议面 (parents 属性/get/pop/copy/data 属性/映射相等/repr 形态/UserList 方法族)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_collections_wrappers.py](../../ci/cases/module_collections_wrappers.py)
+
+ChainMap 的迭代键序为「从最后一张映射开始 update」的字典序 (最后一映射的键在前, 值由最靠前的含键映射决定); `pop`/`del` 首映射缺键报 `KeyError("Key not found in the first mapping: 'x'")` (str(e) 为消息字符串的 repr 形态, 带双引号); ChainMap/UserDict 与 dict 的相等按映射语义 (键值集一致即 True); UserDict/UserList 的 repr 为包装对象自身的 dict/list 形态, `.data` 属性暴露底层容器
 
 ### module_sys
 

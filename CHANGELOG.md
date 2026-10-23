@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.8.8-alpha.4] - 2026-10-23
+
+### 修复
+
+- **CI `module_math` 的 `factorial` 平台 long 宽度炸点（alpha.1~alpha.3 CI 连续失败的根因）**：CPython 的 `math.factorial` 上限检查依赖 C `long` 宽度——Windows（LLP64）`LONG_MAX = 2**31-1`、Linux（LP64）`LONG_MAX = 2**63-1`，`math.factorial(2 ** 31)` 在 Windows 瞬时报 `OverflowError`（PyGDS 对齐此行为），在 Linux 上 2147483648 在 long 范围内而进入分治真实计算（结果约 190 亿位数字），垫片 15s 超时或 OOM（stderr 为空，被判定为「CPython 报错而 PyGDS 正常完成」）；`module_math` 的 `fact-cap` / `fact-big` 形态改为只断言异常类名（factorial 超界消息随平台不同——`exceed 2147483647` vs `exceed 9223372036854775807`——不作双端文本比对）。alpha.3 按误诊「CPython 3.13+ 移除 perm/comb 的 k 上限检查」改删的三个大 k 形态经 CPython 3.13 源码核实为误判（`math_perm_impl` 仍保留 k 的 long long 上限检查且消息全平台一致，`math_comb_impl` 另有 `min(k, n-k)` 对称），已恢复原形态与全量断言；已知问题 P14 条目同步修正
+- **`compile()` / `exec()` 语法错误行号恒为 line 1（I2-33）**：动态编译的错误行号从词法器/解析器上抛——控制台报告器新增出错行号登记（首个错误优先），词法扫描与语法解析的出口兜底记录中止点行号，带行号信息的站点精确登记；`_compile_dynamic` 的异常消息改为 `(<file>, line N)` 实际行号并归一形态（剥离解析器站点的 `Line N, Column M:` 前缀与其后空格），行号状态随每次 compile 复位；语句起点的意外缩进按 CPython 报 `IndentationError: unexpected indent`（异常层级注册 IndentationError 为 SyntaxError 子类），括号未闭合报开括号所在行（`'(' was never closed (<t>, line 1)`）；其余解析错误保持 PyGDS 既有措辞（类型统一 SyntaxError 族），双端断言覆盖异常类与行号
+- **ChainMap / UserDict / UserList 的协议深度缺口（I2-50）**：ChainMap 的 `parents` 由方法改为属性（CPython property 语义）、补 `get` / `pop` / `copy` / `values` / `items` 方法（`pop` 只弹首映射，缺键有 default 返回之、缺省报 `KeyError("Key not found in the first mapping: 'x')")`——str(e) 为消息字符串的 repr 形态）、`__delitem__` 缺键文案同形、`__eq__`/`__ne__` 按 CPython Mapping 语义与 dict 及同类比较、迭代键序改为「从最后一张映射开始 update」的字典序（最后一映射的键在前，值由最靠前的含键映射决定）；UserDict 的 `.data` 属性暴露包装字典、repr 为包装对象自身的 dict 形态、`__eq__`/`__ne__` 映射语义、`keys` / `values` / `items` / `contains` 的转发修正 proto 绑定下的状态取用（此前类级调用读到空原型状态，`keys()` 恒空）、补 `pop` / `update` / `clear` / `setdefault`；UserList 的 `.data` 属性、repr 为包装列表自身的列表形态、`__eq__`/`__ne__`/`__lt__` 列表语义、补 `__delitem__` 协议与 `insert` / `remove` / `clear` / `copy` / `count` / `index` / `reverse` / `sort` 方法及 `__add__` / `__iadd__` / `__mul__` / `__rmul__` 运算符（返回 `UserList` 包装，原地族返回自身保持别名）
+
+### 测试
+
+- 全量用例 409 -> 411（`syntax_compile_line` 覆盖 compile/exec 错误的行号与形态、`module_collections_wrappers` 覆盖 ChainMap/UserDict/UserList 协议面；`module_math` 的 factorial 超界形态改类名断言并恢复大 k 全量断言）
+
 ## [0.8.8-alpha.3] - 2026-10-20
 
 ### 修复

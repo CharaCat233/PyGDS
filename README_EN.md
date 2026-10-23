@@ -205,7 +205,6 @@ The following lists the known differences and limitations between PyGDS and CPyt
 
 | ID | Item | Details |
 | :--- | :--- | :--- |
-| I2-33 | `compile()` / `exec()` syntax-error line number is always line 1 | The lexer / parser does not propagate the error line, so `compile("x = 1\n    y = 2", "<t>", "exec")` reports `(<t>, line 1)` instead of the actual line |
 | I2-35 | repr does not escape non-printable characters | `repr(format(1114111, "c"))` emits the raw U+10FFFF character (CPython yields `'\U0010ffff'`); escaping non-printable code points is constrained by P4 (no Unicode database) and needs an explicit code-point table or range-based rules |
 | I2-45 | Some `dir()` members of functions are not attribute-accessible | `__globals__` / `__closure__` / `__code__` / `__get__` / `__call__` / `__builtins__` are listed by name only while attribute access raises `AttributeError` (all function members listed by CPython are accessible) |
 | I2-48 | Part of the phase-two member-surface expansion is still missing | `functools` `partialmethod` / `recursive_repr` / `singledispatchmethod`, the `NormalDist` method family (`pdf` / `cdf` / `inv_cdf` / `samples` / `from_samples`), and `string.Template` introspection (`is_valid` / `get_identifiers`) |

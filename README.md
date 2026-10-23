@@ -205,7 +205,6 @@ dsl.run()
 
 | 编号 | 内容 | 说明 |
 | :--- | :--- | :--- |
-| I2-33 | `compile()` / `exec()` 语法错误行号恒为 line 1 | 词法器 / 解析器未把出错行号上抛，`compile("x = 1\n    y = 2", "<t>", "exec")` 的异常消息报 `(<t>, line 1)` 而非实际行号 |
 | I2-35 | repr 不转义非可打印字符 | `repr(format(1114111, "c"))` 输出原始 U+10FFFF 字符（CPython 为 `'\U0010ffff'`）；非可打印码点转义受 P4 无 Unicode 数据库限制，需显式码点表或按范围判定 |
 | I2-45 | 函数 `dir()` 全集成员中部分不可属性访问 | `__globals__` / `__closure__` / `__code__` / `__get__` / `__call__` / `__builtins__` 六项仅列名、属性访问报 `AttributeError`（CPython 列出的函数成员全部可访问） |
 | I2-48 | 第二程成员面外扩的部分子集仍缺 | `functools` 的 `partialmethod` / `recursive_repr` / `singledispatchmethod`、`NormalDist` 方法族（`pdf` / `cdf` / `inv_cdf` / `samples` / `from_samples`）、`string.Template` 内省（`is_valid` / `get_identifiers`） |

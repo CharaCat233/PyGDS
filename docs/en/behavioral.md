@@ -158,6 +158,14 @@ Grammar constructs (statements and expressions) and their compile-time `SyntaxEr
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_compare_chain.py](../../ci/cases/syntax_compare_chain.py)
 
+### syntax_compile_line
+
+- Responsibility: line propagation and message shape of compile/exec syntax errors (the `(<file>, line N)` suffix carries the actual error line, a missing indented block raises `IndentationError: unexpected indent`, unclosed brackets report the opening line, and the line state resets across compiles)
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_compile_line.py](../../ci/cases/syntax_compile_line.py)
+
+Line assertions extract the `line N` message suffix (PyGDS has no re module, so plain string search is used); the full message of the missing-indent shape matches CPython (`IndentationError: unexpected indent (<t>, line 2)`), while other parse errors keep PyGDS's own wording (SyntaxError family types) and the dual-end assertions cover only the exception class and line
+
 ### syntax_continue_outside
 
 - Responsibility: `continue` outside a loop raises a parse error
@@ -1739,6 +1747,14 @@ PyGDS's built-in standard library modules (`math` / `random` / `statistics` / `f
 - Source: [ci/cases/module_collections_ordereddict.py](../../ci/cases/module_collections_ordereddict.py)
 
 Equality between two OrderedDicts is key-order sensitive, while comparison against a plain dict falls back to order-insensitive dict equality (CPython semantics); `popitem(last=False)` pops the first pair and an empty dict raises `dictionary is empty`
+
+### module_collections_wrappers
+
+- Responsibility: protocol surface of ChainMap/UserDict/UserList (parents attribute/get/pop/copy/data attribute/mapping equality/repr shapes/UserList method family)
+- Comparison: `same_output`
+- Source: [ci/cases/module_collections_wrappers.py](../../ci/cases/module_collections_wrappers.py)
+
+ChainMap's iteration key order is the dict order of "updating from the last map" (keys of the last map come first, values decided by the nearest map holding the key); a missing key in `pop`/`del` on the first map raises `KeyError("Key not found in the first mapping: 'x'")` (str(e) is the repr form of the message string, double-quoted); equality of ChainMap/UserDict against a dict uses mapping semantics (True when the key-value sets match); UserDict/UserList repr is the wrapped object's own dict/list shape, and the `.data` attribute exposes the underlying container
 
 ### module_sys
 
