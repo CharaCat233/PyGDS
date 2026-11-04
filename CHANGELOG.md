@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.8.8-alpha.5] - 2026-11-4
+
+### 修复
+
+- **CI `module_math` 的 `cbrt` 大参量形态的平台差（alpha.4 CI 失败根因）**：`math.cbrt` 非 IEEE 正确舍入函数，宿主 libm 的结果随平台不同——`cbrt(10**30)` 在 Windows CRT 给精确 `1e10`（PyGDS 的牛顿迭代精化平台无关地对齐此值），glibc 给 `9999999.999998` 量级的 1 ULP 级尾差；`module_math` 的该形态此前为精确值断言（alpha.1 对齐本地 Windows CPython 时引入），在 Linux CI 上为 OUT 分歧——改 `round(,2)` 后比对（与 `module_math_remainder` 的 cbrt 小值 round 纪律同款），双端输出 `10000000000.0`；已知问题 P13 条目补登该形态
+- **`functools.cache_info` 的 namedtuple 协议面（D8）**：`type(fib.cache_info()).__name__` 此前报 `"type"`——注册 `CacheInfo` 类型类并在 `type()` 分派路由；补字段属性（`hits` / `misses` / `maxsize` / `currsize`）、下标与负索引、迭代（恒 4 元素）、元组值相等（`__eq__`/`__ne__` 对 CacheInfo 按字段逐一、对 tuple 按位置）与 `len()` 分派；`repr` / 真值不变
+- **内建魔法描述符与其绑定形态的类型名与 repr（I2-52）**：`type(list.__len__).__name__` 此前报 `"type"`——注册 `wrapper_descriptor`（类级槽）与 `method-wrapper`（实例绑定）类型类并在 `type()` 分派路由，另补 `method_descriptor`（`dict.__getitem__` 等 METH 形态）；实例绑定的 repr 由默认对象形态改为 `<method-wrapper '__len__' of list object>`（名称段对齐 CPython，地址段维持省略的家族形态）；类级 slot wrapper 的 repr 此前已对齐
+- **`operator` 原位族的失败文案与序列重复反射（I2-53）**：`operator.iadd({}, {})` 等原位族失败文案按 CPython 用增强形（`for +=:` 而非 `for +:`，`operator.imul` 的 `min(n-k,k)` 超界消息同理），`_op_binary` 增加增强文本归一参数、`_op_inplace` 底部二元回退逐 op 传入；`operator.imul(2, "x")` 此前报 TypeError——`_op_binary` 路径缺「序列在右」的重复反射（与主表达式路径的平行分派劈裂，陷阱 #25 同款），`_evaluate_binary_op` 补 `_try_reflected_op` 调用（仅 STAR 适用）后双端一致返回 `'xx'`；`int.to_bytes` 的类级 unbound 调用（`int.to_bytes(0, 0, "big", signed=True)`）经复核已正常（此前登记的 None 形态不再复现，登记撤销）
+- **`module_random.py` 头注修正（D11）**：头注仍称「内置 xorshift32 PRNG、数值序列与 CPython 不同」——PRNG 早已为 MT19937 且序列已对齐（`module_random_mt` 断言具体序列），头注改为如实描述；行为面不变
+- **base64 解码的错误通道、异常名与文案（I2-51）**：`binascii.Error` 的异常类留名改为 `'Error'`（CPython 类 `__name__` 不带模块前缀，取值键保留 `binascii.Error` 全名），`type(e).__name__` 双端一致；`b32decode` / `b32hexdecode` 补 padding 前置校验（原串长度须为 8 的倍数、去填充后的有效字符数限 {0,2,4,5,7,8}，校验先于字符校验——`b32decode("ME")` / `"AB CD"` 此前静默解码或报错文案偏离，均报 `binascii.Error: Incorrect padding`）；`a85decode` 的非法字符改走 ValueError 通道并带 offending 字符（`Non-Ascii85 digit found: y`），A85 字母表修正为 85 字符（ASCII 33..117，此前表多出 9 个字符使 `a85decode("y")` 误走溢出路径）、补 CPython 的空白忽略语义（默认忽略 `" \t\n\r\v"`）；`b64decode` 的 padding 错误改 `binascii.Error` 类（消息文本不变）
+
 ## [0.8.8-alpha.4] - 2026-10-23
 
 ### 修复

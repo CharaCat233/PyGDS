@@ -18791,7 +18791,7 @@ class DSLBuiltinFunction extends DSLObject:
 			# CPython 中 Python 层函数成员 (functools.cache 等) repr 与用户函数同形
 			return "<function %s at 0x%x>" % [name, _object_id]
 		if __self__ != null:
-			return "<built-in method '%s' of '%s' object>" % [name, __self__._type_name()]
+			return "<built-in method %s of %s object>" % [name, __self__._type_name()]
 		return "<built-in function %s>" % name
 
 	func magic_repr(_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -19087,6 +19087,7 @@ class DSLLruFunc extends DSLObject:
 ## lru_cache.cache_info() 的返回对象 (CPython collections.namedtuple CacheInfo) [br]
 ## repr 形态 CacheInfo(hits=..., misses=..., maxsize=..., currsize=...)
 class DSLCacheInfo extends DSLObject:
+	static var _type_class: DSLClass = null
 	var hits: int
 	var misses: int
 	var maxsize: Variant
@@ -19108,6 +19109,89 @@ class DSLCacheInfo extends DSLObject:
 
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
+
+	## CPython CacheInfo 为 namedtuple: 字段属性 / 索引 / 元组值相等
+	func _dsl_getattribute(attr_name: String) -> DSLObject:
+		if attr_name == "hits":
+			return DSLInteger.pooled(hits)
+		if attr_name == "misses":
+			return DSLInteger.pooled(misses)
+		if attr_name == "maxsize":
+			return _maxsize_obj()
+		if attr_name == "currsize":
+			return DSLInteger.pooled(currsize)
+		return super._dsl_getattribute(attr_name)
+
+	func _maxsize_obj() -> DSLObject:
+		if maxsize == null:
+			return DSLNone.new()
+		return DSLInteger.pooled(int(maxsize))
+
+	func _field_at(idx: int) -> DSLObject:
+		match idx:
+			0:
+				return DSLInteger.pooled(hits)
+			1:
+				return DSLInteger.pooled(misses)
+			2:
+				return _maxsize_obj()
+			3:
+				return DSLInteger.pooled(currsize)
+		last_error = "IndexError: tuple index out of range"
+		return null
+
+	func _dsl_getitem(index: DSLObject) -> DSLObject:
+		var normed = DSLObject._norm_seq_index(index, self, "TypeError: tuple indices must be integers or slices, not %s")
+		if normed == null:
+			# 错误已由归一助手写入自身通道
+			return null
+		var iv = (normed as DSLInteger).value
+		var i = iv
+		if i < 0:
+			i += 4
+		if i < 0 or i >= 4:
+			last_error = "IndexError: tuple index out of range"
+			return null
+		return _field_at(i)
+
+	func _dsl_iter() -> DSLIterator:
+		var out: Array[DSLObject] = [DSLInteger.pooled(hits), DSLInteger.pooled(misses), _maxsize_obj(), DSLInteger.pooled(currsize)]
+		var lst = DSLList.new(out)
+		lst.iter_snapshot = true
+		return lst._dsl_iter()
+
+	func _dsl_len_hint() -> int:
+		return 4
+
+	func magic_len(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLInteger.pooled(4)
+
+	## 元组值相等: 对 CacheInfo 按字段逐一, 对普通元组按位置
+	func _dsl_eq(other: DSLObject) -> bool:
+		other = DSLObject._unwrap_dsl(other)
+		if other is DSLCacheInfo:
+			var ci = other as DSLCacheInfo
+			return hits == ci.hits and misses == ci.misses and currsize == ci.currsize and _maxsize_eq(ci.maxsize)
+		if other is DSLTuple:
+			var items = (other as DSLTuple).items
+			if items.size() != 4:
+				return false
+			for i in range(4):
+				if not _field_at(i)._dsl_eq(items[i]):
+					return false
+			return true
+		return false
+
+	func _maxsize_eq(other_ms) -> bool:
+		if maxsize == null or other_ms == null:
+			return maxsize == null and other_ms == null
+		return int(maxsize) == int(other_ms)
+
+	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		return DSLBool.new(_dsl_eq(args[1]))
+
+	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
+		return DSLBool.new(not _dsl_eq(args[1]))
 
 ## random.Random 的独立 PRNG 实例 [br]
 ## 持有一份 MT19937 状态, 与模块级全局 PRNG 相互独立 (CPython random.Random 语义)
@@ -19625,9 +19709,12 @@ class DSLMethodWrapper extends DSLObject:
 	
 	func _type_name() -> String:
 		return "method-wrapper"
-	
+
 	func _dsl_str() -> String:
 		return "<method-wrapper '%s' of %s object>" % [descriptor.name, bound_self._type_name()]
+
+	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return DSLString.new(_dsl_str())
 	
 	## 调用包装的魔法方法 [br]
 	## [param kwargs] 关键字参数 [br]
@@ -30831,6 +30918,26 @@ class Interpreter:
 		var future_feature_class = DSLClass.new("_Feature", obj_class, {}, self)
 		future_feature_class.klass = type_class
 		_builtin_type_classes["_Feature"] = future_feature_class
+		# functools.cache_info 的 namedtuple 类型 (CPython collections.CacheInfo 留名 CacheInfo)
+		var cache_info_class = DSLClass.new("CacheInfo", obj_class, {}, self)
+		cache_info_class.klass = type_class
+		_builtin_type_classes["CacheInfo"] = cache_info_class
+		DSLObject._builtin_class_by_name["CacheInfo"] = cache_info_class
+		DSLCacheInfo._type_class = cache_info_class
+		# 魔法描述符与其绑定形态的类型 (CPython: 类级槽为 wrapper_descriptor, 实例绑定为 method-wrapper)
+		var wrapper_desc_class = DSLClass.new("wrapper_descriptor", obj_class, {}, self)
+		wrapper_desc_class.klass = type_class
+		_builtin_type_classes["wrapper_descriptor"] = wrapper_desc_class
+		DSLObject._builtin_class_by_name["wrapper_descriptor"] = wrapper_desc_class
+		var method_wrapper_class = DSLClass.new("method-wrapper", obj_class, {}, self)
+		method_wrapper_class.klass = type_class
+		_builtin_type_classes["method-wrapper"] = method_wrapper_class
+		DSLObject._builtin_class_by_name["method-wrapper"] = method_wrapper_class
+		# 方法描述符 (dict.__getitem__ 等 METH 形态) 的类型
+		var method_descriptor_class = DSLClass.new("method_descriptor", obj_class, {}, self)
+		method_descriptor_class.klass = type_class
+		_builtin_type_classes["method_descriptor"] = method_descriptor_class
+		DSLObject._builtin_class_by_name["method_descriptor"] = method_descriptor_class
 		# 主脚本 __loader__ 的加载器类型 (CPython importlib SourceFileLoader)
 		var loader_type_class = DSLClass.new("SourceFileLoader", obj_class, {}, self)
 		loader_type_class.klass = type_class
@@ -31064,8 +31171,12 @@ class Interpreter:
 		_define_exception("UnicodeError", "ValueError")
 		_define_exception("UnicodeEncodeError", "UnicodeError")
 		_define_exception("UnicodeDecodeError", "UnicodeError")
-		# base64 解码错误族 (CPython binascii.Error, ValueError 子类)
+		# base64 解码错误族 (CPython binascii.Error, ValueError 子类.
+		# CPython 类留名 'Error' — __name__ 呈现不带模块前缀, 取值键保留全名)
 		_define_exception("binascii.Error", "ValueError")
+		var binascii_err_cls = globals.get_val("binascii.Error")
+		if binascii_err_cls is DSLClass:
+			(binascii_err_cls as DSLClass).name = "Error"
 
 		_register_modules()
 		# ellipsis 类型类: type(...) 的返回值 (与 CPython 一致, 不是内建名)
@@ -31680,7 +31791,18 @@ class Interpreter:
 		var text = ""
 		for c in raw.data:
 			text += char(c)
+		# CPython: 原串长度须为 8 的倍数 (padding 缺失/非法先于字符校验报 Incorrect padding)
+		if text.length() % 8 != 0:
+			raise_exception("binascii.Error", "Incorrect padding")
+			return null
 		text = text.to_upper().rstrip("=")
+		# 去填充后的有效字符数: {0, 2, 4, 5, 7} 对应 0/1/2/3/4 字节, 8 (整组) 合法
+		match text.length():
+			0, 2, 4, 5, 7, 8:
+				pass
+			_:
+				raise_exception("binascii.Error", "Incorrect padding")
+				return null
 		const TBL := "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 		var out: Array[int] = []
 		var buf := 0
@@ -31688,7 +31810,7 @@ class Interpreter:
 		for ch in text:
 			var idx = TBL.find(ch)
 			if idx < 0:
-				raise_exception("binascii.Error", "Non-base32 digit found")
+				raise_exception("binascii.Error", "Incorrect padding")
 				return null
 			buf = (buf << 5) | idx
 			bits += 5
@@ -31738,7 +31860,17 @@ class Interpreter:
 		var text = ""
 		for c in raw.data:
 			text += char(c)
+		# CPython: 原串长度须为 8 的倍数 (padding 校验先于字符校验)
+		if text.length() % 8 != 0:
+			raise_exception("binascii.Error", "Incorrect padding")
+			return null
 		text = text.to_upper().rstrip("=")
+		match text.length():
+			0, 2, 4, 5, 7, 8:
+				pass
+			_:
+				raise_exception("binascii.Error", "Incorrect padding")
+				return null
 		const HEX := "0123456789ABCDEFGHIJKLMNOPQRSTUV"
 		var out: Array[int] = []
 		var buf := 0
@@ -31746,7 +31878,7 @@ class Interpreter:
 		for ch in text:
 			var idx = HEX.find(ch)
 			if idx < 0:
-				raise_exception("binascii.Error", "Non-base32 digit found")
+				raise_exception("binascii.Error", "Incorrect padding")
 				return null
 			buf = (buf << 5) | idx
 			bits += 5
@@ -31763,7 +31895,7 @@ class Interpreter:
 		var adobe = kwargs.has("adobe") and kwargs["adobe"]._dsl_bool()
 		var d = data.data
 		var n = d.size()
-		const A85 := "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+		const A85 := "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstu"
 		var out := ""
 		if adobe:
 			out += "<~"
@@ -31793,6 +31925,7 @@ class Interpreter:
 		return DSLBytes.new(out.to_ascii_buffer())
 
 	## base64.a85decode(data, adobe=False): Ascii85 解码
+	## (CPython 默认忽略空白字符 ignorechars=b' \t\n\r\v', 非法字符报 ValueError 带 offending 字符)
 	func _b64_a85decode(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var raw = _b64_bytes_arg_decode(args, 0)
 		if raw == null:
@@ -31804,8 +31937,10 @@ class Interpreter:
 		if adobe:
 			if text.begins_with("<~") and text.ends_with("~>"):
 				text = text.substr(2, text.length() - 4)
+		# CPython 忽略空白字符 (foldspaces=False 下空格仅是忽略项)
+		text = text.replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "").replace("\u000b", "")
 		text = text.replace("z", "!!!!")
-		const A85 := "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+		const A85 := "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstu"
 		var out: Array[int] = []
 		var i = 0
 		while i < text.length():
@@ -31813,12 +31948,7 @@ class Interpreter:
 			for j in range(5):
 				if i + j < text.length():
 					chunk += text[i + j]
-			if chunk.ends_with(" "):
-				chunk = chunk.rstrip(" ")
 			var cnt = chunk.length()
-			if cnt == 1:
-				raise_exception("binascii.Error", "Invalid base85 sequence")
-				return null
 			var buf = 0
 			var padded = chunk
 			while padded.length() < 5:
@@ -31826,11 +31956,12 @@ class Interpreter:
 			for j in range(5):
 				var idx = A85.find(padded[j])
 				if idx < 0:
-					raise_exception("binascii.Error", "Invalid base85 sequence")
+					# CPython: 非法字符走 ValueError 通道并带 offending 字符
+					raise_exception("ValueError", "Non-Ascii85 digit found: %s" % padded[j])
 					return null
 				buf = buf * 85 + idx
 			if buf > 4294967295:
-				raise_exception("binascii.Error", "Ascii85 overflow")
+				raise_exception("ValueError", "Ascii85 overflow")
 				return null
 			var take = cnt - 1
 			for j in range(take):
@@ -32000,8 +32131,8 @@ class Interpreter:
 				i += 1
 				continue
 			if seen_pad:
-				# '=' 之后出现数据字符: CPython 报 Incorrect padding
-				raise_exception("ValueError", "Incorrect padding")
+				# '=' 之后出现数据字符: CPython 报 Incorrect padding (binascii.Error 类)
+				raise_exception("binascii.Error", "Incorrect padding")
 				return []
 			var vi = table.find(ch)
 			if vi == -1:
@@ -32017,7 +32148,7 @@ class Interpreter:
 			raise_exception("ValueError", "Invalid base64-encoded string: number of data characters (%d) cannot be 1 more than a multiple of 4" % data_len)
 			return []
 		if (data_len + pad_count) % 4 != 0:
-			raise_exception("ValueError", "Incorrect padding")
+			raise_exception("binascii.Error", "Incorrect padding")
 			return []
 		# 补齐后按 4 组解码
 		var vals: Array[int] = []
@@ -33479,32 +33610,46 @@ class Interpreter:
 					if pair is DSLTuple and pair.items.size() == 2:
 						(lhs as DSLDict)._dsl_setitem(pair.items[0], pair.items[1])
 			return lhs
-		# 其余按对应二元运算 (数值/str/tuple 不可变)
+		# 其余按对应二元运算 (数值/str/tuple 不可变). 失败文案按 CPython 用增强形 (operator.imul 的
+		# += 文案), 增强文本映射与 _op_inplace_dunder 同源
+		var aug: String = ""
 		match op_name:
 			"add", "concat":
-				return _op_add(args, {} as Dictionary[String, DSLObject])
+				aug = "+="
+				return _op_binary("add", TokenType.PLUS, args, aug)
 			"sub":
-				return _op_sub(args, {} as Dictionary[String, DSLObject])
+				aug = "-="
+				return _op_binary("sub", TokenType.MINUS, args, aug)
 			"mul":
-				return _op_mul(args, {} as Dictionary[String, DSLObject])
+				aug = "*="
+				return _op_binary("mul", TokenType.STAR, args, aug)
 			"truediv":
-				return _op_truediv(args, {} as Dictionary[String, DSLObject])
+				aug = "/="
+				return _op_binary("truediv", TokenType.SLASH, args, aug)
 			"floordiv":
-				return _op_floordiv(args, {} as Dictionary[String, DSLObject])
+				aug = "//="
+				return _op_binary("floordiv", TokenType.DOUBLESLASH, args, aug)
 			"mod":
-				return _op_mod(args, {} as Dictionary[String, DSLObject])
+				aug = "%="
+				return _op_binary("mod", TokenType.PERCENT, args, aug)
 			"pow":
-				return _op_pow(args, {} as Dictionary[String, DSLObject])
+				aug = "**="
+				return _op_binary("pow", TokenType.STARSTAR, args, aug)
 			"lshift":
-				return _op_lshift(args, {} as Dictionary[String, DSLObject])
+				aug = "<<="
+				return _op_binary("lshift", TokenType.LESS_LESS, args, aug)
 			"rshift":
-				return _op_rshift(args, {} as Dictionary[String, DSLObject])
+				aug = ">>="
+				return _op_binary("rshift", TokenType.GREATER_GREATER, args, aug)
 			"and":
-				return _op_and(args, {} as Dictionary[String, DSLObject])
+				aug = "&="
+				return _op_binary("and", TokenType.BITAND, args, aug)
 			"or":
-				return _op_or(args, {} as Dictionary[String, DSLObject])
+				aug = "|="
+				return _op_binary("or", TokenType.PIPE, args, aug)
 			"xor":
-				return _op_xor(args, {} as Dictionary[String, DSLObject])
+				aug = "^="
+				return _op_binary("xor", TokenType.CARET, args, aug)
 		return null
 
 	## 原位运算名到 __i*__ dunder 的映射 (用户类覆写优先)
@@ -38098,17 +38243,23 @@ class Interpreter:
 	## [param name] operator 函数名 (用于错误信息) [br]
 	## [param tok_type] 等价的 TokenType [br]
 	## [param args] 两个操作数
-	func _op_binary(name: String, tok_type: TokenType, args: Array[DSLObject]) -> DSLObject:
+	func _op_binary(name: String, tok_type: TokenType, args: Array[DSLObject], aug_text: String = "") -> DSLObject:
 		if args.size() != 2:
 			raise_exception("TypeError", "%s expected 2 arguments, got %d" % [name, args.size()])
 			return null
 		var tok = Token.new(tok_type, name, null, 0, 0)
 		var r = _evaluate_binary_op(args[0], tok, args[1])
 		if r == null:
+			# aug_text 非空 (operator.i* 族): 失败文案按 CPython 用增强形 (for +=: 而非 for +:)
+			var bin_text = _binary_op_text(tok_type)
 			if args[0].last_error != "":
-				raise_exception_from_last_error(args[0].last_error)
+				var err_text = args[0].last_error
+				if aug_text != "":
+					err_text = err_text.replace("for %s:" % bin_text, "for %s:" % aug_text)
+				raise_exception_from_last_error(err_text)
 			else:
-				raise_exception("TypeError", "unsupported operand type(s) for %s" % name)
+				var op_text = aug_text if aug_text != "" else bin_text
+				raise_exception("TypeError", "unsupported operand type(s) for %s" % op_text)
 			return null
 		return r
 
@@ -40864,6 +41015,20 @@ class Interpreter:
 					result = null if report.has_error else DSLBool.new(cb2)
 				if result is DSLBool:
 					result = DSLBool.new(not result.value)
+		# 「序列在右」的重复反射 (1 * "ab"): 与主表达式路径同构 (陷阱 #25 的平行分派防劈裂), [br]
+		# 仅 STAR 适用 (_try_reflected_op 内部自判), 结果为 null 且无错误状态时不动
+		if result == null and not report.has_error and last_exception == null:
+			var saved_left_err_ref = left.last_error
+			left.last_error = ""
+			var reflected = _try_reflected_op(left, op_token, right)
+			if reflected != null:
+				left.last_error = ""
+				return reflected
+			if right.last_error != "":
+				raise_exception_from_last_error(right.last_error)
+				right.last_error = ""
+				return null
+			left.last_error = saved_left_err_ref
 		return result
 	
 	## 二元运算符的文本形式 (错误文案用) [br]
@@ -44989,6 +45154,9 @@ class Interpreter:
 			return DSLInteger.pooled(obj.dict.size())
 		if obj is DSLDefaultDict:
 			return DSLInteger.pooled(obj.inner.dict.size())
+		if obj is DSLCacheInfo:
+			# CPython CacheInfo 为 namedtuple: len 恒 4
+			return DSLInteger.pooled(4)
 		if obj is DSLTuple:
 			return DSLInteger.pooled(obj.items.size())
 		if obj is DSLSet:

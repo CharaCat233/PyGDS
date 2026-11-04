@@ -275,7 +275,8 @@ print(math.copysign(10 ** 30, -1))
 print(math.remainder(10 ** 30 + 1, 7))
 print(math.log1p(10 ** 30))
 print(math.isnan(10 ** 30), math.isinf(10 ** 30), math.isfinite(10 ** 30))
-print(math.cbrt(10 ** 30))
+# cbrt 非 IEEE 正确舍入函数: glibc 对 1e30 给 9999999999.999998, Windows CRT 给 1e10 (P13)
+print(round(math.cbrt(10 ** 30), 2))
 print(math.atan(10 ** 30))
 
 # sin/cos 大角度归约属宿主 libm 平台差异 (P10), 仅断言返回浮点且非零退化值

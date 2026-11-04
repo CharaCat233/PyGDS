@@ -2,8 +2,8 @@
 # 比对: same_output
 
 # random 模块测试
-# 注意: PyGDS 使用内置 xorshift32 PRNG, 数值序列与 CPython 不同,
-# 因此只测试与具体随机值无关的结构性行为
+# 注意: PRNG 为 MT19937, 数值序列与 CPython 已对齐 (module_random_mt 断言具体序列);
+# 本文件只测试与具体随机值无关的结构性行为
 
 import random
 

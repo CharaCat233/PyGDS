@@ -126,3 +126,40 @@ print(operator.methodcaller("pop")([1, 2, 3]))
 
 # append 场景
 print(operator.methodcaller("append", 9)([1]))
+
+# 原位族: 失败文案按 CPython 用增强形 (+=: 而非 +:). dict 的 iadd 回退 __add__ 亦 TypeError
+try:
+    operator.iadd({"a": 1}, {"b": 2})
+except TypeError as e:
+    print("TE-dict:", e)
+try:
+    operator.iadd({}, {})
+except TypeError as e:
+    print("TE-add:", e)
+try:
+    operator.isub({1}, "x")
+except TypeError as e:
+    print("TE-sub:", e)
+try:
+    operator.iadd(1, [])
+except TypeError as e:
+    print("TE-int:", e)
+
+
+class NoI:
+    pass
+
+
+try:
+    operator.iadd(NoI(), 1)
+except TypeError as e:
+    print("TE-noi:", e)
+
+# 不可变类型的原位族等价二元运算 (int * str 走序列重复)
+print(operator.imul(2, "x"))
+print(operator.imul("x", 2))
+print(operator.imul(2, [1]))
+try:
+    operator.imul("a", 0.5)
+except TypeError as e:
+    print("TE-imul:", e)

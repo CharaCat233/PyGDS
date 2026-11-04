@@ -82,6 +82,16 @@ print("fib:", fib(10))
 print("fib-calls:", calls[0])
 print("fib-again:", fib(10), calls[0])
 
+# cache_info 为 namedtuple 形态: 字段属性 / 索引 / 元组值相等 / 类型名 CacheInfo
+ci = fib.cache_info()
+print("ci-type:", type(ci).__name__)
+print("ci-repr:", ci)
+print("ci-fields:", (ci.hits, ci.misses, ci.maxsize, ci.currsize))
+print("ci-idx:", ci[0], ci[3])
+print("ci-iter:", tuple(ci))
+print("ci-eq:", ci == ci)
+print("ci-len:", len(ci))
+
 
 @functools.singledispatch
 def f(x):

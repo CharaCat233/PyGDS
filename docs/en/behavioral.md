@@ -1712,6 +1712,12 @@ range arguments keep arbitrary precision instead of converging to the index widt
 - Comparison: `same_output`
 - Source: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)
 
+### type_wrapper_types
+
+- Responsibility: type names and reprs of builtin magic descriptors and their bound forms (class-level slots are wrapper_descriptor, instance bindings are method-wrapper, method descriptors are method_descriptor; class-level repr carries no address, and the address segment of bound reprs differs between ends)
+- Comparison: `same_output`
+- Source: [ci/cases/type_wrapper_types.py](../../ci/cases/type_wrapper_types.py)
+
 ## Standard Library Modules (`module_*`)
 
 PyGDS's built-in standard library modules (`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys` / `time` / `contextlib` / `bisect` / `heapq` / `base64` / `json` / `logging`); the full list is in [builtin.md](./builtin.md). A single function with enough behavior of its own is split into a sub-file (e.g. `module_math_sqrt`).
@@ -1828,7 +1834,7 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 
 ### module_functools
 
-- Responsibility: `reduce` folding and `partial` argument binding
+- Responsibility: `reduce` folding and `partial` argument binding; `cache_info` is namedtuple-shaped (field attributes/indexing/iteration/tuple-value equality, type name CacheInfo)
 - Comparison: `same_output`
 - Source: [ci/cases/module_functools.py](../../ci/cases/module_functools.py)
 
@@ -1916,7 +1922,7 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 
 ### module_operator
 
-- Responsibility: `operator` arithmetic/comparison/`itemgetter`
+- Responsibility: `operator` arithmetic/comparison/`itemgetter`; in-place family failure messages use the augmented shape per CPython (`for +=:`, specific to `operator.i*`), and immutable `i*` forms fall back to binary ops (`int * str` sequence repetition)
 - Comparison: `same_output`
 - Source: [ci/cases/module_operator.py](../../ci/cases/module_operator.py)
 

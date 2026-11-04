@@ -1712,6 +1712,12 @@ range 参数不再按索引位收敛, 构造与迭代保留任意精度 (与 CPy
 - 比对: `same_output`
 - 源文件: [ci/cases/type_type_alias_type.py](../../ci/cases/type_type_alias_type.py)
 
+### type_wrapper_types
+
+- 职责: 内建魔法描述符与其绑定形态的类型名与 repr (类级槽为 wrapper_descriptor, 实例绑定为 method-wrapper, 方法描述符为 method_descriptor; 类级 repr 无地址, 绑定 repr 的地址段双端不同)
+- 比对: `same_output`
+- 源文件: [ci/cases/type_wrapper_types.py](../../ci/cases/type_wrapper_types.py)
+
 ## 标准库模块（module_*）
 
 PyGDS 内置的标准库模块（`math` / `random` / `statistics` / `functools` / `itertools` / `collections` / `string` / `operator` / `sys` / `time` / `contextlib` / `bisect` / `heapq` / `base64` / `json` / `logging`），完整列表见 [builtin.md](./builtin.md)。单一函数行为多到值得独立时拆出子文件（如 `module_math_sqrt`）
@@ -1828,7 +1834,7 @@ ChainMap 的迭代键序为「从最后一张映射开始 update」的字典序 
 
 ### module_functools
 
-- 职责: `reduce` 折叠与 `partial` 偏函数参数绑定
+- 职责: `reduce` 折叠与 `partial` 偏函数参数绑定; `cache_info` 为 namedtuple 形态 (字段属性/索引/迭代/元组值相等, 类型名 CacheInfo)
 - 比对: `same_output`
 - 源文件: [ci/cases/module_functools.py](../../ci/cases/module_functools.py)
 
@@ -1916,7 +1922,7 @@ ChainMap 的迭代键序为「从最后一张映射开始 update」的字典序 
 
 ### module_operator
 
-- 职责: `operator` 算术/比较/`itemgetter`
+- 职责: `operator` 算术/比较/`itemgetter`; 原位族的失败文案按 CPython 用增强形 (`for +=:`, `operator.i*` 特有), 不可变类型的 `i*` 等价二元运算 (`int * str` 序列重复)
 - 比对: `same_output`
 - 源文件: [ci/cases/module_operator.py](../../ci/cases/module_operator.py)
 
