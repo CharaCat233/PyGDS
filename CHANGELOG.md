@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **`functools` 三成员补齐（I2-48）**：`partialmethod`（预绑定实参的方法描述符——实例访问返回 `functools.partial(func, obj, *预绑定)` 对象、类级访问返回裸未绑定函数形态 `type 'function'`，kw 冲突经调用机制自然报错）；`recursive_repr()`（`__repr__` 递归防护装饰器——以接收者实例 id 追踪重入，重入返回填充值 `'...'`，互嵌对象各自正常展开，CPython 同语义）；`singledispatchmethod`（按首实参类型分派的方法描述符——`__get__` 产出 `type 'function'` 的包装形态、分派跳过 self、注册实现以 `(self, arg)` 调用、`register` 属性复用 singledispatch 登记）；顺带 `type(functools.partial(...)).__name__` 由 `'partial'` 对齐为 `'functools.partial'`
+- **`statistics.NormalDist` 方法族补齐（I2-48）**：`mean` / `stdev` 由方法改属性（CPython property 语义，`nd.mean` 直接返回浮点）；补 `pdf`（sigma 为零报 `StatisticsError: pdf() not defined when sigma is zero`）、`cdf`（零 sigma 同守卫）、`inv_cdf`（Wichura AS241 有理近似与 CPython `statistics._normal_dist_inv_cdf` 同源系数，`inv_cdf(0.975)` 双端逐位一致；p 严格开区间 (0,1)，越界报 `p must be in the range 0.0 < p < 1.0`）、`samples(n, seed=None)`（走 gauss 采样路径——种子给定用独立 Random 实例，MT19937 对齐使固定种子序列双端逐位一致）、`from_samples`（类方法，浮点同式近似 CPython 的精确分数 `_mean_stdev`，round(,10) 一致；n < 2 报 `stdev requires at least two data points`）、`zscore`（零 sigma 报 `zscore() not defined when sigma is zero`）；cdf 依赖的 `erf` 为 P13 登记的自研近似（双端 round(,6) 一致）
+- **`string.Template` 内省两方法（I2-48）**：`is_valid()`（模板不存在非法 `$` 序列——未闭合 `${`、`$` 后接非标识符起始字符均判 invalid）与 `get_identifiers()`（命名占位符的标识符列表，去重、invalid 序列不贡献——与 CPython 3.12 行为一致）；扫描器按 CPython pattern 语义（`$$` 转义、`$name` 与 `${name}` 占位、标识符为字母/下划线起续以字母/数字/下划线）
+- **函数 `dir()` 全集成员的属性面（I2-45）**：`__globals__`（定义环境链的根快照——CPython 为活字典，PyGDS 访问时快照，缺省补 `__name__` 与 `__builtins__` 键）、`__closure__`（恒 None——PyGDS 闭包经环境链捕获无 cell 对象模型，CPython 对无自由变量函数同值；闭包函数的 cell 元组形态为文档化的实现模型差异）、`__code__`（新增 code 对象类型类：`co_name` / `co_argcount` / `co_varnames`（参数 + 局部名）/ `co_filename`（以模块名呈现，PyGDS 无文件路径数据）/ `co_firstlineno` 主属性子集）、`__get__` 与 `__call__`（method-wrapper 形态，可调用——`f.__call__(1)` 等价 `f(1)`、`f.__get__(inst, cls)` 返回绑定方法）、`__builtins__`（dict 形态快照，CPython 主脚本同）
+- **`functools.lru_cache` 有限 maxsize 的真 LRU 淘汰（D9）**：命中即刷新近用位次（字典保序删后重插），超限逐条淘汰最久未使用项（字典首键）——`maxsize=2` 下「1, 2, 命中 1, 插 3」保留 1 淘汰 2，与 CPython 逐态一致
+
 ## [0.8.8-alpha.5] - 2026-11-4
 
 ### 修复

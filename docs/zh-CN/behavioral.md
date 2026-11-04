@@ -1414,7 +1414,7 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 
 ### type_function
 
-- 职责: 函数与方法的类型类名及 `__name__`
+- 职责: 函数与方法的类型类名及 `__name__`; dir() 全集成员的属性面 (`__globals__` 为定义环境根快照、`__closure__` 恒 None——PyGDS 闭包经环境链捕获无 cell 模型、`__code__` 为 co_name/co_argcount/co_varnames/co_filename/co_firstlineno 子集且 co_filename 以模块名呈现、`__get__`/`__call__` 为 method-wrapper 形态、`__builtins__` 为 dict 快照)
 - 比对: `same_output`
 - 源文件: [ci/cases/type_function.py](../../ci/cases/type_function.py)
 
@@ -1834,7 +1834,7 @@ ChainMap 的迭代键序为「从最后一张映射开始 update」的字典序 
 
 ### module_functools
 
-- 职责: `reduce` 折叠与 `partial` 偏函数参数绑定; `cache_info` 为 namedtuple 形态 (字段属性/索引/迭代/元组值相等, 类型名 CacheInfo)
+- 职责: `reduce` 折叠与 `partial` 偏函数参数绑定; `cache_info` 为 namedtuple 形态 (字段属性/索引/迭代/元组值相等, 类型名 CacheInfo); `partialmethod` 实例访问返回 functools.partial 对象而类级访问为裸函数; `recursive_repr` 以接收者实例追踪重入 (互嵌对象各自展开); `singledispatchmethod` 分派跳过 self 且实现以 (self, arg) 调用; 有限 maxsize 为真 LRU 淘汰 (命中刷新位次)
 - 比对: `same_output`
 - 源文件: [ci/cases/module_functools.py](../../ci/cases/module_functools.py)
 
@@ -1958,7 +1958,7 @@ ChainMap 的迭代键序为「从最后一张映射开始 update」的字典序 
 
 ### module_statistics
 
-- 职责: `mean`/`median`/`stdev` 等统计量
+- 职责: `mean`/`median`/`stdev` 等统计量; NormalDist 的 `mean`/`stdev` 为属性 (CPython property 语义), `pdf`/`cdf` 零 sigma 报 StatisticsError, `inv_cdf` 的 p 为严格开区间 (0,1), `samples` 固定种子序列经 MT19937 对齐双端逐位一致
 - 比对: `same_output`
 - 源文件: [ci/cases/module_statistics.py](../../ci/cases/module_statistics.py)
 

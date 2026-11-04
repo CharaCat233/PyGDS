@@ -1414,7 +1414,7 @@ Float literals and `float()` strings go through a self-produced correctly-rounde
 
 ### type_function
 
-- Responsibility: Type class names of functions/methods and `__name__`
+- Responsibility: Type class names of functions/methods and `__name__`; the attribute surface of the full dir() member set (`__globals__` is a snapshot of the defining root environment, `__closure__` is always None — PyGDS closures capture via environment chains with no cell model, `__code__` is a subset of co_name/co_argcount/co_varnames/co_filename/co_firstlineno with co_filename presented as the module name, `__get__`/`__call__` are method-wrapper forms, `__builtins__` is a dict snapshot)
 - Comparison: `same_output`
 - Source: [ci/cases/type_function.py](../../ci/cases/type_function.py)
 
@@ -1834,7 +1834,7 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 
 ### module_functools
 
-- Responsibility: `reduce` folding and `partial` argument binding; `cache_info` is namedtuple-shaped (field attributes/indexing/iteration/tuple-value equality, type name CacheInfo)
+- Responsibility: `reduce` folding and `partial` argument binding; `cache_info` is namedtuple-shaped (field attributes/indexing/iteration/tuple-value equality, type name CacheInfo); `partialmethod` instance access returns a functools.partial object while class access is a bare function; `recursive_repr` tracks reentry per receiver instance (mutually nested objects each expand); `singledispatchmethod` dispatch skips self and implementations are called with (self, arg); a finite maxsize performs true LRU eviction (hits refresh recency)
 - Comparison: `same_output`
 - Source: [ci/cases/module_functools.py](../../ci/cases/module_functools.py)
 
@@ -1958,7 +1958,7 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 
 ### module_statistics
 
-- Responsibility: `mean`/`median`/`stdev` statistics
+- Responsibility: `mean`/`median`/`stdev` statistics; NormalDist's `mean`/`stdev` are properties (CPython property semantics), `pdf`/`cdf` raise StatisticsError on zero sigma, `inv_cdf`'s p is the strict open interval (0,1), and `samples` with a fixed seed produces bit-identical sequences through MT19937 alignment
 - Comparison: `same_output`
 - Source: [ci/cases/module_statistics.py](../../ci/cases/module_statistics.py)
 

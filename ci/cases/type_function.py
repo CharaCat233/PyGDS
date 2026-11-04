@@ -112,3 +112,38 @@ def outer2():
 
 
 print(repr(outer2()).startswith("<function outer2.<locals>.inner at 0x"))
+
+
+# dir(函数) 全集成员的属性面: __globals__ / __closure__ / __code__ / __get__ / __call__ / __builtins__
+def gfunc(a, b=2):
+    c = a + b
+    return c
+
+
+print(type(gfunc.__globals__).__name__)
+print(gfunc.__globals__["__name__"])
+print(gfunc.__closure__)
+print(type(gfunc.__code__).__name__)
+print(gfunc.__code__.co_name)
+print(gfunc.__code__.co_argcount)
+print(gfunc.__code__.co_varnames)
+print(gfunc.__code__.co_firstlineno > 0)
+print(type(gfunc.__get__).__name__)
+print(gfunc.__call__(1))
+print(type(gfunc.__builtins__).__name__)
+print(all(n in dir(gfunc) for n in ["__globals__", "__closure__", "__code__", "__get__", "__call__", "__builtins__"]))
+
+
+def outer3():
+    lv = 1
+
+    def inner2():
+        return lv
+
+    return inner2
+
+
+inner2 = outer3()
+print(type(inner2.__globals__).__name__)
+print(inner2.__code__.co_name)
+print(inner2.__code__.co_argcount)
