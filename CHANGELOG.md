@@ -2,7 +2,41 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
-## [Unreleased]
+## [0.8.8-alpha.7] - 2026-11-12
+
+### 修复
+
+- **partialmethod 类级调用的实参序（I0-113）**：`_method(cls_or_self, /, *args)` 语义此前缺 cls_or_self 前插——`PM.pm(3)`（pm = `partialmethod(m, 1)`）误算为 `m(1, 3)`（CPython 为 `m(3, 1)`），类级调用的首实参现按 CPython 前插到预绑定实参之前；实例访问的产物改为 `partial(绑定方法, *预绑定)`（repr 亦呈绑定方法形态，与 CPython 的 `functools.partial(<bound method ...>)` 同形）；partialmethod 对象直调的不可调用文案取裸类型名 `'partialmethod'`
+- **functools.partial 的类型身份（I2-55）**：`type(functools.partial(len))` 此前经字符串回退输出 `"<class 'functools.partial'>"`（与字符串相等成立、可 len）——注册 `partial` 类型类（`__name__` 呈 `'partial'`、repr 走限定名 `<class 'functools.partial'>`，与 CPython 的裸名 + 限定名 repr 同构）与同款 `partialmethod` 类型类。alpha.6 变更记录曾称「类型名对齐为 `'functools.partial'`」，经 CPython 实态核实为误记——CPython 的类型名为裸 `'partial'`（repr 才走模块限定名），本版以实态为准修正
+- **NormalDist `_mu`/`_sigma` 赋值的引擎级中止（I0-114）**：赋整数值（`nd._mu = 5`）此前触发引擎级 `Invalid access to property ... 'Nil'` 中止、后续输出静默丢失——赋值经数值归一助手承载（int/bool/float 转 float，大数经精确转 double，超 float 范围报 `OverflowError`）；赋值形态的呈现级残差（CPython 原样保留赋值类型、非数值静默可赋）登记为已知问题待排期
+- **NormalDist.samples 的 seed 支持集校验（I0-115）**：不可哈希 seed（如 list）此前静默产出全零伪样本——按 CPython 支持集（None/int/float/str/bytes/bytearray）校验，越集报 `TypeError: The only supported seed types are: None,\nint, float, str, bytes, and bytearray.`
+- **method_descriptor 直调的错误通道（I0-116）**：`dict.__getitem__({}, "zz")` 等类级直调此前静默返回 None（错误记在接收者实参的 last_error 上无人转异常）——分派层补 method_descriptor 的驻留预清理与接收者错误转异常分支（与 DSLBuiltinFunction 的接收者通道同款）
+- **statistics 大数样本的 int64 快路径归零（I0-117）**：`fmean([10**20, 1])` / `harmonic_mean([10**20, 10**20])` / `quantiles([...], n=2)` / `geometric_mean([10**20, 10**21])` 的样本提取走 int64 `.value` 快路径（大数形态的 value 恒为 0）而静默算出错误结果——`_collect_nums` 对大数样本改经精确转 double（超 float 范围报 `OverflowError: int too large to convert to float`），四站点同步修复
+- **median_grouped 的公式实现（I0-118）**：`median_grouped([1, 2, 3, 4])` 此前返回 nan（cf/f 判据用了中点而非 CPython 的区间下限）——按 CPython 源码公式重写（x 取中位元素 `data[n//2]`、二分定位等值区间、`L = x - interval/2`、`cf = i`、`f = j - i`），常规整数/浮点 interval/奇数样本/重复值形态双端一致
+- **fmean 的 weights 关键字实参（I0-119）**：此前被静默忽略——按 CPython 语义实装（`num = sumprod(data, weights)`、`den = fsum(weights)`、den 为零报 `sum of weights must be non-zero`、长度不齐报 `data and weights must be the same length`），weights 元素与样本同经大数感知的数值归一
+- **partialmethod 的描述符解包（I1-86）**：staticmethod 包装经 `__get__` 解包为裸函数（实例调用不插 self——`p2.ps(5)` 返回 `('sm', 1, 5)`），classmethod 绑定类后拼预绑定实参（实参溢出按调用机制报错）
+- **singledispatch 族的内建子类分派与 register 校验（I1-87 / I1-88）**：`register(int)` 后 `f(True)` 命中 int 实现（bool 是 int 子类的继承链分派）；`register` 对非类实参报 CPython 的 `Invalid first argument to register()` 文案（含 `@register(some_class)` 与注解函数两种修正提示）
+- **CacheInfo 的 namedtuple 协议残余（I1-89）**：补 `count` / `index`（元组语义，index 缺报 `tuple.index(x): x not in tuple`）、`_replace(**kw)`（按字段名替换返回新实例）与 `_fields`；`hash(ci)` 与等值元组同哈希（等值哈希不变量）
+- **lru_cache 的不可哈希实参与 maxsize 边界（I1-90）**：不可哈希实参（list/dict/set/bytearray）报 `TypeError: unhashable type: 'list'`；`maxsize=0` 不缓存但 misses 正常计数；负 maxsize 钳为 0
+- **NormalDist 构造与 samples 的实参校验群（I1-91）**：多余位置实参、mu/sigma 位置与关键字冲突、from_samples 多实参、samples 的 n 缺失/浮点/字符串/大数/多余实参按 CPython clinic 文案报错（`NormalDist.__init__() takes from 1 to 3 positional arguments but 4 were given` 等）；构造器的 str 实参按 `float()` 转换语义（可转成功，不可转报 `could not convert string to float`）
+- **NormalDist 方法族的大数实参（I1-92）**：`pdf` / `cdf` 的实参经精确转 double（`pdf(10**100)` 返回 `0.0`、`cdf(10**100)` 返回 `1.0`，超 float 范围报 OverflowError）
+- **NormalDist 的运算符与相等协议（I1-93）**：`+` / `-` 按 CPython 3.12 分布合并语义（mu 相加/相减、sigma 取平方和平方根——`ND(1,2) - ND(0,1)` = `NormalDist(mu=1.0, sigma=2.23606797749979)`）；`==` / `!=` 按字段相等（非 NormalDist 比较返回 False）
+- **Template 的类属性面与分隔符覆写（I1-94）**：`delimiter` / `idpattern` / `braceidpattern` 类属性可访问；子类 `delimiter = "%"` 覆写经构造下发生效（`PctT("%a $b").substitute(...)` 正确替换）；构造关键字实参报 `unexpected keyword argument`
+- **Template 的无效占位符与嵌套标识符（I1-95）**：`substitute` 对无效 `$` 序列（`$1`、未闭合 `${`、非法起始字符）报 `ValueError: Invalid placeholder in string: line 1, col N`（safe_substitute 保留原样）；`get_identifiers` 对嵌套形态（`${a${b}}`）在 invalid 后仅前进 1 字符，内层占位符仍被命中
+- **code 对象的 co_varnames 补全（I1-96）**：按 CPython 顺序收录（位置参 → kwonly → *args → **kwargs → 局部名），co_argcount 仅计位置参——`def f(*a, **k)` 的 co_varnames 为 `('a', 'k', 'lv')`
+- **魔法描述符类型与绑定方法的属性面（I1-97）**：绑定 method-wrapper 的 `__self__` / `__name__` / `__call__`（`"a".__len__.__call__()` 可调用）、槽包装的 `__objclass__`（经宿主类名还原类型对象，注入描述符统一回填宿主类名）、方法描述符的 `__qualname__`（`dict.__getitem__`）与 `__name__` / `__doc__`
+- **点分名导入的最小包形态（I1-98）**：`import collections.abc` / `from collections import abc` / `__import__("collections.abc", fromlist=["abc"])` / `importlib` 式叶子名解析全部打通——静态别名表构造虚拟子模块（`__name__` 为整名、`collections` 顶层绑定语义与 CPython 一致）；`collections.abc` 的 ABC 成员面以空壳类呈现（isinstance 协议判定不在实现范围，登记于条目备注）
+- **`__import__` 的 level 校验（I1-99）**：负值报 `ValueError: level must be >= 0`，相对导入（level >= 1）报 `KeyError`（globals 缺包上下文的 CPython 形态）
+- **sys.modules 驱逐后的重新导入（I1-100）**：`del sys.modules["math"]` 后 `__import__("math")` 按内置模块工厂重建并回写模块表（CPython 语义：驱逐后再导入得到新模块对象）
+- **functools 包装器族的元数据面（I2-56）**：`recursive_repr` 包装的 `__name__` / `__qualname__` / `__doc__` 取自目标函数；singledispatch 对象的 `__name__` 取自默认实现、类型身份为 `function`、`dispatch(cls)` 属性返回该类注册实现
+- **NormalDist 非数值实参的文案（I2-57）**：`pdf` / `cdf` / `zscore` 走运算层文案（`unsupported operand type(s) for -: 'str' and 'float'`）、`inv_cdf` 走比较层文案（`'<= ' not supported between instances of 'str' and 'float'`）
+- **statistics 的空样本与混合类型文案（I2-58）**：`median([])` / `mode([])` 统一为 `no median for empty data` / `no mode for empty data`；`variance([1])` 去除函数名括号（`variance requires at least two data points`）；混合类型改 TypeError 通道（`can't convert type 'str' to numerator/denominator`，不再被样本数错误覆盖）
+- **LinearRegression 的 dir 与 namedtuple 方法面（I2-59）**：`dir(lr)` 含 `count` / `index` / `intercept` / `slope`；`count` / `index` 对 (slope, intercept) 两元按元组语义实现
+- **`__import__` 的实参校验（I2-60）**：无实参报 `missing required argument 'name' (pos 1)`、非 str 报 `module name must be a string`、空名报 `ValueError: Empty module name`
+- **函数 `__globals__` 的枚举口径与 `__get__` 未绑定形态（I2-61）**：快照排除内建名（与 globals() 枚举口径一致，`"len" in f.__globals__` 为 False）；`f.__get__(None, cls)` 返回函数自身（未绑定形态）
+- **`importlib` 模块面缺失（新发现，登记待排期）**：PyGDS 无 `importlib` 内置模块（`import importlib` 报 ModuleNotFoundError；`importlib.import_module` 未实现）——第六程扫描的 I1-98 修复中实测发现，导入面已有 `__import__` 等价形态，importlib 模块本体登记待排期
+
+## [0.8.8-alpha.6] - 2026-11-4
 
 ### 修复
 

@@ -209,6 +209,32 @@ t("s_tpl_ids", lambda: string.Template("$a ${b} $$ $c").get_identifiers())
 t("s_tpl_ids_dup", lambda: string.Template("$a $a ${a}").get_identifiers())
 t("s_tpl_ids_bad", lambda: string.Template("$1 $x").get_identifiers())
 t("s_tpl_ids_empty", lambda: string.Template("no ids").get_identifiers())
+# Template 类属性面、子类 delimiter 覆写、substitute 的无效占位符报错
+t("s_tpl_attrs", lambda: (string.Template.delimiter, string.Template.idpattern, string.Template.braceidpattern))
+
+
+class PctT(string.Template):
+    delimiter = "%"
+
+
+t("s_tpl_pct", lambda: PctT("%a $b").substitute(a=1, b=2))
+try:
+    string.Template("$a", delimiter="%")
+except TypeError as e:
+    t("s_tpl_kw", lambda: str(e))
+t("s_tpl_sub_inv", lambda: string.Template("$1").substitute(a=1))
+t("s_tpl_safe_inv", lambda: string.Template("$1").safe_substitute(a=1))
+t("s_tpl_ids_nested", lambda: string.Template("${a${b}}").get_identifiers())
+# method_descriptor 直调的错误通道 (类级访问形态, 错误记在接收者实参上转异常)
+t("md_getitem_miss", lambda: dict.__getitem__({}, "zz"))
+t("md_getitem_hit", lambda: dict.__getitem__({"a": 1}, "a"))
+t("md_getitem_type", lambda: type(dict.__getitem__).__name__)
+t("md_qualname", lambda: dict.__getitem__.__qualname__)
+# 描述符属性面: 绑定 method-wrapper 的 __self__/__name__/__call__ 与槽包装的 __objclass__
+t("ba_self", lambda: "a".__len__.__self__)
+t("ba_name", lambda: "a".__len__.__name__)
+t("ba_call", lambda: "a".__len__.__call__())
+t("wd_objclass", lambda: str.__add__.__objclass__)
 t("s_fmt", lambda: string.Formatter().format("{0}-{1}", 5, "a"))
 t("s_fmt_kw", lambda: string.Formatter().format("{v}", v=9))
 # itertools: compress / combinations_with_replacement

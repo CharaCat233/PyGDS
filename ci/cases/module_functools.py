@@ -141,6 +141,22 @@ except AttributeError as e:
     print("pm-attr:", type(e).__name__)
 print("pm-repr:", repr(pm_inst.pm)[:18])
 
+# 类级调用: 首实参作 cls_or_self 前插 (CPython _method(cls_or_self, /, *args) 语义)
+print("pm-cls-call:", PM.pm(3))
+try:
+    functools.partialmethod(lambda a, b: a - b, 10)(5)
+except TypeError as e:
+    print("pm-direct:", e)
+print("pm-inst-args:", pm_inst.pm.args)
+# partial 类型身份 (CPython: __name__ 'partial', repr 走限定名 functools.partial)
+print("pt-type:", type(functools.partial(len)).__name__)
+print("pt-repr:", repr(type(functools.partial(len))))
+try:
+    len(type(functools.partial(len)))
+except TypeError as e:
+    print("pt-len:", e)
+print("pt-name:", type(functools.partial(len)).__name__ == "partial")
+
 # recursive_repr: __repr__ 递归防护 (重入返回 '...', 互嵌对象各自展开)
 class Node:
     def __init__(self, name, child=None):
@@ -221,3 +237,85 @@ lf1("a")
 print("lru1:", lf1("a"))
 print("lru1-info:", lf1.cache_info())
 
+# singledispatch 的 bool 分派 (bool 是 int 子类) 与用户子类 MRO 分派
+f2 = functools.singledispatch(lambda x: ("default", x))
+
+
+@f2.register(int)
+def _sdi(x):
+    return ("int", x)
+
+
+class MyList(list):
+    pass
+
+
+f2.register(MyList)(lambda x: ("mylist", len(x)))
+print("sd-bool:", f2(True))
+print("sd-mylist:", f2(MyList([1, 2])))
+print("sd-list:", f2([1]))
+try:
+    f2.register(5)
+except TypeError as e:
+    print("sd-reg-int:", e)
+try:
+    f2.register(None)
+except TypeError as e:
+    print("sd-reg-none:", e)
+print("sd-name:", f2.__name__)
+print("sd-dispatch:", f2.dispatch(int)("x"))
+
+# lru_cache 的不可哈希实参与 maxsize 边界 (0 不缓存但计数, 负值钳 0)
+try:
+    lf([1])
+except TypeError as e:
+    print("lru-unhash:", e)
+
+
+@functools.lru_cache(maxsize=0)
+def lz(x):
+    return ("lz", x)
+
+
+lz(1)
+lz(2)
+print("lru-zero:", lz.cache_info())
+
+
+@functools.lru_cache(maxsize=-1)
+def ln(x):
+    return ("ln", x)
+
+
+ln(1)
+ln(2)
+print("lru-neg:", ln.cache_info())
+
+# partialmethod 对 staticmethod 的解包 (不插 self) 与 classmethod 的绑定
+class PM2:
+    @staticmethod
+    def sm(x, y):
+        return ("sm", x, y)
+
+    ps = functools.partialmethod(sm, 1)
+
+    @classmethod
+    def cm(cls, x):
+        return ("cm", cls.__name__, x)
+
+    pc = functools.partialmethod(cm, 1)
+
+
+p2 = PM2()
+print("pm-sm:", p2.ps(5))
+try:
+    p2.pc(5)
+except TypeError as e:
+    print("pm-cm:", e)
+
+# CacheInfo 的 namedtuple 方法面 (count/index/_replace/_fields) 与哈希不变量
+ci2 = lf.cache_info()
+print("ci-count:", ci2.count(("lf", 1)))
+print("ci-fields:", ci2._fields)
+print("ci-replace:", ci2._replace(hits=9).hits)
+print("ci-hash:", hash(ci2) == hash(tuple(ci2)))
