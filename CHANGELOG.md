@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.8.8-alpha.9] - 2026-11-21
+
+### 修复
+
+- **CI 的双端比对 CPython 钉住 3.12**：`ubuntu-latest` 镜像的系统 `python3` 随 GitHub 镜像滚动（alpha.8 推送时已滚至 3.14），51 个用例的 CPython 侧文案断言因 3.13/3.14 的错误消息变更（序列 index 操作上下文、clinic 参数量消息统一、`NoneType` 简化为 `None`、整除零文案改写、`>>` 运算提示移除等）集中爆炸——workflow 增加 `actions/setup-python` 步骤钉住 3.12，双端断言的对齐基准（本地 3.12.x 行为）不再受镜像滚动影响
+- **内置模块的惰性导入策略**：内置模块注册表改为惰性工厂表（16 个模块首次 `_get_module` 按需构建，`is_builtin` 标记随构建下发）——启动不再预导入，`sys.modules` 只反映已导入的模块（对齐 CPython 的按需出现语义）。`import` / `from-import` / `__import__` / 驱逐后重导入全部经工厂路径。注意 PyGDS 的虚拟模块无传递导入（CPython 的 `random` 会传递导入 `math`，PyGDS 不会），呈现为 sys.modules 观测面差异，已按不可对齐面处理
+- **random.randrange 的任意精度支持**：`randrange` / `Random().randrange` 的实参不再经 int64 归一（大数原样承载）——区间宽度经大数算术收敛，`_randbelow` 拒绝循环走任意位宽的 getrandbits 内核（CPython `_random_getrandbits` 同构：ceil(k/32) 个 32 位小端字、末字右移对齐）。MT19937 对齐使固定种子的标准形态（`randrange(0, 10, 10**40)` 恒 0 等）双端一致，int64 内的实参走既有快路径（seeded 序列不变）
+- **int 无 hex 方法**：`(5).hex` 报 AttributeError（`'int' object has no attribute 'hex'`），`dir(int)` 不含 hex——与 CPython 一致（`hex` 为内建函数，仅 bytes/bytearray/memoryview/float 有 `.hex` 方法），`hex()` 内建函数面不变
+
 ## [0.8.8-alpha.8] - 2026-11-21
 
 ### 修复

@@ -61,6 +61,15 @@ try:
     random.randrange(3, 3)
 except ValueError as e:
     print("VE:", str(e))
+
+# randrange 大数任意精度 (MT19937 对齐使固定种子序列双端逐位一致)
+rng_big = random.Random(42)
+print("rr-big:", rng_big.randrange(10**20) < 10**20)
+print("rr-big-start:", rng_big.randrange(10**20, 10**21) >= 10**20)
+print("rr-big-step:", rng_big.randrange(0, 10**21, 10**19) % 10**19 == 0)
+print("rr-big-neg:", random.Random(3).randrange(-10**20, 0) < 0)
+print("rr-big-seeded:", random.Random(7).randrange(10**30, 10**30 + 10) >= 10**30)
+print("rr-big-step-val:", random.randrange(0, 10, 10**40))
 try:
     random.randrange(0, 3, 0)
 except ValueError as e:

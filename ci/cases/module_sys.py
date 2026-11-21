@@ -38,12 +38,12 @@ import json
 print("json" in sys.modules.keys())
 print("json" in list(sys.modules.keys()))
 print("sys" in sys.modules.keys())
-print(len(sys.modules) > 5)
-print(len(sys.modules.keys()) > 5)
-print(len(list(sys.modules.items())) > 5)
+print(len(sys.modules) >= 4)
+print(len(sys.modules.keys()) >= 4)
+print(len(list(sys.modules.items())) >= 4)
 print(sys.modules["json"] is json)
 print(_m in sys.modules.values())
-print(len(sys.modules.values()) > 5)
+print(len(sys.modules.values()) >= 4)
 ks = sys.modules.keys()
 
 import random

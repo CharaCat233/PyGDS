@@ -6828,22 +6828,6 @@ class DSLInteger extends DSLObject:
 			out.reverse()
 		return DSLBytes.new(out)
 
-	func builtin_hex(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
-		var self_obj = args[0]
-		if self_obj.is_big():
-			return DSLString.new(("-" if self_obj.big_neg else "") + "0x" + DSLBigInt.mag_to_base(self_obj.big_limbs, 16))
-		var v = self_obj.value
-		if v == 0:
-			return DSLString.new("0x0")
-		var sign = "-" if v < 0 else ""
-		var digits = "0123456789abcdef"
-		var m = abs(v)
-		var s = ""
-		while m > 0:
-			s = digits[m & 0xF] + s
-			m = m >> 4
-		return DSLString.new(sign + "0x" + s)
-
 ## DSL 浮点数类型, 对应 Python float
 class DSLFloat extends DSLObject:
 	## float 类引用 (register_builtins 注入): 数值字面量实例未挂 klass, 方法查找经它解析
@@ -12190,10 +12174,13 @@ class DSLDictKeys extends DSLObject:
 	func _type_name() -> String:
 		return "dict_keys"
 	
-	## 当前键列表 (有源字典时实时构建)
+	## 当前键列表 (有源字典时实时构建, 源为 sys.modules 活视图时先重同步, [br]
+	## 使惰性导入的新模块对捕获的 keys 视图即刻可见)
 	func _live_keys() -> Array[DSLObject]:
 		if source == null:
 			return keys_list
+		if source is DSLSysModulesView:
+			(source as DSLSysModulesView)._ensure()
 		var out: Array[DSLObject] = []
 		for k in source.dict:
 			out.append(source._original_key_obj(k))
@@ -12202,6 +12189,8 @@ class DSLDictKeys extends DSLObject:
 	## 迭代支持: 有源字典时迭代活视图 (增删键即刻失效), 迭代顺序与字典插入顺序一致
 	func _dsl_iter() -> DSLIterator:
 		if source != null:
+			if source is DSLSysModulesView:
+				(source as DSLSysModulesView)._ensure()
 			return DSLDictKeyIterator.new(source.dict, source)
 		return DSLListIterator.new(keys_list)
 	## 视图元素集: 迭代自身产出元素
@@ -30420,8 +30409,10 @@ class Interpreter:
 	var _current_self: DSLObject = null
 	## 当前正在执行的函数 (嵌套 def 的 __qualname__ 前缀用)
 	var _current_function: DSLFunction = null
-	## 内置模块注册表, Key 为模块名
+	## 内置模块注册表, Key 为模块名 (惰性导入, 仅含已导入的模块)
 	var modules: Dictionary[String, DSLModule] = {}
+	## 内置模块的惰性工厂表, Key 为模块名 (首次 _get_module 按需构建)
+	var _builtin_module_factories: Dictionary[String, Callable] = {}
 	## random 模块的伪随机数生成器状态
 	## MT19937 状态: 624 字状态表与生成游标
 	var _mt_state: Array[int] = []
@@ -32170,26 +32161,24 @@ class Interpreter:
 	## 注册内置模块到模块注册表 [br]
 	## import 语句通过 _get_module 解析这些模块
 	func _register_modules():
-		modules["math"] = _create_math_module()
-		modules["random"] = _create_random_module()
-		modules["statistics"] = _create_statistics_module()
-		modules["functools"] = _create_functools_module()
-		modules["itertools"] = _create_itertools_module()
-		modules["collections"] = _create_collections_module()
-		modules["string"] = _create_string_module()
-		modules["operator"] = _create_operator_module()
-		modules["sys"] = _create_sys_module()
-		modules["time"] = _create_time_module()
-		modules["contextlib"] = _create_contextlib_module()
-		modules["bisect"] = _create_bisect_module()
-		modules["heapq"] = _create_heapq_module()
-		modules["base64"] = _create_base64_module()
-		modules["json"] = _create_json_module()
-		modules["logging"] = _create_logging_module()
-
-		# 登记时全部为内置模块 (用户模块经 _load_user_module 延迟加入, 默认非内置)
-		for mname in modules:
-			(modules[mname] as DSLModule).is_builtin = true
+		# 惰性导入: 内置模块登记为工厂 (首次 _get_module 按需构建), [br]
+		# 不再启动预导入, sys.modules 对齐 CPython 的按需出现语义
+		_builtin_module_factories["math"] = Callable(self, "_create_math_module")
+		_builtin_module_factories["random"] = Callable(self, "_create_random_module")
+		_builtin_module_factories["statistics"] = Callable(self, "_create_statistics_module")
+		_builtin_module_factories["functools"] = Callable(self, "_create_functools_module")
+		_builtin_module_factories["itertools"] = Callable(self, "_create_itertools_module")
+		_builtin_module_factories["collections"] = Callable(self, "_create_collections_module")
+		_builtin_module_factories["string"] = Callable(self, "_create_string_module")
+		_builtin_module_factories["operator"] = Callable(self, "_create_operator_module")
+		_builtin_module_factories["sys"] = Callable(self, "_create_sys_module")
+		_builtin_module_factories["time"] = Callable(self, "_create_time_module")
+		_builtin_module_factories["contextlib"] = Callable(self, "_create_contextlib_module")
+		_builtin_module_factories["bisect"] = Callable(self, "_create_bisect_module")
+		_builtin_module_factories["heapq"] = Callable(self, "_create_heapq_module")
+		_builtin_module_factories["base64"] = Callable(self, "_create_base64_module")
+		_builtin_module_factories["json"] = Callable(self, "_create_json_module")
+		_builtin_module_factories["logging"] = Callable(self, "_create_logging_module")
 
 	## 创建空 ExitStack (P6): 类体内的自引用构造 (DSLExitStack 在自身方法中
 	## DSLExitStack.new()) 会使引擎退出检查滞留整个全局类脚本资源图并告警,
@@ -33935,12 +33924,18 @@ class Interpreter:
 		report.err(s)
 		return get_none()
 
-	## 从模块注册表获取模块 [br]
+	## 从模块注册表获取模块 (内置模块惰性创建, 首次访问按工厂表构建并登记, [br]
+	## sys.modules 随之只反映已导入的模块, 对齐 CPython 的惰性导入策略) [br]
 	## [param name] 模块名 [br]
 	## [returns] DSLModule 或 null
 	func _get_module(name: String) -> DSLModule:
 		if modules.has(name):
 			return modules[name]
+		if _builtin_module_factories.has(name):
+			var mod: DSLModule = _builtin_module_factories[name].call()
+			mod.is_builtin = true
+			modules[name] = mod
+			return mod
 		return null
 
 	## 沙箱路径收敛 (静态, 宿主 API 与解释器共用): 把脚本可见路径归一化为盘内相对子路径 [br]
@@ -36694,40 +36689,115 @@ class Interpreter:
 
 	## random.randrange(stop) / (start, stop) / (start, stop, step)
 	func _rng_randrange(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		return _rng_randrange_common(args, Callable(self, "_mt_genrand"))
+
+	## randrange 公共实现 (实参支持任意精度) [br]
+	## CPython _randrange: width = (stop - start) 按 step 收敛, 抽取 _randbelow(width). [br]
+	## int64 内走既有快路径 (seeded 序列不变), 大数走拒绝循环的大数 getrandbits 内核 [br]
+	## [param args] start/stop/step 1~3 个整数实参 [br]
+	## [param genrand] 32 位字生成器 (模块级 MT 或实例 MT)
+	func _rng_randrange_common(args: Array[DSLObject], genrand: Callable) -> DSLObject:
 		if args.size() < 1 or args.size() > 3:
 			raise_exception("TypeError", "randrange() takes from 1 to 3 arguments")
 			return null
-		# 实参必须是整数 (bool 按 0/1, 支持 __index__), 浮点按 CPython 报 TypeError
-		var start = 0
-		var stop = 0
-		var step = 1
-		var ints: Array[int] = []
+		# 实参必须是整数 (bool 按 0/1, 支持 __index__), 浮点按 CPython 报 TypeError.
+		# 大数原样承载 (任意精度)
+		var objs: Array[DSLObject] = []
 		for a in args:
-			ints.append(_rng_index_int_arg(a))
+			var oi = _rng_index_int_obj(a)
 			if report.has_error:
 				return null
-		if ints.size() == 1:
-			stop = ints[0]
-		elif ints.size() == 2:
-			start = ints[0]
-			stop = ints[1]
+			objs.append(oi)
+		var start: DSLObject = DSLInteger.pooled(0)
+		var stop: DSLObject = null
+		var step: DSLObject = DSLInteger.pooled(1)
+		if objs.size() == 1:
+			stop = objs[0]
+		elif objs.size() == 2:
+			start = objs[0]
+			stop = objs[1]
 		else:
-			start = ints[0]
-			stop = ints[1]
-			step = ints[2]
-		if step == 0:
+			start = objs[0]
+			stop = objs[1]
+			step = objs[2]
+		var zero = DSLInteger.pooled(0)
+		if _dsl_lt_checked(step, zero) == false and _dsl_lt_checked(zero, step) == false:
+			# step == 0
 			raise_exception("ValueError", "zero step for randrange()")
 			return null
-		# 元素个数: 正步长 ceil((stop-start)/step), 负步长 ceil((start-stop)/(-step))
-		var count = 0
-		if step > 0:
-			count = (stop - start + step - 1) / step
+		# 任一实参为大数 -> 任意精度路径, 否则 int64 快路径 (seeded 序列与既有行为一致)
+		var any_big = false
+		for o in objs:
+			var uo = DSLObject._unwrap_dsl(o)
+			if uo is DSLInteger and (uo as DSLInteger).is_big():
+				any_big = true
+				break
+		if not any_big:
+			var ints: Array[int] = []
+			for o in objs:
+				ints.append((DSLObject._unwrap_dsl(o) as DSLInteger).value)
+			var start_i = 0
+			var stop_i = 0
+			var step_i = 1
+			if ints.size() == 1:
+				stop_i = ints[0]
+			elif ints.size() == 2:
+				start_i = ints[0]
+				stop_i = ints[1]
+			else:
+				start_i = ints[0]
+				stop_i = ints[1]
+				step_i = ints[2]
+			if step_i == 0:
+				raise_exception("ValueError", "zero step for randrange()")
+				return null
+			var count_i = 0
+			if step_i > 0:
+				count_i = (stop_i - start_i + step_i - 1) / step_i
+			else:
+				count_i = (start_i - stop_i - step_i - 1) / (-step_i)
+			if count_i <= 0:
+				raise_exception("ValueError", "empty range in randrange(%d, %d)" % [start_i, stop_i])
+				return null
+			return DSLInteger.pooled(start_i + step_i * _rng_randbelow_gen(count_i, genrand))
+		# 大数路径: width 按 CPython 收敛 (正步长 ceil((stop-start)/step), 负步长 ceil((start-stop)/(-step)))
+		var step_neg = _dsl_lt_checked(step, zero)
+		var width: DSLObject = null
+		if step_neg:
+			# (start - stop - step - 1) / (-step)
+			var a = start.magic_sub([start, stop] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var b = step.magic_sub([step, DSLInteger.pooled(1)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var c = a.magic_sub([a, b] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var neg_step = step.magic_neg([step] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			width = c.magic_floordiv([c, neg_step] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 		else:
-			count = (start - stop - step - 1) / (-step)
-		if count <= 0:
-			raise_exception("ValueError", "empty range in randrange(%d, %d)" % [start, stop])
+			# (stop - start + step - 1) / step
+			var a2 = stop.magic_sub([stop, start] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var b2 = step.magic_sub([step, DSLInteger.pooled(1)] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var c2 = a2.magic_add([a2, b2] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			width = c2.magic_floordiv([c2, step] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if _dsl_lt_checked(width, DSLInteger.pooled(1)):
+			# 空区间 (含 start == stop)
+			raise_exception("ValueError", "empty range in randrange(%s, %s)" % [DSLObject._py_repr(start), DSLObject._py_repr(stop)])
 			return null
-		return DSLInteger.pooled(start + step * _rng_randbelow(count))
+		var rb = _rng_randbelow_big(width, genrand)
+		var scaled = step.magic_mul([step, rb] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		return start.magic_add([start, scaled] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+
+	## randrange 实参的整数归一: DSLInteger (含大数原样) / DSLBool / __index__ 协议 [br]
+	## 浮点按 CPython 报 TypeError
+	func _rng_index_int_obj(v: DSLObject) -> DSLObject:
+		var raw = DSLObject._unwrap_dsl(v)
+		if raw is DSLInteger:
+			return raw
+		if raw is DSLBool:
+			return DSLInteger.pooled(1 if raw.value else 0)
+		var idxv = DSLObject._seq_index_int(raw, raw)
+		if idxv == DSLObject.INDEX_ERR:
+			if not report.has_error:
+				raise_exception("TypeError", "'%s' object cannot be interpreted as an integer" % raw._type_name())
+			return null
+		return DSLInteger.pooled(idxv)
 
 	## randrange 实参的整数归一: DSLInteger (含大数越界报 OverflowError) / DSLBool / __index__ 协议
 	func _rng_index_int_arg(v: DSLObject) -> int:
@@ -37147,6 +37217,48 @@ class Interpreter:
 		DSLBigInt._strip(limbs)
 		return DSLInteger.from_big(false, limbs)
 
+	## 任意位宽的 getrandbits 内核 (randrange 大数路径共用) [br]
+	## CPython _random_getrandbits: ceil(k/32) 个 32 位小端字, 末字右移对齐 k 位 [br]
+	## [param k] 位宽 (> 0) [br]
+	## [param genrand] 32 位字生成器 (模块级 MT 或实例 MT)
+	func _rng_getrandbits_words(k: int, genrand: Callable) -> DSLInteger:
+		var words = (k - 1) >> 5
+		var limbs: Array[int] = []
+		for w in range(words + 1):
+			var r = genrand.call()
+			if w == words:
+				var shift = (words << 5) + 32 - k
+				r = r >> shift if shift < 32 else 0
+			limbs.append(r & 0xFFFFFFFF)
+		DSLBigInt._strip(limbs)
+		return DSLInteger.from_big(false, limbs)
+
+	## 任意精度的 _randbelow 拒绝循环: k = n 的位宽, 抽取直至落入 [0, n) [br]
+	## [param n] 上界 (正 DSLInteger, 大数形态) [br]
+	## [param genrand] 32 位字生成器
+	func _rng_randbelow_big(n: DSLInteger, genrand: Callable) -> DSLInteger:
+		var na = DSLObject._unwrap_dsl(n) as DSLInteger
+		var k = DSLBigInt.mag_bitlen(na.big_limbs)
+		var r = _rng_getrandbits_words(k, genrand)
+		while _dsl_lt_checked(r, n) == false:
+			r = _rng_getrandbits_words(k, genrand)
+		return r
+
+	## 拒绝循环的整数版 (genrand 参数化): 与 _rng_randbelow 同算法同序, [br]
+	## 使实例级 randrange 的 seeded 序列与实例 MT 绑定 (模块级传 _mt_genrand 时同值)
+	func _rng_randbelow_gen(n: int, genrand: Callable) -> int:
+		if n <= 0:
+			return 0
+		var k = 0
+		var t = n
+		while t > 0:
+			k += 1
+			t = t >> 1
+		var r = _rng_getrandbits_words(k, genrand)
+		while (r as DSLInteger).value >= n:
+			r = _rng_getrandbits_words(k, genrand)
+		return (r as DSLInteger).value
+
 	func _rng_gauss(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() > 2:
 			raise_exception("TypeError", "gauss() takes at most two arguments")
@@ -37462,36 +37574,10 @@ class Interpreter:
 		if args.size() < 2 or not (args[0] is DSLRandomInstance):
 			return null
 		var inst = args[0] as DSLRandomInstance
-		# 实参经严格整数归一 (float/str/None 报 TypeError, 大数越界报 OverflowError, 与模块级一致)
-		var ints: Array[int] = []
+		var real_args: Array[DSLObject] = []
 		for i in range(1, args.size()):
-			ints.append(_rng_index_int_arg(args[i]))
-			if report.has_error:
-				return null
-		var start = 0
-		var stop = 0
-		var step = 1
-		if ints.size() == 1:
-			stop = ints[0]
-		elif ints.size() == 2:
-			start = ints[0]
-			stop = ints[1]
-		else:
-			start = ints[0]
-			stop = ints[1]
-			step = ints[2]
-		if step == 0:
-			raise_exception("ValueError", "zero step for randrange()")
-			return null
-		var count = 0
-		if step > 0:
-			count = (stop - start + step - 1) / step
-		else:
-			count = (start - stop - step - 1) / (-step)
-		if count <= 0:
-			raise_exception("ValueError", "empty range in randrange(%d, %d)" % [start, stop])
-			return null
-		return DSLInteger.pooled(start + step * inst._inst_randbelow(count))
+			real_args.append(args[i])
+		return _rng_randrange_common(real_args, Callable(inst, "_inst_genrand"))
 
 	func _rng_inst_uniform(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 3 or not (args[0] is DSLRandomInstance):
@@ -41718,53 +41804,9 @@ class Interpreter:
 
 		return ExecResult.NORMAL
 
-	## 内建 __import__(name, globals=None, locals=None, fromlist=(), level=0) [br]
-	## 无 fromlist 返回顶层模块 (点分名返回首段), 有 fromlist 返回目标模块 (CPython 语义); [br]
-	## 解析复用 import 语句路径 (_get_module / _load_user_module)
-	## 内置模块重建 (I1-100): sys.modules 驱逐后 __import__ 可重新导入 [br]
-	## (CPython 语义: 驱逐后再导入得到新模块对象), 未知名返回 null
-	func _recreate_builtin_module(name: String) -> DSLModule:
-		var mod: DSLModule = null
-		match name:
-			"math":
-				mod = _create_math_module()
-			"random":
-				mod = _create_random_module()
-			"statistics":
-				mod = _create_statistics_module()
-			"functools":
-				mod = _create_functools_module()
-			"itertools":
-				mod = _create_itertools_module()
-			"operator":
-				mod = _create_operator_module()
-			"collections":
-				mod = _create_collections_module()
-			"string":
-				mod = _create_string_module()
-			"sys":
-				mod = _create_sys_module()
-			"time":
-				mod = _create_time_module()
-			"contextlib":
-				mod = _create_contextlib_module()
-			"bisect":
-				mod = _create_bisect_module()
-			"heapq":
-				mod = _create_heapq_module()
-			"base64":
-				mod = _create_base64_module()
-			"json":
-				mod = _create_json_module()
-			"logging":
-				mod = _create_logging_module()
-		if mod != null:
-			modules[name] = mod
-		return mod
-
-	## 点分内置子模块的最小包形态 (I1-98): 已知别名表, 命中即构造虚拟子模块并缓存 [br]
-	## (CPython: collections.abc 为 collections 包下的真子模块. ABC 成员面以空壳类呈现, [br]
-	## isinstance 协议判定不在实现范围); 未知名返回 null
+	## 点分内置子模块的最小包形态: 已知别名表, 命中即构造虚拟子模块并缓存 [br]
+	## (CPython: collections.abc 为 collections 包下的真子模块, ABC 成员面以空壳类呈现, [br]
+	## isinstance 协议判定不在实现范围). 未知名返回 null
 	func _resolve_dotted_module(full_name: String) -> DSLModule:
 		if full_name != "collections.abc":
 			return null
@@ -41836,10 +41878,8 @@ class Interpreter:
 			if kwfl is DSLList or kwfl is DSLTuple:
 				fromlist = (kwfl as DSLList).items
 		var top_name = name.split(".")[0] if name.contains(".") else name
+		# _get_module 含惰性工厂 (内置模块按需创建, sys.modules 驱逐后重导入同路径)
 		var mod = _get_module(top_name)
-		if mod == null:
-			# sys.modules 驱逐后的重新导入: 内置模块按工厂重建 (CPython 语义)
-			mod = _recreate_builtin_module(top_name)
 		if mod == null:
 			mod = _load_user_module(top_name)
 		if mod == null:
@@ -45993,7 +46033,6 @@ class Interpreter:
 				class_obj.methods["bit_length"] = DSLMethodDescriptor.new("bit_length", Callable(proto, "builtin_bit_length"))
 				class_obj.methods["bit_count"] = DSLMethodDescriptor.new("bit_count", Callable(proto, "builtin_bit_count"))
 				class_obj.methods["to_bytes"] = DSLMethodDescriptor.new("to_bytes", Callable(proto, "builtin_to_bytes"))
-				class_obj.methods["hex"] = DSLMethodDescriptor.new("hex", Callable(proto, "builtin_hex"))
 				class_obj.methods["conjugate"] = DSLMethodDescriptor.new("conjugate", Callable(proto, "builtin_conjugate"))
 				class_obj.class_attrs["from_bytes"] = DSLClassMethodDescriptor.new("from_bytes", Callable(self, "api_int_from_bytes"))
 			"float":
