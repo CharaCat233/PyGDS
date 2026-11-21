@@ -57,7 +57,9 @@ except ModuleNotFoundError as e:
 try:
     exec("from math import nonexistent_b5")
 except ImportError as e:
-    print("IE:", str(e))
+    # 位置括号为宿主相关形态 (Windows 内建为 unknown location, Linux 为 .so 路径), 按 FILE_PATH 占位归一
+    msg = str(e)
+    print("IE:", msg[: msg.rfind(" (")] + " (FILE_PATH)")
 
 # builtins 模块可导入 (成员面 = 内建名全集, sys.modules 可见, 模块带 __name__)
 import builtins

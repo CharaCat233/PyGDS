@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-11-21
+
+### 测试
+
+- **双端用例的宿主路径占位归一**：`module_repr` 与 `syntax_import` 对宿主路径相关输出按 `FILE_PATH` 占位归一（`math` 在 Windows CPython 为内建模块、在 Linux 为扩展模块，模块 repr 的位置段与 `ImportError` 的位置括号随宿主安装位置变化，CI Linux 与本地 Windows 形态不同）。用例内以字符串操作截取替换，解释器行为不变
+
 ## [0.8.8-alpha.9] - 2026-11-21
 
 ### 修复
