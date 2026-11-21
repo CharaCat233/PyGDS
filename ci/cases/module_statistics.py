@@ -260,3 +260,23 @@ except TypeError as e:
 lr = statistics.linear_regression([1, 2, 3], [2, 4, 6])
 print("lr-dir:", [n for n in dir(lr) if not n.startswith("_")])
 print("lr-count:", lr.count(2.0))
+
+# _mu/_sigma 赋值原样承载 (CPython 普通实例属性语义: 赋什么存什么, 读取原样返回)
+nd5 = statistics.NormalDist(3, 2)
+nd5._mu = 5
+print("nd-assign-int:", (nd5._mu, nd5.mean, type(nd5.mean).__name__))
+nd5._mu = 5.5
+print("nd-assign-float:", (nd5._mu, nd5.mean))
+nd5._sigma = True
+print("nd-assign-bool:", (nd5._sigma, nd5.stdev, type(nd5.stdev).__name__))
+nd5._mu = "x"
+print("nd-assign-str:", (repr(nd5._mu), nd5.mean))
+nd5._mu = 10**20
+print("nd-assign-big:", (nd5._mu, nd5.mean))
+# 数值路径在使用时报运算层文案 (mu 的减法)
+nd6 = statistics.NormalDist(3, 2)
+nd6._mu = "x"
+try:
+    nd6.pdf(1)
+except TypeError as e:
+    print("nd-use-str-pdf:", str(e))

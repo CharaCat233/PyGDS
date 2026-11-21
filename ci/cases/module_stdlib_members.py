@@ -235,6 +235,20 @@ t("ba_self", lambda: "a".__len__.__self__)
 t("ba_name", lambda: "a".__len__.__name__)
 t("ba_call", lambda: "a".__len__.__call__())
 t("wd_objclass", lambda: str.__add__.__objclass__)
+
+
+# 容器 repr 的元素协议 (用户类实例走元素 __repr__, repr 与 str 上下文同口径)
+class R2:
+    def __repr__(self):
+        return "R2()"
+
+
+t("elem_repr", lambda: repr([R2(), R2()]))
+t("elem_tuple", lambda: repr((R2(),)))
+t("elem_dict", lambda: repr({R2(): 1}))
+t("elem_nested", lambda: repr([[R2()], (R2(),)]))
+t("elem_slice", lambda: repr((slice(1, 3, None), 0)))
+
 t("s_fmt", lambda: string.Formatter().format("{0}-{1}", 5, "a"))
 t("s_fmt_kw", lambda: string.Formatter().format("{v}", v=9))
 # itertools: compress / combinations_with_replacement

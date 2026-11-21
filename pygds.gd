@@ -4107,15 +4107,54 @@ class DSLObject:
 			return (o as DSLComplex)._repr_text()
 		if o is DSLBytes:
 			return o._dsl_str()
+		if o is DSLSlice:
+			# slice 的 repr 即 _dsl_str 形态 (slice(1, 3, None))
+			return o._dsl_str()
 		if o is DSLList or o is DSLTuple or o is DSLDict or o is DSLSet or o is DSLFrozenSet:
 			return o._dsl_str()
 		if o is DSLClass:
 			# 类对象 repr 与 str 同为 <class 'X'> 形态
 			return o._dsl_str()
-		# 用户类实例的默认 repr 用限定名 (局部类 outer.<locals>.Item 链)
+		# 内建类型的类实例 (deque/range 等, 经 _builtin_class_by_name 登记): [br]
+		# _dsl_str 即 repr 形态 (deque([1, 2], maxlen=3) / range(0, 5))
+		if o.klass != null and _builtin_class_is_builtin(o.klass):
+			return o._dsl_str()
 		if o.klass != null and o.klass.qualname != "":
+			# 用户类实例: 有类体定义的 __repr__ 时走 repr 协议 (repr 协议入口在 _py_repr_elem), [br]
+			# 其余用限定名默认形态 (CPython 默认 repr 另带地址段, 家族形态省略)
+			var rp = o.klass._lookup_method("__repr__")
+			if rp is DSLFunction:
+				var rr = _py_repr_elem(o)
+				if rr != "":
+					return rr
 			return "<" + o.klass.qualname + " object>"
 		return "<" + o._type_name() + " object>"
+
+	## 类对象是否为内建类型的类 (经 _builtin_class_by_name 值集判定) [br]
+	## [param k] 待判定的类对象
+	static func _builtin_class_is_builtin(k: DSLClass) -> bool:
+		for bv in _builtin_class_by_name.values():
+			if bv == k:
+				return true
+		return false
+
+	## 容器元素呈现的统一入口 (repr 协议): 用户类实例有类体定义的 __repr__ 时调用之 [br]
+	## (CPython: 容器内元素的 repr 与顶层 repr 同走 type(elem).__repr__), 其余元素 [br]
+	## (内建类型实例 / 字面量容器 / 字符串) 按 _py_repr 的既有分派呈现
+	static func _py_repr_elem(o: DSLObject) -> String:
+		var e = o
+		if e._wrapped != null and e.klass != null:
+			e = e._wrapped
+		if e.klass != null and not _builtin_class_is_builtin(e.klass):
+			var rp = e.klass._lookup_method("__repr__")
+			if rp is DSLFunction:
+				var rr = e.klass._invoke_func(rp, [e] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				if rr != null:
+					return rr._dsl_str()
+			# 用户类协议未命中或调用失败: 默认形态 (CPython 默认 repr 另带地址段, 家族形态省略)
+			if e.klass.qualname != "":
+				return "<" + e.klass.qualname + " object>"
+		return _py_repr(e)
 
 	## 文本的纯 ASCII 转义 (ascii() 与 f-string/格式化 !a 共用): [br]
 	## 非 ASCII 字符按码点转义为 \xNN / \uNNNN / \UNNNNNNNN (CPython 同规则)
@@ -10816,7 +10855,7 @@ class DSLList extends DSLObject:
 		for i in range(items.size()):
 			if i > 0:
 				s += ", "
-			s += DSLObject._py_str_repr(items[i].value) if items[i] is DSLString else items[i]._dsl_str()
+			s += DSLObject._py_repr_elem(items[i])
 		DSLObject._render_exit(self)
 		return "[" + s + "]"
 	
@@ -11108,8 +11147,16 @@ class DSLList extends DSLObject:
 			"__str__": DSLWrappedDescriptor.new("__str__", Callable(self, "magic_str")),
 			"__repr__": DSLWrappedDescriptor.new("__repr__", Callable(self, "magic_repr")),
 			"__iadd__": DSLWrappedDescriptor.new("__iadd__", Callable(self, "magic_iadd")),
-			"__imul__": DSLWrappedDescriptor.new("__imul__", Callable(self, "magic_imul")),
+			"__imul__": _lst_imul_desc(),
 		}
+
+	## 原地乘法描述符的直调校验形态 (I2-49): 槽包装直调的实参先经 Index 转换 [br]
+	## pre_check 经 DSLMethodWrapper.pre_check 在属性绑定形态触发 (语句层 *= 不经绑定)
+	func _lst_imul_desc() -> DSLWrappedDescriptor:
+		var d = DSLWrappedDescriptor.new("__imul__", Callable(self, "magic_imul"))
+		d.owner_name = "list"
+		d.pre_check = true
+		return d
 
 	## 确保 list 方法描述符已初始化
 	func _ensure_lst_descriptors():
@@ -11395,7 +11442,7 @@ class DSLTuple extends DSLObject:
 				DSLObject._render_exit(self)
 				return "()"
 			1:
-				var one = "(" + (DSLObject._py_str_repr(items[0].value) if items[0] is DSLString else items[0]._dsl_str()) + ",)"
+				var one = "(" + DSLObject._py_repr_elem(items[0]) + ",)"
 				DSLObject._render_exit(self)
 				return one
 			_:
@@ -11403,7 +11450,7 @@ class DSLTuple extends DSLObject:
 				for i in range(items.size()):
 					if i > 0:
 						s += ", "
-					s += DSLObject._py_str_repr(items[i].value) if items[i] is DSLString else items[i]._dsl_str()
+					s += DSLObject._py_repr_elem(items[i])
 				DSLObject._render_exit(self)
 				return "(" + s + ")"
 	
@@ -11655,9 +11702,9 @@ class DSLDict extends DSLObject:
 				s += ", "
 			first = false
 			var key_obj = _original_key_obj(k)
-			s += DSLObject._py_str_repr(key_obj.value) if key_obj is DSLString else key_obj._dsl_str()
+			s += DSLObject._py_repr_elem(key_obj)
 			s += ": "
-			s += DSLObject._py_str_repr(dict[k].value) if dict[k] is DSLString else dict[k]._dsl_str()
+			s += DSLObject._py_repr_elem(dict[k])
 		DSLObject._render_exit(self)
 		return "{" + s + "}"
 		
@@ -17668,11 +17715,7 @@ class DSLSet extends DSLObject:
 			return "set()"
 		var parts = []
 		for k in items:
-			var v = items[k]
-			if v is DSLString:
-				parts.append(DSLObject._py_str_repr(v.value))
-			else:
-				parts.append(v._dsl_str())
+			parts.append(DSLObject._py_repr_elem(items[k]))
 		parts.sort()
 		DSLObject._render_exit(self)
 		return "{" + ", ".join(parts) + "}"
@@ -18319,11 +18362,7 @@ class DSLFrozenSet extends DSLSet:
 			return "frozenset()"
 		var parts = []
 		for k in items:
-			var v = items[k]
-			if v is DSLString:
-				parts.append(DSLObject._py_str_repr(v.value))
-			else:
-				parts.append(v._dsl_str())
+			parts.append(DSLObject._py_repr_elem(items[k]))
 		parts.sort()
 		return "frozenset({" + ", ".join(parts) + "})"
 
@@ -19949,6 +19988,8 @@ class DSLWrappedDescriptor extends DSLObject:
 	var callback: Callable
 	## 归属类名 (repr 的 of '<owner>' objects; 空时经回调绑定对象推导)
 	var owner_name: String = ""
+	## 属性绑定调用的前置校验标记 (I2-49: __imul__ 直调的实参经 Index 转换校验)
+	var pre_check: bool = false
 	
 	## 构造魔法方法描述符 [br]
 	## [param p_name] 方法名称 [br]
@@ -20056,11 +20097,30 @@ class DSLMethodWrapper extends DSLObject:
 			call_desc.owner_name = descriptor.owner_name
 			return DSLMethodWrapper.new(call_desc, bound_self)
 		return super._dsl_getattribute(attr_name)
-	
+
+	## Index 转换校验 (I2-49: __imul__ 直调的实参先经 ssize_t 转换语义) [br]
+	## bool 按整数, 大数超 ssize_t 报 OverflowError, 其余报 cannot be interpreted 文案
+	func _imul_index_check(arg: DSLObject) -> bool:
+		var a = DSLObject._unwrap_dsl(arg)
+		if a is DSLInteger:
+			if (a as DSLInteger).is_big():
+				bound_self.last_error = "OverflowError: cannot fit 'int' into an index-sized integer"
+				return false
+			return true
+		if a is DSLBool:
+			return true
+		bound_self.last_error = "TypeError: '%s' object cannot be interpreted as an integer" % a._type_name()
+		return false
+
 	## 调用包装的魔法方法 [br]
 	## [param kwargs] 关键字参数 [br]
 	## [returns] 方法返回值 (自动将 bound_self 插入参数列表首位)
 	func magic_call(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject] = {}) -> DSLObject:
+		if descriptor.pre_check and descriptor.name == "__imul__":
+			# 槽包装直调的实参校验 (语句层 *= 的分派不经属性绑定, 不触发)
+			for a in args:
+				if not _imul_index_check(a):
+					return null
 		var full_args: Array[DSLObject] = [bound_self]
 		full_args.append_array(args)
 		var callv_args = [full_args, kwargs]
@@ -21668,13 +21728,15 @@ class DSLLinearRegression extends DSLObject:
 	func magic_repr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		return DSLString.new(_dsl_str())
 
-## statistics.NormalDist: 正态分布 (mu / sigma 属性)
+## statistics.NormalDist: 正态分布 (mu / sigma 属性) [br]
+## CPython 的 _mu/_sigma 为普通实例属性: 赋什么存什么, 读取原样返回 [br]
+## 构造器经 float() 转换 (构造后恒为 DSLFloat), 数值读取站点按需归一
 class DSLNormalDist extends DSLObject:
 	static var _type_class: DSLClass = null
-	## 均值
-	var mu: DSLFloat = null
-	## 标准差
-	var sigma: DSLFloat = null
+	## 均值 (构造后 DSLFloat, 赋值面为任意对象)
+	var mu: DSLObject = null
+	## 标准差 (同上)
+	var sigma: DSLObject = null
 
 	func _init():
 		super._init()
@@ -21690,7 +21752,7 @@ class DSLNormalDist extends DSLObject:
 			return mu
 		if name == "_sigma":
 			return sigma
-		# mean / stdev 为属性 (CPython property 语义: nd.mean 直接返回浮点)
+		# mean / stdev 为属性 (CPython property 语义: 原样返回字段)
 		if name == "mean":
 			return mu
 		if name == "stdev":
@@ -21700,41 +21762,38 @@ class DSLNormalDist extends DSLObject:
 			return DSLNone.new()
 		return super._dsl_getattribute(name)
 
-	## _mu/_sigma 可写 (CPython 实例属性语义), 其余属性写入报 AttributeError
+	## _mu/_sigma 赋值原样承载 (CPython: 普通实例属性, 非数值静默可赋), 其余属性写入报 AttributeError
 	func _dsl_setattr(name: String, value: DSLObject):
 		if name == "_mu":
-			var mv = _nd_field_float(value)
-			if mv == null:
-				return
-			mu = mv
+			mu = value
 			return
 		if name == "_sigma":
-			var sv = _nd_field_float(value)
-			if sv == null:
-				return
-			sigma = sv
+			sigma = value
 			return
 		last_error = "AttributeError: 'NormalDist' object has no attribute '%s'" % name
 
-	## _mu/_sigma 赋值的数值归一: int/bool/float 转 float 承载, [br]
-	## 大数经精确转 double, 非数值置 last_error 返回 null
-	func _nd_field_float(value: DSLObject) -> DSLFloat:
-		var a = DSLObject._unwrap_dsl(value)
+	## 字段对象的数值归一 (数值路径用): 数值类型经精确转 float, 非数值按站点报运算层文案 [br]
+	## [param recv] 错误接收者 [br]
+	## [param f] 字段对象 [br]
+	## [param op] 参与的运算符 (文案形态: "+" / "*" / "-") [br]
+	## [param other_type] 运算另一侧的类型名 (CPython 文案的右操作数)
+	static func _nd_field_num(recv: DSLObject, f: DSLObject, op: String, other_type: String) -> float:
+		var a = DSLObject._unwrap_dsl(f)
 		if a is DSLFloat:
-			return a
+			return (a as DSLFloat).value
 		if a is DSLInteger:
 			var oi = a as DSLInteger
 			if oi.is_big():
 				var conv: Array = DSLBigInt.mag_to_float(oi.big_neg, oi.big_limbs)
 				if not conv[0]:
-					last_error = "OverflowError: int too large to convert to float"
-					return null
-				return DSLFloat.new(conv[1])
-			return DSLFloat.new(float(oi.value))
+					recv.last_error = "OverflowError: int too large to convert to float"
+					return NAN
+				return conv[1]
+			return float(oi.value)
 		if a is DSLBool:
-			return DSLFloat.new(1.0 if (a as DSLBool).value else 0.0)
-		last_error = "TypeError: _mu must be a number, not '%s'" % a._type_name()
-		return null
+			return 1.0 if (a as DSLBool).value else 0.0
+		recv.last_error = "TypeError: unsupported operand type(s) for %s: '%s' and '%s'" % [op, other_type, a._type_name()]
+		return NAN
 
 	func _dsl_str() -> String:
 		return "NormalDist(mu=%s, sigma=%s)" % [mu._dsl_str(), sigma._dsl_str()]
@@ -21751,9 +21810,15 @@ class DSLNormalDist extends DSLObject:
 			last_error = "TypeError: unsupported operand type(s) for +: 'NormalDist' and '%s'" % args[1]._type_name()
 			return null
 		var o = other as DSLNormalDist
+		var m1 = _nd_field_num(self_obj, self_obj.mu, "+", "NormalDist")
+		var m2 = _nd_field_num(self_obj, o.mu, "+", "NormalDist")
+		var s1 = _nd_field_num(self_obj, self_obj.sigma, "*", "NormalDist")
+		var s2 = _nd_field_num(self_obj, o.sigma, "*", "NormalDist")
+		if is_nan(m1) or is_nan(m2) or is_nan(s1) or is_nan(s2):
+			return null
 		var out = DSLNormalDist.new()
-		out.mu = DSLFloat.new(self_obj.mu.value + o.mu.value)
-		out.sigma = DSLFloat.new(sqrt(self_obj.sigma.value * self_obj.sigma.value + o.sigma.value * o.sigma.value))
+		out.mu = DSLFloat.new(m1 + m2)
+		out.sigma = DSLFloat.new(sqrt(s1 * s1 + s2 * s2))
 		return out
 
 	func magic_sub(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
@@ -21763,20 +21828,28 @@ class DSLNormalDist extends DSLObject:
 			last_error = "TypeError: unsupported operand type(s) for -: 'NormalDist' and '%s'" % args[1]._type_name()
 			return null
 		var o = other as DSLNormalDist
+		var m1 = _nd_field_num(self_obj, self_obj.mu, "-", "NormalDist")
+		var m2 = _nd_field_num(self_obj, o.mu, "-", "NormalDist")
+		var s1 = _nd_field_num(self_obj, self_obj.sigma, "*", "NormalDist")
+		var s2 = _nd_field_num(self_obj, o.sigma, "*", "NormalDist")
+		if is_nan(m1) or is_nan(m2) or is_nan(s1) or is_nan(s2):
+			return null
 		var out = DSLNormalDist.new()
-		out.mu = DSLFloat.new(self_obj.mu.value - o.mu.value)
-		out.sigma = DSLFloat.new(sqrt(self_obj.sigma.value * self_obj.sigma.value + o.sigma.value * o.sigma.value))
+		out.mu = DSLFloat.new(m1 - m2)
+		out.sigma = DSLFloat.new(sqrt(s1 * s1 + s2 * s2))
 		return out
 
 	## 字段相等 (CPython: self._mu == other._mu and self._sigma == other._sigma, [br]
-	## 非 NormalDist 返回 NotImplemented 演化为 False)
+	## 对象级相等: int 5 与 float 5.0 等值, 非 NormalDist 返回 NotImplemented 演化为 False)
 	func magic_eq(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var self_obj = args[0] as DSLNormalDist
 		var o = DSLObject._unwrap_dsl(args[1]) if args.size() > 1 else null
 		if o is not DSLNormalDist:
 			return DSLBool.new(false)
 		var ond = o as DSLNormalDist
-		return DSLBool.new(self_obj.mu.value == ond.mu.value and self_obj.sigma.value == ond.sigma.value)
+		var eq1 = self_obj.mu._dsl_eq(ond.mu)
+		var eq2 = self_obj.sigma._dsl_eq(ond.sigma)
+		return DSLBool.new(eq1 and eq2)
 
 	func magic_ne(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLBool:
 		var eq = magic_eq(args, _kwargs)
@@ -21874,41 +21947,57 @@ class DSLNormalDist extends DSLObject:
 
 	func builtin_pdf(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLNormalDist
-		var sigma = self_obj.sigma.value
-		if sigma == 0.0:
+		# CPython 公式序: variance = sigma * sigma 先算 (非数值 sigma 在此报运算层文案)
+		var sv = _nd_field_num(self_obj, self_obj.sigma, "*", self_obj.sigma._type_name())
+		if is_nan(sv):
+			return null
+		var variance = sv * sv
+		if variance == 0.0:
 			self_obj.last_error = "StatisticsError: pdf() not defined when sigma is zero"
 			return null
-		var x = _nd_num_arg(self_obj, args[1])
-		if is_nan(x):
+		var xv = _nd_num_arg(self_obj, args[1])
+		if is_nan(xv):
 			return null
-		var variance = sigma * sigma
-		var diff = x - self_obj.mu.value
+		var mv = _nd_field_num(self_obj, self_obj.mu, "-", args[1]._type_name())
+		if is_nan(mv):
+			return null
+		var diff = xv - mv
 		var tau = 2.0 * PI
 		return DSLFloat.new(exp(diff * diff / (-2.0 * variance)) / sqrt(tau * variance))
 
 	func builtin_cdf(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLNormalDist
-		var sigma = self_obj.sigma.value
-		if sigma == 0.0:
+		var sv = _nd_field_num(self_obj, self_obj.sigma, "*", "float")
+		if is_nan(sv):
+			return null
+		if sv == 0.0:
 			self_obj.last_error = "StatisticsError: cdf() not defined when sigma is zero"
 			return null
-		var x = _nd_num_arg(self_obj, args[1])
-		if is_nan(x):
+		var xv = _nd_num_arg(self_obj, args[1])
+		if is_nan(xv):
+			return null
+		var mv = _nd_field_num(self_obj, self_obj.mu, "-", args[1]._type_name())
+		if is_nan(mv):
 			return null
 		var ip = Interpreter.active
-		var erf = ip._erf_impl((x - self_obj.mu.value) / (sigma * sqrt(2.0)))
+		var erf = ip._erf_impl((xv - mv) / (sv * sqrt(2.0)))
 		return DSLFloat.new(0.5 * (1.0 + erf))
 
 	func builtin_zscore(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLNormalDist
-		var sigma = self_obj.sigma.value
-		if sigma == 0.0:
+		var sv = _nd_field_num(self_obj, self_obj.sigma, "/", args[1]._type_name())
+		if is_nan(sv):
+			return null
+		if sv == 0.0:
 			self_obj.last_error = "StatisticsError: zscore() not defined when sigma is zero"
 			return null
-		var x = _nd_num_arg(self_obj, args[1])
-		if is_nan(x):
+		var xv = _nd_num_arg(self_obj, args[1])
+		if is_nan(xv):
 			return null
-		return DSLFloat.new((x - self_obj.mu.value) / sigma)
+		var mv = _nd_field_num(self_obj, self_obj.mu, "-", args[1]._type_name())
+		if is_nan(mv):
+			return null
+		return DSLFloat.new((xv - mv) / sv)
 
 	func builtin_inv_cdf(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLNormalDist
@@ -21918,7 +22007,14 @@ class DSLNormalDist extends DSLObject:
 		if p <= 0.0 or p >= 1.0:
 			self_obj.last_error = "StatisticsError: p must be in the range 0.0 < p < 1.0"
 			return null
-		return DSLFloat.new(_nd_inv_cdf(p, self_obj.mu.value, self_obj.sigma.value))
+		# CPython: mu + (x * sigma) 的算术序, sigma 的乘法先于 mu 的加法报错
+		var sv = _nd_field_num(self_obj, self_obj.sigma, "*", "float")
+		if is_nan(sv):
+			return null
+		var mv = _nd_field_num(self_obj, self_obj.mu, "+", "float")
+		if is_nan(mv):
+			return null
+		return DSLFloat.new(_nd_inv_cdf(p, mv, sv))
 
 	func builtin_samples(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var self_obj = args[0] as DSLNormalDist
@@ -21955,11 +22051,20 @@ class DSLNormalDist extends DSLObject:
 				self_obj.last_error = "TypeError: The only supported seed types are: None,\nint, float, str, bytes, and bytearray."
 				return null
 		var out: Array[DSLObject] = []
+		# gauss 算术的数值归一 (CPython: mu + z * sigma, sigma 的乘法先于 mu 的加法报错)
+		var sv = _nd_field_num(self_obj, self_obj.sigma, "*", "float")
+		if is_nan(sv):
+			return null
+		var mv = _nd_field_num(self_obj, self_obj.mu, "+", "float")
+		if is_nan(mv):
+			return null
+		var mu_f = DSLFloat.new(mv)
+		var sigma_f = DSLFloat.new(sv)
 		if seed is DSLNone:
 			# 全局 PRNG 的 gauss
 			var ip = Interpreter.active
 			for _i in range(n):
-				var v = ip._rng_gauss([self_obj.mu, self_obj.sigma] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+				var v = ip._rng_gauss([mu_f, sigma_f] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 				if v == null:
 					return null
 				out.append(v)
@@ -21969,7 +22074,7 @@ class DSLNormalDist extends DSLObject:
 		inst._inst_seed_auto(seed)
 		var ip2 = Interpreter.active
 		for _i in range(n):
-			var g = ip2._rng_inst_gauss([inst, self_obj.mu, self_obj.sigma] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+			var g = ip2._rng_inst_gauss([inst, mu_f, sigma_f] as Array[DSLObject], {} as Dictionary[String, DSLObject])
 			if g == null:
 				return null
 			out.append(g)
@@ -45734,6 +45839,14 @@ class Interpreter:
 		d.owner_name = owner
 		return d
 
+	## 原地乘法描述符的直调校验形态 : 槽包装直调的实参先经 Index 转换 [br]
+	## (CPython: list.__imul__ 直调报 ssize_t 转换文案, 语句层 *= 走运算符层判定), [br]
+	## 校验经 DSLMethodWrapper.pre_check 标记在属性绑定形态触发, 语句层分派不经绑定不受影响
+	func _make_imul_desc(owner: String) -> DSLWrappedDescriptor:
+		var d = _make_class_magic_desc("__imul__", "magic_imul", owner)
+		d.pre_check = true
+		return d
+
 	## 向 preamble 中定义的内置类型类注入对应的方法描述 [br]
 	## 根据 [param cls_name] 匹配目标类型 [br]
 	## [param class_obj] 目标 DSLClass [br]
@@ -45832,7 +45945,7 @@ class Interpreter:
 				class_obj.methods["__iter__"] = DSLWrappedDescriptor.new("__iter__", Callable(proto, "magic_iter"))
 				class_obj.methods["__delitem__"] = DSLWrappedDescriptor.new("__delitem__", Callable(proto, "magic_delitem"))
 				class_obj.methods["__iadd__"] = _make_class_magic_desc("__iadd__", "magic_iadd", "list")
-				class_obj.methods["__imul__"] = _make_class_magic_desc("__imul__", "magic_imul", "list")
+				class_obj.methods["__imul__"] = _make_imul_desc("list")
 			"tuple":
 				var proto = DSLTuple.new([])
 				_builtin_protos["tuple"] = proto
@@ -46061,7 +46174,7 @@ class Interpreter:
 				class_obj.methods["__repr__"] = _make_class_magic_desc("__repr__", "magic_repr", "bytearray")
 				# 原地族直调 (与 += / *= 语句层共用实现)
 				class_obj.methods["__iadd__"] = _make_class_magic_desc("__iadd__", "magic_iadd", "bytearray")
-				class_obj.methods["__imul__"] = _make_class_magic_desc("__imul__", "magic_imul", "bytearray")
+				class_obj.methods["__imul__"] = _make_imul_desc("bytearray")
 			"deque":
 				var dq_proto = DSLDeque.new()
 				_builtin_protos["deque"] = dq_proto

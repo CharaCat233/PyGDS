@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)
 
+## [Unreleased]
+
+## [0.8.8-alpha.8] - 2026-11-21
+
+### 修复
+
+- **容器 repr 的元素协议（I2-54）**：list/tuple/dict/set/frozenset 的元素呈现统一走元素的 `__repr__` 协议（CPython：容器内元素的 repr 与顶层 repr 同走 `type(elem).__repr__`）——用户类实例有类体定义的 `__repr__` 时在容器内正确展开（`repr([R()])` 为 `[R()]`，此前为 `[<R object>]`）；内建类型的类实例（deque/range 等，`_dsl_str` 即 repr 形态）与 slice 的呈现不变；新增统一入口（容器元素与顶层用户类分支共用，内建类型类经登记表值集判定区分）
+- **NormalDist `_mu`/`_sigma` 赋值形态完全对齐（I2-62）**：字段改为原样承载（CPython 普通实例属性语义——赋什么存什么、`mean`/`stdev`/`_mu`/`_sigma` 读取原样返回，int/bool/str/list/大数赋值全部保留赋值类型）；数值路径（pdf/cdf/zscore/inv_cdf/samples/运算符与相等）按 CPython 公式序在使用时归一（pdf 的 `variance = sigma * sigma` 先算，非数值字段在算术站点报运算层文案，如 `unsupported operand type(s) for -: 'int' and 'str'`）；repr 的字段呈现原样（赋 int 后显示 `NormalDist(mu=5, sigma=2.0)`）
+- **已知问题清单的 I2-35 并入 P4**：repr 对非可打印字符不转义与 P4 的宿主 Unicode 数据库缺失同根因（非字符码点转义需显式码点表），I2-35 编号退役、P4 条目补记该面
+- **原位 dunder 直调的实参校验解耦（I2-49）**：`[1].__imul__("x")` 等槽包装直调的实参先经 Index 转换校验——非整数报 ssize_t 转换文案（`'str' object cannot be interpreted as an integer`）、大数超索引位报 `cannot fit 'int' into an index-sized integer`；语句层 `*=` 的分派不经属性绑定（运算符层文案不变），同一实现的两调用层文案与 CPython 同构；`__iadd__` 直调保持 extend 语义（非可迭代报 not iterable，无 Index 转换，双端原一致）
+- **单文件双端 harness 迁入 ci/（工具正式化）**：`tests/run_one.gd` 与 `tests/run_one_io.gd` 迁至 `ci/run_one.gd` / `ci/run_one_io.gd`（调用路径 `res://ci/run_one*.gd`，内部逻辑不变——全部使用绝对 `res://` 路径引用 pygds.gd 与 `_pyrun.py`），作为通用审计工具随仓库分发；交接文档与已知问题清单的工具引用同步更新
+
 ## [0.8.8-alpha.7] - 2026-11-12
 
 ### 修复

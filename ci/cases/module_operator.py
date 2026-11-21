@@ -163,3 +163,38 @@ try:
     operator.imul("a", 0.5)
 except TypeError as e:
     print("TE-imul:", e)
+
+# 原位 dunder 直调: 槽包装直调的实参先经 Index 转换 (ssize_t 文案), [br]
+# 语句层 *= 走运算符层判定 (同一实现的两调用层文案不同, CPython 同构)
+try:
+    [1].__imul__("x")
+except TypeError as e:
+    print("dc-imul-str:", e)
+try:
+    [1].__imul__(1.5)
+except TypeError as e:
+    print("dc-imul-float:", e)
+try:
+    [1].__imul__(None)
+except TypeError as e:
+    print("dc-imul-none:", e)
+print("dc-imul-ok:", [1].__imul__(2))
+try:
+    [1].__imul__(10**30)
+except OverflowError as e:
+    print("dc-imul-big:", e)
+try:
+    bytearray(b"a").__imul__("x")
+except TypeError as e:
+    print("dc-imul-ba:", e)
+# 语句层对照 (运算符层文案)
+lst2 = [1, 2]
+try:
+    lst2 *= "x"
+except TypeError as e:
+    print("stmt-mul:", e)
+# __iadd__ 直调为 extend 语义 (非可迭代报 not iterable, 无 Index 转换)
+try:
+    [1].__iadd__(5)
+except TypeError as e:
+    print("dc-iadd:", e)
