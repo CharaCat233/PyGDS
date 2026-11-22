@@ -40,6 +40,16 @@ print(exc._dsl_bool())   # true
 
 ---
 
+## Exception Attribute Storage and the `__traceback__` Model
+
+Exception instance dunder attributes (`args`, `__cause__`, `__context__`, `__suppress_context__`, `__notes__`, `__traceback__`) live in the object's `fields` dictionary. `args` additionally uses getset semantics to write back the inner message, so `str(e)` updates in sync; type checks and deletion error texts match CPython. No separate storage structure is introduced for exception objects.
+
+### `__traceback__` Stays `None`
+
+PyGDS does not maintain a Python frame object model: statements execute on the GDScript call stack, and there is no Python frame chain that could be mapped to `types.TracebackType`. Therefore `e.__traceback__` is always `None`, `with_traceback` is not provided, and exception location information is carried by the interpreter error text (type name, message, and source line number). The model boundary also includes no type validation on `__traceback__` assignment (CPython raises `__traceback__ must be a traceback or None`).
+
+This is a deliberate design trade-off rather than a defect: CPython's traceback head node is the **outermost capturing frame**, and the `tb_next` chain walks inward to the raise point, so a single-frame approximation would invert line-number semantics (printing the call line instead of the raise site). Frame objects also hold execution-environment references, which combined with PyGDS's reference-count-based reclamation path (generator `finally` and user `__del__` cannot be driven) would form long-lived cycles. The trade-off is documented as a Design-series difference.
+
 ## Exception Class Hierarchy
 
 PyGDS defines exception types as **`DSLClass` instances**, not as separate constructor classes. All exception classes are uniformly registered through the `_define_exception` function.

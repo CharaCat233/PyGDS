@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [0.8.9-alpha.2] - 2026-11-22
+
+### 新增
+
+- **`types` 模块**：类型别名（`FunctionType` / `LambdaType` / `MethodType` / `BuiltinFunctionType` / `BuiltinMethodType` / `ModuleType` / `CodeType` / `GeneratorType` / `CoroutineType` / `AsyncGeneratorType` / `MappingProxyType` / `WrapperDescriptorType` / `MethodWrapperType` / `MethodDescriptorType` / `NoneType` / `EllipsisType` / `NotImplementedType` / `UnionType` / `GenericAlias`）与 `SimpleNamespace`（关键字构造、`namespace(...)` repr、字段相等）对齐 CPython
+- **`importlib` 模块**：`import_module`（绝对名与点分名取末段模块、`ModuleNotFoundError.name`）与 `invalidate_caches`
+- **`copy` 模块**：`copy` / `deepcopy`（`__copy__` / `__deepcopy__` 协议、memo、循环引用、内建容器分派，`deque` 元素与 `Random` 的 MT 状态随拷、`memoryview` 按 CPython 文案拒拷）与 `Error` / `error`
+
+### 修复
+
+- **内建类型基类子类化**：`class P(property)` / `class S(staticmethod)` / `class C(classmethod)` 不再报 `metaclass conflict`，子类实例保持描述符行为并转发 `__set_name__`
+- **嵌套异常组的 `except*`**：按 CPython 递归拆分语义匹配叶子异常，`subgroup` / `split` 保持嵌套结构重构；容器与异常组成员中的异常组 repr 对齐
+- **`__slots__`**：类创建期校验同名类变量冲突（`ValueError`）、非字符串项与不可迭代形态（`TypeError`），并为各槽注册 `member_descriptor`（类级可访问、实例读写删走槽字段）
+- **异常属性面**：`UnicodeEncodeError` / `UnicodeDecodeError` 的五元组 `args` 与 `encoding` / `object` / `start` / `end` / `reason` 属性；`SyntaxError` 家族的 `msg` / `filename` / `lineno` / `offset` / `text` / `end_lineno` / `end_offset` 与结构化 args
+- **函数默认值槽写入**：`__defaults__` / `__kwdefaults__` 支持赋值与清空（类型校验文案对齐），调用期默认值按尾随位置参数对齐、关键字专属参数按名解析
+- **编码名归一**：`encode` / `decode` / `bytes(str, encoding)` 接受 CPython 的编码名别名与大小写（`UTF8` / `US-ASCII` / `latin1` 等）
+- **包装对象类型身份**：`staticmethod` / `classmethod` / `member_descriptor` 的类型名与 repr 形态对齐（`type(staticmethod(...)).__name__` 等）
+- **堆类元数据面（D12 方案 C）**：堆类实例与类对象的 `__doc__`（类文档回退）、`__weakref__`（实例为 None，类为 `getset_descriptor`，纯槽类未声明时报 `AttributeError`）、`dir()` 的 `__dict__`/`__module__`/`__weakref__` 元数据条目、`str` 实例的 `format` 条目与 `getset_descriptor` 类型身份对齐 CPython
+
+### 文档
+
+- **注释规范清理（全文件）**：恢复此前批量标点替换脚本误剥的 280 行注释缩进, 统一文档注释 [br] 用法（补齐非末行、移除末行与普通 # 注释中的残留）, 按语义重排 60 余处断行并统一中文标点到英文标点, 清理历史版本标记与重复文档块
+
+- **异常 `__traceback__` 模型（D20 方案 C）**：`exception_system.md` 中英文档新增「异常属性存储与 `__traceback__` 模型」节，说明维持 `None` 的设计取舍（单帧近似的行号语义反转、帧对象引用环与回收路径边界）及关联缺口
+
+### 测试
+
+- 全量用例 419 -> 430：新增异常编码属性、嵌套异常组、编码别名、槽描述符、默认值槽、内建类型子类化、包装对象身份、堆类元数据面、`types` / `importlib` / `copy` 十一例
+
+## [0.8.9-alpha.1] - 2026-11-22
+
 ### 修复
 
 - **异常对象的呈现与属性协议**：容器与异常组成员里的异常对象 repr 由 `<ValueError object>` 对齐为 `ValueError('v')` 形态；异常组的 `args` 第二项改为成员列表、repr 改为列表形态，并补 `derive` 方法；`BaseExceptionGroup` 全为 `Exception` 成员时按 CPython 语义降格为 `ExceptionGroup`

@@ -40,6 +40,16 @@ print(exc._dsl_bool())   # true
 
 ---
 
+## 异常属性存储与 `__traceback__` 模型
+
+异常实例的 dunder 属性（`args`、`__cause__`、`__context__`、`__suppress_context__`、`__notes__`、`__traceback__`）存放在对象的 `fields` 字典中。`args` 另按 getset 语义回写到内层消息，赋值时 `str(e)` 同步更新，类型与删除态的文案对齐 CPython。异常对象不引入独立的存储结构
+
+### `__traceback__` 维持 `None`
+
+PyGDS 不维护 Python 帧对象模型：语句在 GDScript 调用栈上执行，没有可映射为 `types.TracebackType` 的 Python 帧链。因此 `e.__traceback__` 恒为 `None`，`with_traceback` 方法不提供，异常定位信息由解释器错误文本（类型名、消息与源码行号）承载。该模型边界另含 `__traceback__` 赋值不做类型校验（CPython 报 `__traceback__ must be a traceback or None`）
+
+这是有意的设计取舍而非缺陷：CPython 的 traceback 头结点是**捕获侧最外层帧**，`tb_next` 链才逐层指向抛出点，单帧近似会把行号语义反转（打印调用行而非抛出位置）。同时帧对象会持有执行环境引用，与 PyGDS 依赖引用计数的回收路径（生成器 `finally` 与用户类 `__del__` 不可驱动）叠加会形成长期存活环。相关取舍属 Design 系的文档化差异
+
 ## 异常类体系
 
 PyGDS 将异常类型定义为 **`DSLClass` 实例**，而非单独的构造函数类，所有异常类都通过 `_define_exception` 函数统一注册

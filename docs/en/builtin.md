@@ -631,7 +631,7 @@ print(gv)                                    # 42 (live-view read/write)
 
 ## Built-in Modules (import)
 
-PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the built-in modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys`, `contextlib`, `bisect`, `heapq`, `base64`, `json` and `logging` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
+PyGDS supports `import` / `from-import` statements for built-in modules. Currently provides the built-in modules `math`, `random`, `statistics`, `functools`, `itertools`, `collections`, `string`, `operator`, `time`, `sys`, `contextlib`, `bisect`, `heapq`, `base64`, `json`, `logging`, `types`, `importlib` and `copy` (other engine-related capabilities are better exposed through `register_api()` from the GDScript side).
 
 ### import Syntax
 
@@ -1154,6 +1154,58 @@ logging.info("Application started successfully")
 logging.warn("Configuration item missing, using default")
 logging.warning("Deprecated API, please migrate")
 logging.error("Database connection failed")
+```
+
+### `types` Module (Type Aliases and Namespace)
+
+| Member | Description |
+| :--- | :--- |
+| `FunctionType` `LambdaType` | Function type object equal to `type(lambda: 0)` |
+| `MethodType` `BuiltinFunctionType` `BuiltinMethodType` | Type objects of bound methods and built-in functions |
+| `ModuleType` `CodeType` `GeneratorType` `CoroutineType` `AsyncGeneratorType` | Module / code / generator / coroutine type objects |
+| `MappingProxyType` | Read-only mapping view (wraps the given mapping, reads forwarded to the backing dict) |
+| `WrapperDescriptorType` `MethodWrapperType` `MethodDescriptorType` | Descriptor type objects |
+| `NoneType` `EllipsisType` `NotImplementedType` `UnionType` `GenericAlias` | Type objects of `None` / `...` / `NotImplemented` / unions / generic aliases |
+| `SimpleNamespace(**kwargs)` | Attribute namespace: keywords become instance fields, `namespace(k=v, ...)` repr, equality by fields |
+
+```python
+import types
+
+type(lambda: 0) is types.FunctionType          # True
+types.SimpleNamespace(a=1, b="x")              # namespace(a=1, b='x')
+```
+
+### `importlib` Module
+
+| Member | Description |
+| :--- | :--- |
+| `import_module(name, package=None)` | Imports and returns a module (dotted names return the leaf module); missing names raise `ModuleNotFoundError` with the `name` attribute |
+| `invalidate_caches()` | No-op (no finder caches) |
+
+```python
+import importlib
+
+importlib.import_module("math")                # Same object as sys.modules["math"]
+importlib.import_module("collections.abc")     # Dotted name returns the leaf module
+```
+
+### `copy` Module
+
+| Member | Description |
+| :--- | :--- |
+| `copy(x)` | Shallow copy: user `__copy__` first, one container level rebuilt, immutable objects such as tuples and `frozenset` returned as-is |
+| `deepcopy(x, memo=None)` | Deep copy: user `__deepcopy__(memo)` first, `memo` keyed by `id()` and supporting cycles and shared references |
+| `Error` / `error` | Copy error exception class (both are the same class) |
+
+```python
+import copy
+
+copy.copy([1, [2]])            # New list, inner list shared
+copy.deepcopy([1, [2]])        # New list, inner list copied
+a = []
+a.append(a)
+b = copy.deepcopy(a)
+b[0] is b                      # True (cycle preserved)
 ```
 
 ---

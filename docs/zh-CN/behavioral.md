@@ -1060,6 +1060,12 @@
 
 二进制读/写以 `bytes` 为单位, 文本读采用惰性缓冲, 二进制比较段使用 `wb` 写入以规避 CPython 文本模式写盘的换行翻译差异
 
+### builtin_wrapper_identity
+
+- 职责: staticmethod/classmethod/member_descriptor 包装对象的类型身份与 repr
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_wrapper_identity.py](../../ci/cases/builtin_wrapper_identity.py)
+
 ### builtin_wrappers
 
 - 职责: 函数式 `staticmethod` / `classmethod` / `property` 与 `operator.index`
@@ -1092,11 +1098,23 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_dir_custom.py](../../ci/cases/builtin_dir_custom.py)
 
+### builtin_encoding_alias
+
+- 职责: 编码名别名与大小写归一(encode/decode/bytes 构造)
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_encoding_alias.py](../../ci/cases/builtin_encoding_alias.py)
+
 ### builtin_enumerate_start
 
 - 职责: enumerate 的大数起始编号与 bool 起始 (I0-42): 任意精度递增计数 (CPython 3.12 实测对齐)
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_enumerate_start.py](../../ci/cases/builtin_enumerate_start.py)
+
+### builtin_func_defaults
+
+- 职责: 函数 `__defaults__`/`__kwdefaults__` 的读取、写入与调用期默认值解析
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_func_defaults.py](../../ci/cases/builtin_func_defaults.py)
 
 ### builtin_getattr
 
@@ -1802,11 +1820,23 @@ ChainMap 的迭代键序为「从最后一张映射开始 update」的字典序 
 - 比对: `same_output`
 - 源文件: [ci/cases/module_random_mt.py](../../ci/cases/module_random_mt.py)
 
+### module_copy
+
+- 职责: copy 模块的浅拷贝与深拷贝(memo、环、容器分派与协议)
+- 比对: `same_output`
+- 源文件: [ci/cases/module_copy.py](../../ci/cases/module_copy.py)
+
 ### module_dynamic_eval
 
 - 职责: eval / exec / compile 动态求值与 globals / locals / vars / sys.modules (单表达式判定与 SyntaxError 文案 / exec-mode code 对象透传 / code 元数据 / globals 实参快照写回 / globals() 活视图与函数内 locals 快照 / vars 实例字典 / 动态代码顶层禁挂起而 exec 内定义的函数体挂起正常)
 - 比对: `same_output`
 - 源文件: [ci/cases/module_dynamic_eval.py](../../ci/cases/module_dynamic_eval.py)
+
+### module_types
+
+- 职责: types 模块的类型别名身份与 SimpleNamespace 行为
+- 比对: `same_output`
+- 源文件: [ci/cases/module_types.py](../../ci/cases/module_types.py)
 
 ### module_user_import
 
@@ -1867,6 +1897,12 @@ ChainMap 的迭代键序为「从最后一张映射开始 update」的字典序 
 - 职责: `from m import *` 遵守模块 `__all__` 导出面
 - 比对: `same_output`
 - 源文件: [ci/cases/module_import_star.py](../../ci/cases/module_import_star.py)
+
+### module_importlib
+
+- 职责: importlib 的 import_module 与 invalidate_caches
+- 比对: `same_output`
+- 源文件: [ci/cases/module_importlib.py](../../ci/cases/module_importlib.py)
 
 ### module_itertools
 
@@ -2015,6 +2051,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 职责: 类定义、类变量与类方法/静态方法
 - 比对: `same_output`
 - 源文件: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
+
+### class_builtin_subclass
+
+- 职责: property/staticmethod/classmethod 的子类化与实例行为
+- 比对: `same_output`
+- 源文件: [ci/cases/class_builtin_subclass.py](../../ci/cases/class_builtin_subclass.py)
 
 ### class_body_methods
 
@@ -2196,6 +2238,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 比对: `same_output`
 - 源文件: [ci/cases/class_mro.py](../../ci/cases/class_mro.py)
 
+### class_object_metadata
+
+- 职责: 堆类的元数据属性面与 dir 条目(`__doc__`/`__weakref__`/`__dict__`/`__module__`)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_object_metadata.py](../../ci/cases/class_object_metadata.py)
+
 ### class_property
 
 - 职责: `@property` 读写与只读拦截
@@ -2237,6 +2285,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 职责: 类体作用域、类内推导式与 `property` 内 `super`
 - 比对: `same_output`
 - 源文件: [ci/cases/class_scope.py](../../ci/cases/class_scope.py)
+
+### class_slot_descriptor
+
+- 职责: `__slots__` 校验与槽成员描述符(冲突报错、类级描述符、取值写值)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_slot_descriptor.py](../../ci/cases/class_slot_descriptor.py)
 
 ### class_slots
 
@@ -2320,6 +2374,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
 
+### exception_codec_attrs
+
+- 职责: 编码类异常与 SyntaxError 的结构化 args 与属性面
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_codec_attrs.py](../../ci/cases/exception_codec_attrs.py)
+
 ### exception_divzero
 
 - 职责: 裸 `except` 捕获除零异常
@@ -2379,6 +2439,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 职责: `except*` 语义 (子组匹配与形态, 自动包装, 多子句消费余量, else/finally, 处理器异常)
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_except_star.py](../../ci/cases/exception_except_star.py)
+
+### exception_group_nested
+
+- 职责: 嵌套异常组的 except* 提取与 subgroup/split 递归拆分
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_group_nested.py](../../ci/cases/exception_group_nested.py)
 
 ### exception_hierarchy
 

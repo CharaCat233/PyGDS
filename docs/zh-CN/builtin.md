@@ -630,7 +630,7 @@ print(gv)                                    # 42 (活视图读写)
 
 ## 内置模块 (import)
 
-PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib`、`bisect`、`heapq`、`base64`、`json`、`logging` 内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
+PyGDS 支持 `import` / `from-import` 语法导入内置模块，当前提供 `math`、`random`、`statistics`、`functools`、`itertools`、`collections`、`string`、`operator`、`time`、`sys`、`contextlib`、`bisect`、`heapq`、`base64`、`json`、`logging`、`types`、`importlib`、`copy` 内置模块（其余引擎相关能力建议通过 `register_api()` 由 GDScript 侧提供）
 
 ### import 语法
 
@@ -1151,6 +1151,58 @@ logging.info("程序启动完成")
 logging.warn("配置项缺失，使用默认值")
 logging.warning("已弃用的 API，请迁移")
 logging.error("数据库连接失败")
+```
+
+### `types` 模块（类型别名与命名空间）
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `FunctionType` `LambdaType` | 与 `type(lambda: 0)` 相同的函数类型对象 |
+| `MethodType` `BuiltinFunctionType` `BuiltinMethodType` | 绑定方法与内建函数的类型对象 |
+| `ModuleType` `CodeType` `GeneratorType` `CoroutineType` `AsyncGeneratorType` | 模块 / 代码 / 生成器 / 协程类型对象 |
+| `MappingProxyType` | 只读映射视图（构造时传入映射，读操作转发底层字典） |
+| `WrapperDescriptorType` `MethodWrapperType` `MethodDescriptorType` | 描述符类型对象 |
+| `NoneType` `EllipsisType` `NotImplementedType` `UnionType` `GenericAlias` | `None` / `...` / `NotImplemented` / 联合类型 / 泛性别名的类型对象 |
+| `SimpleNamespace(**kwargs)` | 属性命名空间：关键字写入实例字段，`namespace(k=v, ...)` 形态的 repr，按字段相等 |
+
+```python
+import types
+
+type(lambda: 0) is types.FunctionType          # True
+types.SimpleNamespace(a=1, b="x")              # namespace(a=1, b='x')
+```
+
+### `importlib` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `import_module(name, package=None)` | 按名导入并返回模块（点分名返回末段模块），不存在报 `ModuleNotFoundError` 且带 `name` 属性 |
+| `invalidate_caches()` | 空操作（无查找器缓存） |
+
+```python
+import importlib
+
+importlib.import_module("math")                # 与 sys.modules["math"] 同一对象
+importlib.import_module("collections.abc")     # 点分名返回末段模块
+```
+
+### `copy` 模块
+
+| 成员 | 说明 |
+| :--- | :--- |
+| `copy(x)` | 浅拷贝：用户 `__copy__` 优先，容器重建一层，元组与 `frozenset` 等不可变对象返回自身 |
+| `deepcopy(x, memo=None)` | 深拷贝：用户 `__deepcopy__(memo)` 优先，`memo` 以 `id()` 为键，支持循环引用与共享引用 |
+| `Error` / `error` | 拷贝错误异常类（两者为同一类） |
+
+```python
+import copy
+
+copy.copy([1, [2]])            # 新列表，内层列表同引用
+copy.deepcopy([1, [2]])        # 新列表，内层列表新对象
+a = []
+a.append(a)
+b = copy.deepcopy(a)
+b[0] is b                      # True（循环引用保持）
 ```
 
 ---

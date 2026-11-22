@@ -1060,6 +1060,12 @@ Big integers as dict keys (in/get/equality bucketing), `10**40`/`10**400`-scale 
 
 Binary read/write operate on `bytes`; text reads use a lazy buffer; the binary comparison segment writes via `wb` to avoid CPython's text-mode newline translation on disk
 
+### builtin_wrapper_identity
+
+- Responsibility: Type identity and `repr` of `staticmethod`/`classmethod`/`member_descriptor` wrappers
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_wrapper_identity.py](../../ci/cases/builtin_wrapper_identity.py)
+
 ### builtin_wrappers
 
 - Responsibility: functional `staticmethod` / `classmethod` / `property` and `operator.index`
@@ -1092,11 +1098,23 @@ A functional property assigned in a class body gets its attribute name via the c
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_dir_custom.py](../../ci/cases/builtin_dir_custom.py)
 
+### builtin_encoding_alias
+
+- Responsibility: Encoding name alias and case normalization for encode/decode/bytes
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_encoding_alias.py](../../ci/cases/builtin_encoding_alias.py)
+
 ### builtin_enumerate_start
 
 - Responsibility: enumerate bigint start and bool start (I0-42): arbitrary-precision counting (verified against CPython 3.12)
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_enumerate_start.py](../../ci/cases/builtin_enumerate_start.py)
+
+### builtin_func_defaults
+
+- Responsibility: Reading and writing `__defaults__`/`__kwdefaults__` and call-time default resolution
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_func_defaults.py](../../ci/cases/builtin_func_defaults.py)
 
 ### builtin_getattr
 
@@ -1802,11 +1820,23 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Comparison: `same_output`
 - Source: [ci/cases/module_random_mt.py](../../ci/cases/module_random_mt.py)
 
+### module_copy
+
+- Responsibility: Shallow and deep copy in the `copy` module (memo, cycles, dispatch)
+- Comparison: `same_output`
+- Source: [ci/cases/module_copy.py](../../ci/cases/module_copy.py)
+
 ### module_dynamic_eval
 
 - Responsibility: eval / exec / compile dynamic evaluation and globals / locals / vars / sys.modules (single-expression check and SyntaxError message / exec-mode code passthrough / code metadata / globals argument snapshot writeback / globals() live view and function-local locals snapshot / vars instance dict / dynamic top-level cannot suspend while functions defined via exec suspend normally)
 - Comparison: `same_output`
 - Source: [ci/cases/module_dynamic_eval.py](../../ci/cases/module_dynamic_eval.py)
+
+### module_types
+
+- Responsibility: Type aliases and `SimpleNamespace` behavior of the `types` module
+- Comparison: `same_output`
+- Source: [ci/cases/module_types.py](../../ci/cases/module_types.py)
 
 ### module_user_import
 
@@ -1867,6 +1897,12 @@ Decimal `int`/`str` conversion is limited to 4300 digits by default (aligned wit
 - Responsibility: `from m import *` honors module `__all__` export surface
 - Comparison: `same_output`
 - Source: [ci/cases/module_import_star.py](../../ci/cases/module_import_star.py)
+
+### module_importlib
+
+- Responsibility: `importlib.import_module` and `invalidate_caches`
+- Comparison: `same_output`
+- Source: [ci/cases/module_importlib.py](../../ci/cases/module_importlib.py)
 
 ### module_itertools
 
@@ -2015,6 +2051,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: Class definitions, class variables and class/static methods
 - Comparison: `same_output`
 - Source: [ci/cases/class_basic.py](../../ci/cases/class_basic.py)
+
+### class_builtin_subclass
+
+- Responsibility: Subclassing `property`/`staticmethod`/`classmethod` and instance behavior
+- Comparison: `same_output`
+- Source: [ci/cases/class_builtin_subclass.py](../../ci/cases/class_builtin_subclass.py)
 
 ### class_body_methods
 
@@ -2196,6 +2238,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Comparison: `same_output`
 - Source: [ci/cases/class_mro.py](../../ci/cases/class_mro.py)
 
+### class_object_metadata
+
+- Responsibility: Metadata attribute surface and `dir` entries of heap classes (`__doc__`/`__weakref__`/`__dict__`/`__module__`)
+- Comparison: `same_output`
+- Source: [ci/cases/class_object_metadata.py](../../ci/cases/class_object_metadata.py)
+
 ### class_property
 
 - Responsibility: `@property` read/write and read-only interception
@@ -2237,6 +2285,12 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Responsibility: Class body scope, comprehensions in class bodies and `super` in `property`
 - Comparison: `same_output`
 - Source: [ci/cases/class_scope.py](../../ci/cases/class_scope.py)
+
+### class_slot_descriptor
+
+- Responsibility: `__slots__` validation and slot member descriptors
+- Comparison: `same_output`
+- Source: [ci/cases/class_slot_descriptor.py](../../ci/cases/class_slot_descriptor.py)
 
 ### class_slots
 
@@ -2320,6 +2374,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Comparison: `same_output`
 - Source: [ci/cases/exception_bool_rare.py](../../ci/cases/exception_bool_rare.py)
 
+### exception_codec_attrs
+
+- Responsibility: Structured `args` and attributes of codec exceptions and `SyntaxError`
+- Comparison: `same_output`
+- Source: [ci/cases/exception_codec_attrs.py](../../ci/cases/exception_codec_attrs.py)
+
 ### exception_divzero
 
 - Responsibility: Bare `except` catching divide-by-zero
@@ -2379,6 +2439,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Responsibility: `except*` semantics (subgroup matching and shape, auto-wrapping, multi-clause remainder consumption, else/finally, handler exceptions)
 - Comparison: `same_output`
 - Source: [ci/cases/exception_except_star.py](../../ci/cases/exception_except_star.py)
+
+### exception_group_nested
+
+- Responsibility: Nested exception groups in `except*` and recursive `subgroup`/`split`
+- Comparison: `same_output`
+- Source: [ci/cases/exception_group_nested.py](../../ci/cases/exception_group_nested.py)
 
 ### exception_hierarchy
 
