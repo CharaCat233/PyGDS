@@ -190,6 +190,12 @@ Line assertions extract the `line N` message suffix (PyGDS has no re module, so 
 - Comparison: `same_output`
 - Source: [ci/cases/syntax_def_default.py](../../ci/cases/syntax_def_default.py)
 
+### syntax_def_kwonly
+
+- Responsibility: Keyword-only default ordering and call-time default slots
+- Comparison: `same_output`
+- Source: [ci/cases/syntax_def_kwonly.py](../../ci/cases/syntax_def_kwonly.py)
+
 ### syntax_def_error
 
 - Responsibility: `TypeError` for argument count/shape mismatch
@@ -1080,6 +1086,12 @@ A functional property assigned in a class body gets its attribute name via the c
 - Comparison: `same_output`
 - Source: [ci/cases/builtin_convert.py](../../ci/cases/builtin_convert.py)
 
+### builtin_dir_custom
+
+- Responsibility: User-defined `__dir__` on instances, classes and metaclasses
+- Comparison: `same_output`
+- Source: [ci/cases/builtin_dir_custom.py](../../ci/cases/builtin_dir_custom.py)
+
 ### builtin_enumerate_start
 
 - Responsibility: enumerate bigint start and bool start (I0-42): arbitrary-precision counting (verified against CPython 3.12)
@@ -1447,6 +1459,12 @@ Float literals and `float()` strings go through a self-produced correctly-rounde
 - Responsibility: Negative `//` and `%` floor toward negative infinity; remainder sign follows the divisor
 - Comparison: `same_output`
 - Source: [ci/cases/type_int_floordiv_mod.py](../../ci/cases/type_int_floordiv_mod.py)
+
+### type_int_bytes_unbound
+
+- Responsibility: Unbound `int.to_bytes` overflow channel and length boundaries
+- Comparison: `same_output`
+- Source: [ci/cases/type_int_bytes_unbound.py](../../ci/cases/type_int_bytes_unbound.py)
 
 ### type_int_intern
 
@@ -2232,9 +2250,15 @@ Class definitions, inheritance and the MRO, `super()`, property/descriptors, and
 - Comparison: `same_output`
 - Source: [ci/cases/class_star_bases.py](../../ci/cases/class_star_bases.py)
 
+### class_type_call
+
+- Responsibility: `type.__call__` slot and metaclass `__call__` delegation
+- Comparison: `same_output`
+- Source: [ci/cases/class_type_call.py](../../ci/cases/class_type_call.py)
+
 ### class_stopiteration
 
-- Responsibility: user __next__ raising StopIteration subclass ends iteration (I0-61): subclass treated as exhaustion, PEP 479 for generators
+- Responsibility: user `__next__` raising StopIteration subclass ends iteration (I0-61): subclass treated as exhaustion, PEP 479 for generators
 - Comparison: `same_output`
 - Source: [ci/cases/class_stopiteration.py](../../ci/cases/class_stopiteration.py)
 
@@ -2259,6 +2283,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Responsibility: Divide-by-zero exception bound with `as`, then reading its message
 - Comparison: `same_output`
 - Source: [ci/cases/exception_as_binding.py](../../ci/cases/exception_as_binding.py)
+
+### exception_args_notes
+
+- Responsibility: `args` read/write and deletion protection, `add_note`/`__notes__` and `StopIteration.value`
+- Comparison: `same_output`
+- Source: [ci/cases/exception_args_notes.py](../../ci/cases/exception_args_notes.py)
 
 ### exception_attrs_internal
 
@@ -2332,6 +2362,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Comparison: `same_output`
 - Source: [ci/cases/exception_gen_propagate.py](../../ci/cases/exception_gen_propagate.py)
 
+### exception_group_derive
+
+- Responsibility: `derive` and `args`/`repr` shapes of exception groups (member list and group type)
+- Comparison: `same_output`
+- Source: [ci/cases/exception_group_derive.py](../../ci/cases/exception_group_derive.py)
+
 ### exception_group
 
 - Responsibility: `ExceptionGroup` and `BaseExceptionGroup` (construction validation, attributes, str/repr, subgroup/split)
@@ -2397,6 +2433,12 @@ Exception hierarchy and catching semantics (`BaseException`, inheritance-based c
 - Responsibility: A new exception raised inside `except` is caught by the outer handler
 - Comparison: `same_output`
 - Source: [ci/cases/exception_raise_in_handler.py](../../ci/cases/exception_raise_in_handler.py)
+
+### exception_repr_containers
+
+- Responsibility: Exception object `repr` inside containers and exception group members
+- Comparison: `same_output`
+- Source: [ci/cases/exception_repr_containers.py](../../ci/cases/exception_repr_containers.py)
 
 ### exception_repr
 

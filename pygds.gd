@@ -4115,6 +4115,15 @@ class DSLObject:
 		if o is DSLClass:
 			# 类对象 repr 与 str 同为 <class 'X'> 形态
 			return o._dsl_str()
+		if o is DSLException:
+			# 异常对象 repr 为 Type(参数 repr...) 形态 (容器元素与异常组成员共用本路径)
+			var ex = o as DSLException
+			var ex_parts = ""
+			for i in range(ex.args.size()):
+				if i > 0:
+					ex_parts += ", "
+				ex_parts += _py_repr(ex.args[i])
+			return ex.error_type + "(" + ex_parts + ")"
 		# 内建类型的类实例 (deque/range 等, 经 _builtin_class_by_name 登记): [br]
 		# _dsl_str 即 repr 形态 (deque([1, 2], maxlen=3) / range(0, 5))
 		if o.klass != null and _builtin_class_is_builtin(o.klass):
@@ -11134,7 +11143,7 @@ class DSLList extends DSLObject:
 			"__imul__": _lst_imul_desc(),
 		}
 
-	## 原地乘法描述符的直调校验形态 (I2-49): 槽包装直调的实参先经 Index 转换 [br]
+	## 原地乘法描述符的直调校验形态: 槽包装直调的实参先经 Index 转换 [br]
 	## pre_check 经 DSLMethodWrapper.pre_check 在属性绑定形态触发 (语句层 *= 不经绑定)
 	func _lst_imul_desc() -> DSLWrappedDescriptor:
 		var d = DSLWrappedDescriptor.new("__imul__", Callable(self, "magic_imul"))
@@ -19925,7 +19934,7 @@ class DSLMethodDescriptor extends DSLObject:
 	func _dsl_is_callable() -> bool:
 		return true
 
-	## 方法描述符的属性面 (I1-97): __name__ / __qualname__ / __doc__
+	## 方法描述符的属性面: __name__ / __qualname__ / __doc__
 	func _dsl_getattribute(attr_name: String) -> DSLObject:
 		if attr_name == "__name__":
 			return DSLString.new(name)
@@ -19977,7 +19986,7 @@ class DSLWrappedDescriptor extends DSLObject:
 	var callback: Callable
 	## 归属类名 (repr 的 of '<owner>' objects; 空时经回调绑定对象推导)
 	var owner_name: String = ""
-	## 属性绑定调用的前置校验标记 (I2-49: __imul__ 直调的实参经 Index 转换校验)
+	## 属性绑定调用的前置校验标记 (槽包装直调实参经 Index 转换校验)
 	var pre_check: bool = false
 	
 	## 构造魔法方法描述符 [br]
@@ -20005,7 +20014,7 @@ class DSLWrappedDescriptor extends DSLObject:
 	func _dsl_str() -> String:
 		return "<slot wrapper '%s' of '%s' objects>" % [name, _owner_type_name()]
 
-	## 槽包装的属性面 (I1-97): __name__ / __doc__ / __objclass__
+	## 槽包装的属性面: __name__ / __doc__ / __objclass__
 	func _dsl_getattribute(attr_name: String) -> DSLObject:
 		if attr_name == "__name__":
 			return DSLString.new(name)
@@ -20087,7 +20096,7 @@ class DSLMethodWrapper extends DSLObject:
 			return DSLMethodWrapper.new(call_desc, bound_self)
 		return super._dsl_getattribute(attr_name)
 
-	## Index 转换校验 (I2-49: __imul__ 直调的实参先经 ssize_t 转换语义) [br]
+	## Index 转换校验: 槽包装直调的实参先经 ssize_t 转换语义 [br]
 	## bool 按整数, 大数超 ssize_t 报 OverflowError, 其余报 cannot be interpreted 文案
 	func _imul_index_check(arg: DSLObject) -> bool:
 		var a = DSLObject._unwrap_dsl(arg)
@@ -20323,7 +20332,8 @@ class DSLClass extends DSLObject:
 	## [returns] 新创建的实例 (DSLObject)
 	func magic_call(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject] = {}) -> DSLObject:
 		# 元类 __call__ 定制: CPython 的 X(...) 先经 type(X).__call__
-		if klass != null and klass is DSLClass and klass != interp.globals.get_val_safe("type"):
+		# type.__call__ 直调路径经 _bypass_meta_call 置位跳过本钩子, 避免递归回元类 __call__
+		if klass != null and klass is DSLClass and klass != interp.globals.get_val_safe("type") and not interp._bypass_meta_call:
 			var mc2 = (klass as DSLClass)._lookup_method("__call__")
 			if mc2 is DSLFunction:
 				var mc_args: Array[DSLObject] = [self]
@@ -20660,9 +20670,14 @@ class DSLSuper extends DSLObject:
 			return "<super: <class '%s'>>" % sup_cls.name
 		return "<super object>"
 
-	## MRO 查找所依据的类: 绑定目标为类时是它自身, 为实例时是它的类
+	## MRO 查找所依据的类: 绑定目标为类时按 CPython 的 super 语义取查找基准类, [br]
+	## 元类为 type 的普通类以自身为基准, 自定义元类的实例类以元类为基准
 	func _mro_owner() -> DSLClass:
 		if sup_instance is DSLClass:
+			var meta_cls: DSLClass = (sup_instance as DSLClass).klass
+			var type_cls = sup_interp.globals.get_val_safe("type") if sup_interp != null else null
+			if meta_cls != null and meta_cls != type_cls:
+				return meta_cls
 			return sup_instance
 		if sup_instance != null and sup_instance.klass != null:
 			return sup_instance.klass
@@ -25955,8 +25970,7 @@ class Parser:
 					for p in params:
 						if not p.is_args and not p.is_kwargs:
 							p.is_positional_only = true
-					# / 之后是新的参数组, 默认值顺序约束重新计数
-					saw_default = false
+					# / 之后仍属位置参数组, 默认值顺序约束跨 / 继续生效
 					if not match_types([TokenType.COMMA]):
 						break
 					continue
@@ -25978,8 +25992,7 @@ class Parser:
 					if is_star_only:
 						advance()
 						saw_star = true
-						# * 之后是关键字专属参数组, 默认值顺序约束重新计数
-						saw_default = false
+						# * 之后是关键字专属参数组, 默认值顺序约束不再适用 (CPython 允许 def f(*, a=1, b))
 						# 裸 * 后必须跟命名参数 (def f(*) / def f(*,) 均报错)
 						if check(TokenType.RPAREN):
 							report.error("SyntaxError: named arguments must follow bare *")
@@ -25998,8 +26011,7 @@ class Parser:
 							star_ann = simple_expression()
 						params.append(Param.new(tok.lexeme, null, true, false, false, false, star_ann))
 						saw_star = true
-						# *args 之后是关键字专属参数组, 默认值顺序约束重新计数
-						saw_default = false
+						# *args 之后是关键字专属参数组, 默认值顺序约束不再适用
 						if not match_types([TokenType.COMMA]):
 							break
 						continue
@@ -26045,7 +26057,8 @@ class Parser:
 						if report.has_error:
 							return null
 					# 有默认值的参数后不得跟无默认值参数 (def f(a=1, b) 报错)
-					if default_expr == null and saw_default:
+					# 关键字专属参数组不受此约束 (def f(*, a=1, b) 合法)
+					if default_expr == null and saw_default and not saw_star:
 						report.error("SyntaxError: parameter without a default follows parameter with a default")
 						return null
 					if default_expr != null:
@@ -30328,6 +30341,9 @@ class Interpreter:
 	## 挂起中类构造的记录轮语句键 (与 _sleep_root_key 绑定): 实参不匹配未命中时
 	## 残留的记录随重放根语句结束失效, 不串扰后续无关的类构造
 	var _suspended_ctor_key: int = 0
+	## type.__call__ 直调标记: 置位时 DSLClass.magic_call 跳过元类 __call__ 分派,
+	## 使 super().__call__ / type.__call__ 走默认实例化路径而不递归回元类钩子
+	var _bypass_meta_call: bool = false
 	## sys.path 的常驻列表引用: 用户模块按它逐目录解析
 	var _sys_path_list: DSLList = null
 	## 沙箱盘符字母 (空串 = 无沙箱, 宿主 run() 时注入)
@@ -30693,20 +30709,34 @@ class Interpreter:
 		raise_exception_typed(err_type, [DSLString.new(msg)] as Array[DSLObject])
 
 	## 抛出携带 value 的 StopIteration (生成器 return 值) [br]
-	## 异常实例的 args 为空, value 字段存入 return 值 [br]
+	## CPython 以 StopIteration(value) 表达, args 为 (value,) 元组, value 字段为同一值 [br]
+	## 裸 return (value 为 None) 时 args 为空且 value 为 None [br]
 	## [param value_obj] StopIteration.value 值
 	func raise_stop_iteration_value(value_obj: DSLObject):
 		var exc_class = globals.get_val("StopIteration")
+		var has_value: bool = value_obj != null and not (value_obj is DSLNone)
+		var stop_args: Array[DSLObject] = []
+		if has_value:
+			stop_args.append(value_obj)
 		if exc_class is DSLClass:
 			last_exception = exc_class.magic_call([], {})
-			last_exception.fields["value"] = value_obj
-			last_exception.fields["args"] = DSLTuple.new([])
+			var value_field: DSLObject = value_obj if has_value else _wrap(null)
+			last_exception.fields["value"] = value_field
+			last_exception.fields["args"] = DSLTuple.new(stop_args)
+			var raw_exc = last_exception._wrapped
+			if raw_exc is DSLException:
+				raw_exc.args = stop_args
+				raw_exc.message = value_obj._dsl_str() if has_value else ""
 		else:
-			last_exception = DSLException.new("", "StopIteration")
+			var fallback_msg := value_obj._dsl_str() if has_value else ""
+			last_exception = DSLException.new(fallback_msg, "StopIteration", stop_args)
 		var line_suffix = ""
 		if _current_line > 0:
 			line_suffix = " (line %d)" % _current_line
-		report.error("StopIteration: " + line_suffix)
+		var tail := ""
+		if has_value:
+			tail = value_obj._dsl_str()
+		report.error("StopIteration: " + tail + line_suffix)
 
 	## 抛出已构造的异常实例 (throw/close 注入用) [br]
 	## [param exc] 异常实例 (DSLException 或 DSLInstance wrapper)
@@ -31346,6 +31376,14 @@ class Interpreter:
 		wrapper.fields["__suppress_context__"] = _wrap(false)
 		wrapper.fields["__traceback__"] = _wrap(null)
 		wrapper.fields["__context__"] = _wrap(null)
+		# StopIteration.value: 首个参数, 无参数为 None (CPython getset 语义)
+		for sv in wrapper.klass.mro:
+			if sv.name == "StopIteration":
+				var value_field: DSLObject = _wrap(null)
+				if pos_args.size() >= 1:
+					value_field = pos_args[0]
+				wrapper.fields["value"] = value_field
+				break
 		return DSLNone.new()
 
 	## 按 CPython 语义计算异常的 str() 结果 [br]
@@ -31402,9 +31440,21 @@ class Interpreter:
 			if not is_base and _is_base_only_exception(m):
 				raise_exception("TypeError", "Cannot nest BaseExceptions in an ExceptionGroup")
 				return null
+		# BaseExceptionGroup 全为 Exception 成员时降格为 ExceptionGroup (CPython __new__ 语义)
+		if is_base:
+			var all_plain := true
+			for m2 in members:
+				if _is_base_only_exception(m2):
+					all_plain = false
+					break
+			if all_plain:
+				var eg_cls = globals.get_val_safe("ExceptionGroup")
+				if eg_cls is DSLClass:
+					wrapper.klass = eg_cls
 		wrapper.fields["message"] = DSLString.new(msg_obj.value)
 		wrapper.fields["exceptions"] = DSLTuple.new(members)
-		wrapper.fields["args"] = DSLTuple.new([msg_obj, exc_args[2]] as Array[DSLObject])
+		# args 第二项为成员列表 (CPython 以 list 存放, exceptions 属性另给元组)
+		wrapper.fields["args"] = DSLTuple.new([msg_obj, DSLList.new(members)] as Array[DSLObject])
 		wrapper.fields["__cause__"] = _wrap(null)
 		wrapper.fields["__suppress_context__"] = _wrap(false)
 		wrapper.fields["__traceback__"] = _wrap(null)
@@ -31441,7 +31491,7 @@ class Interpreter:
 		var plural = "" if count == 1 else "s"
 		return DSLString.new("%s (%d sub-exception%s)" % [msg, count, plural])
 
-	## 异常组 repr: ExceptionGroup('msg', (成员 repr...)) 形态 [br]
+	## 异常组 repr: ExceptionGroup('msg', [成员 repr...]) 形态 (CPython 同) [br]
 	## [param exc_args] [wrapper] [br]
 	## [param _kwargs] 关键字参数 (未使用) [br]
 	## [returns] DSLString
@@ -31454,8 +31504,8 @@ class Interpreter:
 		var parts: Array[String] = []
 		if wrapper.fields.has("exceptions"):
 			for m in (wrapper.fields["exceptions"] as DSLTuple).items:
-				parts.append(m.magic_repr([m] as Array[DSLObject], {} as Dictionary[String, DSLObject])._dsl_str())
-		return DSLString.new("%s('%s', (%s))" % [type_name, msg, ", ".join(parts)])
+				parts.append(DSLObject._py_repr(m))
+		return DSLString.new("%s(%s, [%s])" % [type_name, DSLObject._py_str_repr(msg), ", ".join(parts)])
 
 	## 取异常组的成员数组 [br]
 	## [param group] 异常组实例 [br]
@@ -31581,6 +31631,36 @@ class Interpreter:
 			rest_part = _build_group(is_base, msg, rest)
 		return DSLTuple.new([match_part, rest_part] as Array[DSLObject])
 
+	## 异常组 derive(exceptions): 同型同消息重建组 (CPython 同) [br]
+	## 成员序列与逐项异常性校验沿用构造期文案, 组型取来源组类 [br]
+	## [param exc_args] [wrapper 组实例, exceptions 序列] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] 新组或 null (校验失败)
+	func _group_derive(exc_args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var group = exc_args[0]
+		var seq = DSLObject._unwrap_dsl(exc_args[1])
+		if not (seq is DSLList) and not (seq is DSLTuple):
+			raise_exception("TypeError", "second argument (exceptions) must be a sequence")
+			return null
+		var members: Array[DSLObject] = []
+		for m in seq.items:
+			members.append(m)
+		var msg = ""
+		if group.fields.has("message"):
+			msg = (group.fields["message"] as DSLString).value
+		var new_args: Array[DSLObject] = [DSLString.new(msg), DSLTuple.new(members)]
+		# 组构造多在在途异常通道非空时发生, 保存清空后还原 (与 _build_group 同处理)
+		var saved_has_error = report.has_error
+		var saved_last_error = report.last_error
+		report.has_error = false
+		report.last_error = ""
+		var built = (group.klass as DSLClass).magic_call(new_args, {} as Dictionary[String, DSLObject])
+		if report.has_error:
+			return null
+		report.has_error = saved_has_error
+		report.last_error = saved_last_error
+		return built
+
 	## 内置 object.__init__ 回调 [br]
 	## 默认无操作, 仅返回 DSLNone [br]
 	## [param args] 初始化参数 (首项为 DSLInstance wrapper) [br]
@@ -31667,6 +31747,78 @@ class Interpreter:
 				parts += ", "
 			parts += DSLObject._py_repr(pos_args[i])
 		return DSLString.new(type_name + "(" + parts + ")")
+
+	## 异常实例 __setattr__ 回调: args 改写按 CPython getset 语义回写内层异常 [br]
+	## 其余属性照常写入实例字段 (__notes__ 为普通实例属性) [br]
+	## [param args] [wrapper, name, value] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLNone
+	func _exception_setattr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var wrapper = args[0]
+		var name_obj = args[1]
+		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		var value = args[2]
+		if name == "args":
+			var seq = DSLObject._unwrap_dsl(value)
+			if not (seq is DSLTuple) and not (seq is DSLList):
+				# 属性赋值语句经接收者 last_error 通道转异常, 不直接置报告错误
+				wrapper.last_error = "TypeError: '%s' object is not iterable" % seq._type_name()
+				return null
+			var items: Array[DSLObject] = []
+			for item in seq.items:
+				items.append(item)
+			wrapper.fields["args"] = DSLTuple.new(items)
+			var raw_exc = wrapper._wrapped
+			if raw_exc is DSLException:
+				raw_exc.args = items
+				raw_exc.message = _exception_message(wrapper.klass, items)
+			return DSLNone.new()
+		wrapper.fields[name] = value
+		return DSLNone.new()
+
+	## 异常实例 __delattr__ 回调: args 与异常 getset 属性不可删除 (CPython TypeError) [br]
+	## __notes__ 为实例属性, 按普通删除路径处理 [br]
+	## [param args] [wrapper, name] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLNone
+	func _exception_delattr(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		var wrapper = args[0]
+		var name_obj = args[1]
+		var name = name_obj.value if name_obj is DSLString else name_obj._dsl_str()
+		if name == "__suppress_context__":
+			wrapper.last_error = "TypeError: can't delete numeric/char attribute"
+			return null
+		if name == "args" or name == "__cause__" or name == "__context__" or name == "__traceback__":
+			wrapper.last_error = "TypeError: " + name + " may not be deleted"
+			return null
+		if wrapper.fields != null and wrapper.fields.has(name):
+			wrapper.fields.erase(name)
+			return DSLNone.new()
+		wrapper.last_error = "AttributeError: '%s' object has no attribute '%s'" % [wrapper._type_name(), name]
+		return null
+
+	## BaseException.add_note 回调: 追加一条字符串注释 [br]
+	## 注释存于实例字段 __notes__ 的列表, 首次调用时创建 [br]
+	## [param args] [wrapper, note] [br]
+	## [param _kwargs] 关键字参数 (未使用) [br]
+	## [returns] DSLNone
+	func _exception_add_note(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() != 2:
+			raise_exception("TypeError", "BaseException.add_note() takes exactly one argument (%d given)" % (args.size() - 1))
+			return null
+		var wrapper = args[0]
+		var note_obj = args[1]
+		if not (note_obj is DSLString):
+			raise_exception("TypeError", "note must be a str, not '%s'" % note_obj._type_name())
+			return null
+		if not wrapper.fields.has("__notes__"):
+			wrapper.fields["__notes__"] = DSLList.new()
+		var notes = wrapper.fields["__notes__"]
+		if not (notes is DSLList):
+			raise_exception("TypeError", "Cannot add note: __notes__ is not a list")
+			return null
+		(notes as DSLList).items.append(note_obj)
+		return DSLNone.new()
 		
 	## 注册内置类型, 函数与异常到全局作用域 [br]
 	## 创建 object/type/int/float/str/list/tuple/dict/bool 类型类, [br]
@@ -31696,6 +31848,8 @@ class Interpreter:
 		
 		var type_methods = {}
 		type_methods["__new__"] = _make_builtin("__new__", Callable(self, "api_type_new"))
+		# type.__call__ 槽: super().__call__ / type.__call__(cls, ...) 可直达默认实例化路径
+		type_methods["__call__"] = DSLWrappedDescriptor.new("__call__", Callable(self, "_type_call"))
 		var type_class = DSLClass.new("type", obj_class, type_methods, self)
 		obj_class.klass = type_class
 		type_class.klass = type_class
@@ -32032,6 +32186,7 @@ class Interpreter:
 				gc.methods["__repr__"] = DSLWrappedDescriptor.new("__repr__", Callable(self, "_exception_group_repr"))
 				gc.methods["subgroup"] = DSLWrappedDescriptor.new("subgroup", Callable(self, "_group_subgroup"))
 				gc.methods["split"] = DSLWrappedDescriptor.new("split", Callable(self, "_group_split"))
+				gc.methods["derive"] = DSLWrappedDescriptor.new("derive", Callable(self, "_group_derive"))
 		_define_exception("GeneratorExit", "BaseException")
 		_define_exception("AssertionError")
 		_define_exception("EOFError")
@@ -32065,6 +32220,13 @@ class Interpreter:
 			(binascii_err_cls as DSLClass).name = "Error"
 
 		_register_modules()
+		# BaseException 实例方法: add_note 与 args 等 getset 属性的改写 / 删除语义 (CPython 3.11+),
+		# 覆写在 BaseException 上供全部异常族继承, 用户子类自定义同名方法仍优先
+		var base_exc_class = globals.get_val_safe("BaseException")
+		if base_exc_class is DSLClass:
+			(base_exc_class as DSLClass).methods["__setattr__"] = DSLWrappedDescriptor.new("__setattr__", Callable(self, "_exception_setattr"))
+			(base_exc_class as DSLClass).methods["__delattr__"] = DSLWrappedDescriptor.new("__delattr__", Callable(self, "_exception_delattr"))
+			(base_exc_class as DSLClass).methods["add_note"] = DSLWrappedDescriptor.new("add_note", Callable(self, "_exception_add_note"))
 		# ellipsis 类型类: type(...) 的返回值 (与 CPython 一致, 不是内建名)
 		var ellipsis_class = DSLClass.new("ellipsis", null, {}, self)
 		ellipsis_class.klass = type_class
@@ -44725,6 +44887,16 @@ class Interpreter:
 					(md_recv as DSLObject).last_error_args.clear()
 					raise_exception_from_last_error(md_err, md_err_args)
 					return null
+			# 部分回调把错误记在 proto 实例上 (如 int.to_bytes 的溢出), 与绑定形态同款转异常
+			var md_proto = callee.callback.get_object()
+			if md_proto is DSLObject and (md_proto as DSLObject).last_error != "":
+				var md_proto_err = (md_proto as DSLObject).last_error
+				var md_proto_args: Array[DSLObject] = []
+				_copy_error_args(md_proto_args, (md_proto as DSLObject).last_error_args)
+				(md_proto as DSLObject).last_error = ""
+				(md_proto as DSLObject).last_error_args.clear()
+				raise_exception_from_last_error(md_proto_err, md_proto_args)
+				return null
 		# 实例绑定包装 (method-wrapper): 错误记在绑定的接收者实例上, 同样须转为异常
 		# magic_call 把 null 结果包成 DSLNone, 故 result is DSLNone 时也须检查,
 		# 否则 __setitem__ 等无返回值方法的错误被静默吞掉
@@ -45208,6 +45380,7 @@ class Interpreter:
 				continue
 			if def_idx < function.default_values.size() and function.default_values[def_idx] != null:
 				local.define(p.name, function.default_values[def_idx])
+				def_idx += 1
 			elif p.default_value != null:
 				var prev_environment = environment
 				environment = closure_env
@@ -45216,7 +45389,10 @@ class Interpreter:
 				if default_val == null:
 					return null
 				local.define(p.name, default_val)
+				def_idx += 1
 			else:
+				# 缺省参数同样推进索引, 保证后续关键字专属参数的默认值按自身槽位取值
+				def_idx += 1
 				if p.is_keyword_only:
 					missing_kw.append(p.name)
 				else:
@@ -50210,6 +50386,70 @@ class Interpreter:
 			return null
 		return DSLString.new(formatted)
 
+	## 用户自定义 __dir__ 钩子查找: 实例沿类型, 类对象沿元类 (CPython dir() 语义) [br]
+	## 内建类型的成员面由硬编码分支提供, 不注册 __dir__ 方法, 因此不会命中本路径 [br]
+	## [param raw] 已解包的对象 [br]
+	## [returns] 钩子函数, 无自定义时返回 null
+	func _custom_dir_hook(raw) -> DSLFunction:
+		var owner_cls: DSLClass = null
+		if raw is DSLClass:
+			owner_cls = (raw as DSLClass).klass
+		elif raw.klass != null:
+			owner_cls = raw.klass
+		if owner_cls == null:
+			return null
+		var hook = owner_cls._lookup_method("__dir__")
+		if hook is DSLFunction:
+			return hook
+		return null
+
+	## 调用用户 __dir__ 并把返回值归一为排序后的列表 [br]
+	## 元素保持原对象类型并按元素比较排序, 非可迭代返回值报 TypeError [br]
+	## [param raw] 接收者 (实例或类对象) [br]
+	## [param hook] 钩子函数 [br]
+	## [returns] DSLList 名称列表, 调用抛错或挂起时返回 null
+	func _call_custom_dir(raw, hook: DSLFunction) -> DSLObject:
+		var owner_cls: DSLClass = null
+		if raw is DSLClass:
+			owner_cls = (raw as DSLClass).klass
+		else:
+			owner_cls = raw.klass
+		if owner_cls == null:
+			return null
+		var result = owner_cls._invoke_func(hook, [raw] as Array[DSLObject], {} as Dictionary[String, DSLObject])
+		if _suspended or result == null:
+			return null
+		if report.has_error:
+			return null
+		var seq = DSLObject._unwrap_dsl(result)
+		var items: Array[DSLObject] = []
+		if seq is DSLList or seq is DSLTuple:
+			items = seq.items.duplicate()
+		elif seq is DSLSet or seq is DSLFrozenSet:
+			for k in seq.items:
+				items.append(seq.items[k])
+		elif seq is DSLString:
+			for i in range(seq.value.length()):
+				items.append(DSLString.new(seq.value[i]))
+		else:
+			var iter_obj = seq._dsl_iter()
+			if iter_obj == null:
+				if seq.last_error != "":
+					raise_exception_from_last_error(seq.last_error)
+					seq.last_error = ""
+				else:
+					raise_exception("TypeError", "'%s' object is not iterable" % seq._type_name())
+				return null
+			while iter_obj.has_next():
+				items.append(iter_obj.next())
+				if iter_obj.suspended:
+					break
+		_compare_error = ""
+		_stable_sort(items, func(a, b): return _compare_asc(a, b))
+		if _check_compare_error():
+			return null
+		return DSLList.new(items)
+
 	func builtin_dir(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		var names: Array[String] = []
 		var obj = args[0] if args.size() >= 1 else null
@@ -50220,6 +50460,10 @@ class Interpreter:
 					names.append(k)
 		if obj != null:
 			var raw = obj._wrapped if obj._wrapped != null else obj
+			# 用户自定义 __dir__ 优先 (CPython: dir() 调用 type(obj).__dir__(obj), 类对象沿元类)
+			var dir_hook = _custom_dir_hook(raw)
+			if dir_hook != null:
+				return _call_custom_dir(raw, dir_hook)
 			if raw is DSLFunction or raw is DSLBuiltinFunction:
 				# 函数 dir: CPython 用户函数 38 项 / 内建函数 30 项全集 (内建成员是
 				# _dsl_getattribute 硬编码分支, 不经类型类字典, 须在此并入)
@@ -50825,6 +51069,28 @@ class Interpreter:
 			return _type_metaclass(args[1], args[2], args[3], kwargs)
 		raise_exception("TypeError", "type() takes 1 or 3 arguments")
 		return null
+
+	## 内置 type.__call__ 回调 (CPython 槽语义: 调用类即触发 type.__call__) [br]
+	## 首参为被调用的类, 其余为构造实参, 走默认实例化路径, 不经元类 __call__ 钩子 [br]
+	## [param args] [cls, 构造实参...] [br]
+	## [param kwargs] 关键字实参 [br]
+	## [returns] 实例
+	func _type_call(args: Array[DSLObject], kwargs: Dictionary[String, DSLObject]) -> DSLObject:
+		if args.size() < 1:
+			raise_exception("TypeError", "descriptor '__call__' of 'type' object needs an argument")
+			return null
+		var target = args[0]
+		if not (target is DSLClass):
+			raise_exception("TypeError", "descriptor '__call__' for 'type' objects doesn't apply to a '%s' object" % target._type_name())
+			return null
+		var ctor_args: Array[DSLObject] = []
+		for i in range(1, args.size()):
+			ctor_args.append(args[i])
+		var prev_bypass: bool = _bypass_meta_call
+		_bypass_meta_call = true
+		var built = (target as DSLClass).magic_call(ctor_args, kwargs)
+		_bypass_meta_call = prev_bypass
+		return built
 
 	func api_object_new(args: Array[DSLObject], _kwargs: Dictionary[String, DSLObject]) -> DSLObject:
 		if args.size() < 1:

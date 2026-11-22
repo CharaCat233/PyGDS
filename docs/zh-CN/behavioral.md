@@ -190,6 +190,12 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/syntax_def_default.py](../../ci/cases/syntax_def_default.py)
 
+### syntax_def_kwonly
+
+- 职责: 关键字专属参数默认值顺序（有无默认混合）与调用期默认值槽位
+- 比对: `same_output`
+- 源文件: [ci/cases/syntax_def_kwonly.py](../../ci/cases/syntax_def_kwonly.py)
+
 ### syntax_def_error
 
 - 职责: 实参数量与形式不匹配的 `TypeError`
@@ -1080,6 +1086,12 @@
 - 比对: `same_output`
 - 源文件: [ci/cases/builtin_convert.py](../../ci/cases/builtin_convert.py)
 
+### builtin_dir_custom
+
+- 职责: 用户自定义 `__dir__` 协议(实例/类/元类与非可迭代返回值)
+- 比对: `same_output`
+- 源文件: [ci/cases/builtin_dir_custom.py](../../ci/cases/builtin_dir_custom.py)
+
 ### builtin_enumerate_start
 
 - 职责: enumerate 的大数起始编号与 bool 起始 (I0-42): 任意精度递增计数 (CPython 3.12 实测对齐)
@@ -1447,6 +1459,12 @@ bytearray 不可哈希 (字典键报 `unhashable type: 'bytearray'`), `bytes + b
 - 职责: 负数 // 与 % 向负无穷取整、余数符号随除数
 - 比对: `same_output`
 - 源文件: [ci/cases/type_int_floordiv_mod.py](../../ci/cases/type_int_floordiv_mod.py)
+
+### type_int_bytes_unbound
+
+- 职责: int.to_bytes 类级未绑定调用的溢出通道与长度边界
+- 比对: `same_output`
+- 源文件: [ci/cases/type_int_bytes_unbound.py](../../ci/cases/type_int_bytes_unbound.py)
 
 ### type_int_intern
 
@@ -2232,9 +2250,15 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 比对: `same_output`
 - 源文件: [ci/cases/class_star_bases.py](../../ci/cases/class_star_bases.py)
 
+### class_type_call
+
+- 职责: `type.__call__` 槽与元类 `__call__` 委派(`super().__call__` / `type.__call__`)
+- 比对: `same_output`
+- 源文件: [ci/cases/class_type_call.py](../../ci/cases/class_type_call.py)
+
 ### class_stopiteration
 
-- 职责: 用户 __next__ 抛 StopIteration 子类终止迭代 (I0-61): 子类视为耗尽信号, 生成器 PEP 479 同型
+- 职责: 用户 `__next__` 抛 StopIteration 子类终止迭代 (I0-61): 子类视为耗尽信号, 生成器 PEP 479 同型
 - 比对: `same_output`
 - 源文件: [ci/cases/class_stopiteration.py](../../ci/cases/class_stopiteration.py)
 
@@ -2259,6 +2283,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 职责: 除零异常经 `as` 绑定后取其消息
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_as_binding.py](../../ci/cases/exception_as_binding.py)
+
+### exception_args_notes
+
+- 职责: 异常实例的 args 读写与删除保护、`add_note`/`__notes__` 与 `StopIteration.value`
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_args_notes.py](../../ci/cases/exception_args_notes.py)
 
 ### exception_attrs_internal
 
@@ -2332,6 +2362,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_gen_propagate.py](../../ci/cases/exception_gen_propagate.py)
 
+### exception_group_derive
+
+- 职责: ExceptionGroup 的 derive 与 args/repr 形态（成员列表与组型）
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_group_derive.py](../../ci/cases/exception_group_derive.py)
+
 ### exception_group
 
 - 职责: `ExceptionGroup` 与 `BaseExceptionGroup` (构造校验, 属性, str/repr, subgroup/split)
@@ -2397,6 +2433,12 @@ math 的双曲/误差函数/浮点分解/`isclose`/`fsum`/`sumprod`/`gamma` 族 
 - 职责: `except` 内抛新异常被外层捕获
 - 比对: `same_output`
 - 源文件: [ci/cases/exception_raise_in_handler.py](../../ci/cases/exception_raise_in_handler.py)
+
+### exception_repr_containers
+
+- 职责: 容器与异常组成员里的异常对象 `repr` 形态(`Type(args...)` 形式)
+- 比对: `same_output`
+- 源文件: [ci/cases/exception_repr_containers.py](../../ci/cases/exception_repr_containers.py)
 
 ### exception_repr
 

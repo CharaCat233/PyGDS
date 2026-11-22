@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **异常对象的呈现与属性协议**：容器与异常组成员里的异常对象 repr 由 `<ValueError object>` 对齐为 `ValueError('v')` 形态；异常组的 `args` 第二项改为成员列表、repr 改为列表形态，并补 `derive` 方法；`BaseExceptionGroup` 全为 `Exception` 成员时按 CPython 语义降格为 `ExceptionGroup`
+- **异常实例的 args 协议与备注**：`e.args = ...` 按 CPython getset 语义回写内层消息（`str(e)` 同步更新，非迭代实参报 `'<类型>' object is not iterable`）；`del e.args` 与 `__cause__`/`__context__`/`__traceback__`/`__suppress_context__` 的删除按 CPython 文案拒绝；新增 `add_note` 与 `__notes__`（含实参校验与 `__notes__` 非列表的文案）；`StopIteration` 的 `value`/`args` 按 CPython 语义承载生成器返回值
+- **`dir()` 的用户 `__dir__` 协议**：实例、类对象与元类的自定义 `__dir__` 按 CPython 语义调用并对结果排序（非可迭代返回值报 `TypeError`）
+- **关键字专属参数默认值顺序**：`def f(*, a=1, b)` 等合法形态不再误报 `parameter without a default follows parameter with a default`；`def f(a=1, /, b)` 按 CPython 报该错误；修正调用期默认值槽位错位（关键字专属参数默认值不再取到相邻位置参数的槽，`def h(a, b=2, *, c=3, d)` 的缺省取值与 CPython 一致）
+- **`type.__call__` 槽与类目标的 `super` 查找**：类对象上 `type.__call__` 可访问并直达默认实例化路径，元类 `__call__` 中的 `super().__call__(...)` 与 `type.__call__(cls, ...)` 可按 CPython 委派且不递归回元类钩子；`super` 绑定目标为类对象时按 CPython 语义选取查找基准类（自定义元类的实例类取元类，普通类取自身）
+- **`int.to_bytes` 类级未绑定调用**：溢出与边界校验的错误经类级直调路径转异常（此前静默返回 None）
+
+### 测试
+
+- 全量用例 412 -> 419：新增异常 args/注释与 `StopIteration.value`、异常组 `derive` 与 `args`/repr、容器内异常 repr、用户 `__dir__` 协议、关键字专属参数默认值顺序、`type.__call__` 委派、`int.to_bytes` 未绑定调用七例
+
 ## [0.8.8] - 2026-11-21
 
 ### 测试
